@@ -65,8 +65,16 @@
       <a href="/settings" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'settings' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Settings</a>
     </nav>
 
-    <!-- Mode badge + Audio Pi status -->
+    <!-- User menu -->
+    {% if current_user %}
     <div class="ml-auto flex items-center gap-3">
+      <span class="text-xs text-gray-500 hidden sm:inline">{{ current_user }}</span>
+      <a href="/logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>
+    </div>
+    {% endif %}
+
+    <!-- Mode badge + Audio Pi status -->
+    <div class="{% if not current_user %}ml-auto {% endif %}flex items-center gap-3">
       {% if cloud_mode %}
         <span class="px-2 py-0.5 rounded text-xs font-medium bg-indigo-900/60 border border-indigo-700/40 text-indigo-300">
           ☁ Cloud

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import json
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -25,11 +27,13 @@ from flask import (
     render_template,
     request,
     send_file,
+    session,
     url_for,
 )
+from werkzeug.security import check_password_hash, generate_password_hash
 import requests as rq
 
-from config_manager import ConfigManager, MUSIC_DIR
+from config_manager import ConfigManager, MUSIC_DIR, ONDECK_HOME
 
 # ---------------------------------------------------------------------------
 # Mode detection
@@ -38,15 +42,63 @@ from config_manager import ConfigManager, MUSIC_DIR
 CLOUD_MODE  = os.environ.get("ONDECK_MODE", "").lower() == "cloud"
 SYNC_TOKEN  = os.environ.get("ONDECK_SYNC_TOKEN", "")
 
+AUTH_FILE = ONDECK_HOME / "auth.json"
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("ONDECK_SECRET", "ondeck-dev-secret-change-me")
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 
 cfg = ConfigManager()
 
 
+# ---------------------------------------------------------------------------
+# Auth helpers
+# ---------------------------------------------------------------------------
+
+def _load_auth() -> dict | None:
+    """Return {username, password_hash}, or None if not yet configured."""
+    # Env var takes precedence (useful for CI / scripted Render deploys).
+    env_hash = os.environ.get("ONDECK_PASSWORD_HASH", "")
+    if env_hash:
+        return {
+            "username": os.environ.get("ONDECK_USERNAME", "admin"),
+            "password_hash": env_hash,
+        }
+    if AUTH_FILE.exists():
+        try:
+            data = json.loads(AUTH_FILE.read_text())
+            if data.get("password_hash"):
+                return data
+        except Exception:
+            pass
+    return None
+
+
+@app.before_request
+def _check_auth():
+    # Sync API: authenticated by Bearer token, not session.
+    if request.path.startswith("/sync/"):
+        return
+    # Auth routes and static files are always accessible.
+    if request.endpoint in ("login", "login_post", "logout", "setup", "setup_post", "static"):
+        return
+    # No password configured yet — force first-time setup.
+    if _load_auth() is None:
+        if request.endpoint != "setup":
+            return redirect(url_for("setup"))
+        return
+    # All other routes require a logged-in session.
+    if not session.get("logged_in"):
+        dest = request.full_path if request.path != "/" else None
+        return redirect(url_for("login", next=dest))
+
+
 @app.context_processor
 def _inject_globals():
-    return {"cloud_mode": CLOUD_MODE}
+    return {
+        "cloud_mode": CLOUD_MODE,
+        "current_user": session.get("username"),
+    }
 
 
 def _require_sync_token(f):
@@ -81,6 +133,81 @@ def _proxy(method: str, path: str, **kwargs):
         return {"error": "Audio Pi unreachable"}, 503
     except Exception as exc:
         return {"error": str(exc)}, 500
+
+
+# ---------------------------------------------------------------------------
+# Auth routes
+# ---------------------------------------------------------------------------
+
+@app.get("/login")
+def login():
+    if session.get("logged_in"):
+        return redirect(url_for("index"))
+    return render_template("login.html")
+
+
+@app.post("/login")
+def login_post():
+    auth = _load_auth()
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    remember = request.form.get("remember") == "on"
+
+    if auth and username == auth["username"] and check_password_hash(auth["password_hash"], password):
+        session.permanent = remember
+        session["logged_in"] = True
+        session["username"] = username
+        next_url = request.args.get("next") or url_for("index")
+        if not next_url.startswith("/"):   # prevent open redirect
+            next_url = url_for("index")
+        return redirect(next_url)
+
+    flash("Incorrect username or password.", "error")
+    return redirect(url_for("login"))
+
+
+@app.get("/logout")
+def logout():
+    session.clear()
+    flash("Signed out.", "success")
+    return redirect(url_for("login"))
+
+
+@app.get("/setup")
+def setup():
+    if _load_auth() is not None:
+        return redirect(url_for("index"))
+    return render_template("setup.html")
+
+
+@app.post("/setup")
+def setup_post():
+    if _load_auth() is not None:
+        return redirect(url_for("index"))
+
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    confirm  = request.form.get("confirm", "")
+
+    if not username:
+        flash("Username is required.", "error")
+        return redirect(url_for("setup"))
+    if len(password) < 8:
+        flash("Password must be at least 8 characters.", "error")
+        return redirect(url_for("setup"))
+    if password != confirm:
+        flash("Passwords do not match.", "error")
+        return redirect(url_for("setup"))
+
+    pw_hash = generate_password_hash(password)
+    ONDECK_HOME.mkdir(parents=True, exist_ok=True)
+    AUTH_FILE.write_text(json.dumps({"username": username, "password_hash": pw_hash}, indent=2))
+
+    session.permanent = True
+    session["logged_in"] = True
+    session["username"] = username
+    flash("Account created. Welcome to OnDeck!", "success")
+    return redirect(url_for("index"))
 
 
 # ---------------------------------------------------------------------------
