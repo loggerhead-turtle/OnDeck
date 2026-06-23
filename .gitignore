@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# OnDeck runtime data
+config.json
+music/
+*.mp3
+*.wav
+*.m4a
+*.ogg
+*.webm
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Secrets / env
+.env
+*.local

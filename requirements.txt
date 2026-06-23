@@ -1,0 +1,13 @@
+# Web portal + Audio Pi server
+Flask>=3.0
+requests>=2.31
+
+# YouTube audio import (Audio Pi)
+yt-dlp>=2024.1.0
+
+# Stream Deck control + button rendering (Coach Pi)
+streamdeck>=0.9.5
+Pillow>=10.0
+
+# Production WSGI server (cloud deploy)
+gunicorn>=21.0

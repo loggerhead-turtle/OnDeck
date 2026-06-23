@@ -1,0 +1,348 @@
+"""OnDeck Audio Pi server.
+
+Runs on the Raspberry Pi plugged into the field PA. It owns the speakers: the
+Coach Pi (or the cloud) sends it simple HTTP commands and this process turns
+them into precise ffmpeg playback.
+
+Design goals:
+  * One thing plays at a time. Queue a clip, then play it.
+  * Trim and fade are sample-accurate via ffmpeg, not guesswork.
+  * A fade or a stop always actually stops the sound, immediately.
+  * No internet needed to play; internet is only used for YouTube import.
+
+Endpoints (all JSON):
+  POST /queue    {file, start_ms, end_ms, announcement?, cue_ms?}
+  POST /play
+  POST /stop
+  POST /fade     {ms?}            -> fade out over ms (default 1000)
+  POST /volume   {level}          -> 0..100
+  GET  /status
+  POST /upload   (multipart file) -> stores in music dir
+  POST /import    {url}           -> yt-dlp audio import
+  GET  /health
+"""
+
+from __future__ import annotations
+
+import os
+import shlex
+import signal
+import subprocess
+import threading
+import time
+from pathlib import Path
+
+from flask import Flask, jsonify, request
+
+from config_manager import MUSIC_DIR
+
+
+app = Flask(__name__)
+
+DEFAULT_FADE_MS = 1000
+
+
+class Player:
+    """Owns the single active ffmpeg playback process.
+
+    State machine: stopped -> queued -> playing -> (stopped). A clip is loaded
+    by ``queue`` but stays silent until ``play``. When playback finishes
+    naturally an ``on_finish`` callback (if set) fires so the Coach Pi can
+    auto-advance the lineup.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._proc: subprocess.Popen | None = None
+        self._queued: dict | None = None
+        self._state = "stopped"          # stopped | queued | playing
+        self._started_at: float | None = None
+        self._volume = 80                # 0..100, applied as ffmpeg gain
+        self.on_finish = None            # optional callable()
+
+    # -- queue / play -----------------------------------------------------
+
+    def queue(self, clip: dict) -> None:
+        with self._lock:
+            self._stop_locked()
+            self._queued = clip
+            self._state = "queued"
+
+    def play(self) -> bool:
+        with self._lock:
+            if not self._queued:
+                return False
+            cmd = self._build_command(self._queued)
+            self._spawn(cmd)
+            self._state = "playing"
+            self._started_at = time.monotonic()
+            return True
+
+    def _build_command(self, clip: dict) -> list[str]:
+        """Compose the ffmpeg invocation for a clip.
+
+        A clip is either a plain trimmed song, or a song mixed under an
+        announcement that fades in at ``cue_ms``.
+        """
+        gain = self._volume / 100.0
+        song = str(MUSIC_DIR / clip["file"])
+        start_s = (clip.get("start_ms") or 0) / 1000.0
+        end_ms = clip.get("end_ms")
+
+        # Build the main (song) input with its trim window.
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin"]
+        cmd += ["-ss", f"{start_s:.3f}"]
+        if end_ms is not None:
+            cmd += ["-to", f"{(end_ms / 1000.0):.3f}"]
+        cmd += ["-i", song]
+
+        announcement = clip.get("announcement")
+        if announcement:
+            ann = str(MUSIC_DIR / announcement)
+            cue_s = (clip.get("cue_ms") or 0) / 1000.0
+            # Two inputs: announcement (input 0 after the song? keep order
+            # song=0, announcement=1) — delay the song so it fades in at cue.
+            # We rebuild as: announcement first at full volume, song delayed.
+            cmd = [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+                "-i", ann,
+                "-ss", f"{start_s:.3f}",
+            ]
+            if end_ms is not None:
+                cmd += ["-to", f"{(end_ms / 1000.0):.3f}"]
+            cmd += ["-i", song]
+            # Delay the song by cue_s, fade it in over 0.75s, mix under the
+            # announcement, then apply master volume.
+            delay_ms = int(cue_s * 1000)
+            filt = (
+                f"[1:a]adelay={delay_ms}|{delay_ms},afade=t=in:st={cue_s:.3f}:d=0.75[mus];"
+                f"[0:a][mus]amix=inputs=2:duration=longest:dropout_transition=0,"
+                f"volume={gain:.3f}[out]"
+            )
+            cmd += ["-filter_complex", filt, "-map", "[out]"]
+        else:
+            # Plain song: master volume only. (End-of-song fade is applied by
+            # the editor when it sets end_ms; live fade is the /fade endpoint.)
+            cmd += ["-af", f"volume={gain:.3f}"]
+
+        cmd += self._output_args()
+        return cmd
+
+    def _output_args(self) -> list[str]:
+        """ffmpeg output target — ALSA default sink on the Pi.
+
+        Overridable via ONDECK_FFMPEG_OUT for laptops/testing (e.g. a file or
+        a different audio backend).
+        """
+        override = os.environ.get("ONDECK_FFMPEG_OUT")
+        if override:
+            return shlex.split(override)
+        return ["-f", "alsa", "default"]
+
+    # -- fade / stop ------------------------------------------------------
+
+    def fade(self, ms: int = DEFAULT_FADE_MS) -> bool:
+        """Fade the *currently playing* clip out over ``ms`` and stop.
+
+        We can't retroactively edit a running ffmpeg's filter graph, so we
+        capture the current playback position, kill the process, and relaunch
+        a short clip that plays from that position with a fade-out, then ends.
+        """
+        with self._lock:
+            if self._state != "playing" or not self._queued:
+                self._stop_locked()
+                return False
+            pos_s = (time.monotonic() - (self._started_at or 0))
+            clip = self._queued
+            self._kill_proc()
+
+            song = str(MUSIC_DIR / clip["file"])
+            start_s = (clip.get("start_ms") or 0) / 1000.0
+            dur_s = ms / 1000.0
+            gain = self._volume / 100.0
+            seek = start_s + pos_s
+            cmd = [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+                "-ss", f"{seek:.3f}", "-t", f"{dur_s:.3f}", "-i", song,
+                "-af", f"afade=t=out:st=0:d={dur_s:.3f},volume={gain:.3f}",
+            ] + self._output_args()
+            self._spawn(cmd, finish_state="stopped")
+            # After the fade clip ends the watcher sets state to stopped; the
+            # queue is intentionally cleared so nothing is left cued.
+            self._queued = None
+            return True
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stop_locked()
+
+    def _stop_locked(self) -> None:
+        self._kill_proc()
+        self._state = "stopped"
+        self._queued = None
+        self._started_at = None
+
+    def set_volume(self, level: int) -> None:
+        with self._lock:
+            self._volume = max(0, min(100, int(level)))
+            # Volume change applies to the next play; we don't restart a
+            # running clip to avoid an audible glitch mid-walk-up.
+
+    # -- process management ----------------------------------------------
+
+    def _spawn(self, cmd: list[str], finish_state: str = "stopped") -> None:
+        self._kill_proc()
+        self._proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        watcher = threading.Thread(
+            target=self._watch, args=(self._proc, finish_state), daemon=True
+        )
+        watcher.start()
+
+    def _watch(self, proc: subprocess.Popen, finish_state: str) -> None:
+        proc.wait()
+        with self._lock:
+            # Only react if this is still the active process (not superseded).
+            if self._proc is not proc:
+                return
+            natural_end = self._state == "playing"
+            self._state = finish_state
+            self._started_at = None
+            if finish_state == "stopped":
+                self._queued = None if finish_state == "stopped" else self._queued
+            cb = self.on_finish
+        if natural_end and finish_state == "stopped" and cb:
+            # Lineup auto-advance hook. Fire outside the lock.
+            try:
+                cb()
+            except Exception:
+                pass
+
+    def _kill_proc(self) -> None:
+        if self._proc and self._proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        self._proc = None
+
+    # -- status -----------------------------------------------------------
+
+    def status(self) -> dict:
+        with self._lock:
+            pos_ms = 0
+            if self._state == "playing" and self._started_at is not None:
+                pos_ms = int((time.monotonic() - self._started_at) * 1000)
+            return {
+                "state": self._state,
+                "position_ms": pos_ms,
+                "volume": self._volume,
+                "queued": self._queued,
+            }
+
+
+player = Player()
+
+
+# -- HTTP routes ----------------------------------------------------------
+
+@app.post("/queue")
+def http_queue():
+    body = request.get_json(force=True, silent=True) or {}
+    if not body.get("file"):
+        return jsonify(error="file required"), 400
+    player.queue(body)
+    return jsonify(ok=True, status=player.status())
+
+
+@app.post("/play")
+def http_play():
+    ok = player.play()
+    return jsonify(ok=ok, status=player.status())
+
+
+@app.post("/stop")
+def http_stop():
+    player.stop()
+    return jsonify(ok=True, status=player.status())
+
+
+@app.post("/fade")
+def http_fade():
+    body = request.get_json(force=True, silent=True) or {}
+    ms = int(body.get("ms", DEFAULT_FADE_MS))
+    ok = player.fade(ms)
+    return jsonify(ok=ok, status=player.status())
+
+
+@app.post("/volume")
+def http_volume():
+    body = request.get_json(force=True, silent=True) or {}
+    if "level" not in body:
+        return jsonify(error="level required"), 400
+    player.set_volume(int(body["level"]))
+    return jsonify(ok=True, status=player.status())
+
+
+@app.get("/status")
+def http_status():
+    return jsonify(player.status())
+
+
+@app.post("/upload")
+def http_upload():
+    if "file" not in request.files:
+        return jsonify(error="file required"), 400
+    f = request.files["file"]
+    name = Path(f.filename or "").name
+    if not name:
+        return jsonify(error="bad filename"), 400
+    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    dest = MUSIC_DIR / name
+    f.save(str(dest))
+    return jsonify(ok=True, filename=name)
+
+
+@app.post("/import")
+def http_import():
+    body = request.get_json(force=True, silent=True) or {}
+    url = body.get("url", "").strip()
+    if not url:
+        return jsonify(error="url required"), 400
+    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    # Audio only, mp3, title-based filename. Runs synchronously; the caller
+    # should treat this as a slow request.
+    out_tmpl = str(MUSIC_DIR / "%(title)s.%(ext)s")
+    try:
+        result = subprocess.run(
+            ["yt-dlp", "-x", "--audio-format", "mp3", "--no-playlist",
+             "--print", "after_move:filepath", "-o", out_tmpl, url],
+            capture_output=True, text=True, timeout=300,
+        )
+    except FileNotFoundError:
+        return jsonify(error="yt-dlp not installed"), 500
+    except subprocess.TimeoutExpired:
+        return jsonify(error="import timed out"), 504
+    if result.returncode != 0:
+        return jsonify(error=result.stderr.strip()[-500:] or "import failed"), 502
+    filepath = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+    return jsonify(ok=True, filename=Path(filepath).name if filepath else None)
+
+
+@app.get("/health")
+def http_health():
+    return jsonify(ok=True, service="ondeck-audio")
+
+
+def main() -> None:
+    port = int(os.environ.get("ONDECK_AUDIO_PORT", "5100"))
+    app.run(host="0.0.0.0", port=port, threaded=True)
+
+
+if __name__ == "__main__":
+    main()
