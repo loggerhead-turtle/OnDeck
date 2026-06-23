@@ -1,11 +1,14 @@
-"""OnDeck web portal — runs on the Coach Pi at :5000.
+"""OnDeck web portal.
 
-Manages players, the music library, and relays playback commands to the
-Audio Pi (music_server.py at :5100).
+Runs on the Coach Pi (:5000) in local mode, or on Render in cloud mode
+(set ONDECK_MODE=cloud).  Cloud mode is the primary management UI; the Pi
+pulls config and audio files from the cloud via the /sync/* endpoints.
 """
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import sys
 from pathlib import Path
 
@@ -28,10 +31,34 @@ import requests as rq
 
 from config_manager import ConfigManager, MUSIC_DIR
 
+# ---------------------------------------------------------------------------
+# Mode detection
+# ---------------------------------------------------------------------------
+
+CLOUD_MODE  = os.environ.get("ONDECK_MODE", "").lower() == "cloud"
+SYNC_TOKEN  = os.environ.get("ONDECK_SYNC_TOKEN", "")
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("ONDECK_SECRET", "ondeck-dev-secret-change-me")
 
 cfg = ConfigManager()
+
+
+@app.context_processor
+def _inject_globals():
+    return {"cloud_mode": CLOUD_MODE}
+
+
+def _require_sync_token(f):
+    """Decorator: require Bearer token when ONDECK_SYNC_TOKEN is set."""
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        if SYNC_TOKEN:
+            auth = request.headers.get("Authorization", "")
+            if auth != f"Bearer {SYNC_TOKEN}":
+                return jsonify(error="unauthorized"), 401
+        return f(*args, **kwargs)
+    return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +380,57 @@ def settings_save():
         cfg.save(mark_dirty=False)
     flash("Settings saved.", "success")
     return redirect(url_for("settings"))
+
+
+# ---------------------------------------------------------------------------
+# Sync API — Pi polls these to stay in sync with the cloud config
+# ---------------------------------------------------------------------------
+
+@app.get("/sync/config")
+@_require_sync_token
+def sync_config():
+    """Full config JSON — Pi replaces its local copy with this."""
+    return jsonify(cfg.data)
+
+
+@app.get("/sync/files")
+@_require_sync_token
+def sync_list_files():
+    """Manifest of every audio file: name, size, md5."""
+    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    files = []
+    for f in sorted(MUSIC_DIR.iterdir()):
+        if f.is_file():
+            digest = hashlib.md5(f.read_bytes()).hexdigest()
+            files.append({"filename": f.name, "size": f.stat().st_size, "md5": digest})
+    return jsonify(files=files)
+
+
+@app.get("/sync/files/<path:filename>")
+@_require_sync_token
+def sync_download_file(filename: str):
+    """Download one audio file."""
+    safe = Path(filename).name
+    path = MUSIC_DIR / safe
+    if not path.exists():
+        abort(404)
+    return send_file(str(path))
+
+
+@app.post("/sync/ping")
+@_require_sync_token
+def sync_ping():
+    """Pi reports its local IP and hostname so the dashboard can show it."""
+    body = request.get_json(force=True) or {}
+    pi_id = (body.get("pi_id") or "default")[:64]
+    with cfg._lock:
+        cfg.system.setdefault("known_pis", {})[pi_id] = {
+            "ip":        body.get("ip") or request.remote_addr,
+            "hostname":  body.get("hostname", pi_id),
+            "last_seen": body.get("timestamp", ""),
+        }
+        cfg.save(mark_dirty=False)
+    return jsonify(ok=True)
 
 
 # ---------------------------------------------------------------------------

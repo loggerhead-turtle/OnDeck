@@ -4,18 +4,49 @@
 
 <div class="flex items-center justify-between mb-6">
   <h1 class="text-2xl font-bold">Home</h1>
-  <div class="flex items-center gap-2 text-sm">
-    {% if status.error %}
-      <span class="flex items-center gap-1.5 text-red-400">
-        <span class="w-2 h-2 rounded-full bg-red-500"></span>{{ status.error }}
-      </span>
-    {% else %}
-      <span class="flex items-center gap-1.5 text-green-400">
-        <span class="w-2 h-2 rounded-full bg-green-500"></span>Audio Pi connected
-      </span>
-    {% endif %}
-  </div>
+  {% if cloud_mode %}
+    <span class="text-sm text-indigo-400">Cloud management mode</span>
+  {% else %}
+    <div class="flex items-center gap-2 text-sm">
+      {% if status.error %}
+        <span class="flex items-center gap-1.5 text-red-400">
+          <span class="w-2 h-2 rounded-full bg-red-500"></span>{{ status.error }}
+        </span>
+      {% else %}
+        <span class="flex items-center gap-1.5 text-green-400">
+          <span class="w-2 h-2 rounded-full bg-green-500"></span>Audio Pi connected
+        </span>
+      {% endif %}
+    </div>
+  {% endif %}
 </div>
+
+{% if cloud_mode %}
+<!-- Cloud mode: Pi sync status -->
+{% set known_pis = status.get('known_pis', {}) if status else {} %}
+{% set known_pis = system.get('known_pis', {}) %}
+<div class="bg-gray-800 border border-gray-700/50 rounded-xl p-5 mb-6">
+  <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">Pi Sync Status</h2>
+  {% if known_pis %}
+    <div class="space-y-2">
+      {% for pi_id, pi in known_pis.items() %}
+        <div class="flex items-center justify-between text-sm">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-green-500"></span>
+            <span class="font-medium text-white">{{ pi.hostname or pi_id }}</span>
+            <span class="text-gray-500 font-mono text-xs">{{ pi.ip }}</span>
+          </div>
+          <span class="text-gray-500 text-xs">Last seen: {{ pi.last_seen[:19].replace('T',' ') if pi.last_seen else 'never' }}</span>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="text-sm text-gray-500">
+      No Pis have synced yet. Run <code class="text-gray-300 bg-gray-900 px-1.5 py-0.5 rounded font-mono text-xs">python sync_agent.py</code> on the Pi to connect.
+    </p>
+  {% endif %}
+</div>
+{% endif %}
 
 <!-- Quick stats row -->
 <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">

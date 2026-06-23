@@ -135,8 +135,8 @@
     </div>
     {% endif %}
 
-    <!-- Combined preview -->
-    {% if player.announcement_file and sel_song %}
+    <!-- Combined preview (local mode only — no PA on the cloud) -->
+    {% if not cloud_mode and player.announcement_file and sel_song %}
     <div class="mt-4 pt-4 border-t border-gray-700/50">
       <button type="button" onclick="previewCombined()"
               class="w-full py-2.5 rounded-lg bg-indigo-800 hover:bg-indigo-700 text-indigo-100 text-sm font-semibold transition-colors">

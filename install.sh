@@ -84,10 +84,61 @@ if [[ "$ROLE" == "coach" || "$ROLE" == "both" ]]; then
   install_service "ondeck-coach" "$REPO_DIR/main.py" "OnDeck Coach Pi (Stream Deck + web portal)"
 fi
 
+# --- cloud sync timer (all roles) ----------------------------------------
+# Runs sync_agent.py every 5 minutes when internet is available.
+# Secrets live in ~/ondeck/sync.env (not in the repo).
+echo "==> Installing cloud sync timer..."
+
+SYNC_ENV="$ONDECK_HOME/sync.env"
+if [[ ! -f "$SYNC_ENV" ]]; then
+  cat > "$SYNC_ENV" <<'ENVEOF'
+# OnDeck cloud sync credentials.
+# Set these values after deploying to Render.
+ONDECK_CLOUD_URL=
+ONDECK_SYNC_TOKEN=
+ENVEOF
+  echo "  Created $SYNC_ENV — fill in ONDECK_CLOUD_URL and ONDECK_SYNC_TOKEN."
+fi
+
+sudo tee /etc/systemd/system/ondeck-sync.service >/dev/null <<EOF
+[Unit]
+Description=OnDeck cloud sync (one-shot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=$RUN_USER
+WorkingDirectory=$REPO_DIR
+Environment=ONDECK_HOME=$ONDECK_HOME
+EnvironmentFile=-$SYNC_ENV
+ExecStart=$VENV/bin/python $REPO_DIR/sync_agent.py
+StandardOutput=journal
+StandardError=journal
+EOF
+
+sudo tee /etc/systemd/system/ondeck-sync.timer >/dev/null <<EOF
+[Unit]
+Description=OnDeck cloud sync every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Unit=ondeck-sync.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable ondeck-sync.timer
+sudo systemctl start ondeck-sync.timer
+
 echo
 echo "OnDeck installed."
 [[ "$ROLE" == "audio" || "$ROLE" == "both" ]] && \
   echo "  Audio server:  http://$(hostname -I | awk '{print $1}'):5100/health"
 [[ "$ROLE" == "coach" || "$ROLE" == "both" ]] && \
   echo "  Web portal:    http://$(hostname -I | awk '{print $1}'):5000"
-echo "  Logs:          journalctl -u ondeck-audio -f   (or ondeck-coach)"
+echo "  Sync logs:     journalctl -u ondeck-sync -f"
+echo "  Sync env:      $SYNC_ENV  (add cloud URL + token here)"
