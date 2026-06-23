@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Players{% endblock %}
+{% block content %}
+
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">Players</h1>
+  <a href="/players/new"
+     class="px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold transition-colors">
+    + Add Player
+  </a>
+</div>
+
+{% if players %}
+<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+  {% for pid, p in players %}
+    {% set song = songs.get(p.walkup_song_id) %}
+    <div class="bg-gray-800 border border-gray-700/50 rounded-xl p-4 flex flex-col gap-3 hover:border-gray-600 transition-colors">
+      <!-- Jersey + name -->
+      <div class="flex items-center gap-3">
+        <span class="text-2xl font-black text-green-400 w-12 text-center leading-none">#{{ p.jersey }}</span>
+        <div>
+          <div class="font-bold text-white text-lg leading-tight">{{ p.first_name }} {{ p.last_name }}</div>
+          <div class="text-xs text-gray-500 mt-0.5 flex gap-2">
+            {% if p.announcement_file %}
+              <span class="text-green-500">✔ Announcement</span>
+            {% else %}
+              <span class="text-gray-600">No announcement</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <!-- Song -->
+      <div class="flex items-center gap-2 min-w-0">
+        {% if song %}
+          <span class="text-sm text-gray-300 truncate flex-1">🎵 {{ song.display_name }}</span>
+          <button onclick="quickPlay('{{ pid }}')"
+                  class="px-2.5 py-1 rounded bg-gray-700 hover:bg-green-700 text-gray-300 hover:text-white text-xs font-medium transition-colors shrink-0">▶</button>
+        {% else %}
+          <span class="text-sm text-gray-600 flex-1 italic">No walk-up song</span>
+        {% endif %}
+      </div>
+
+      <!-- Actions -->
+      <div class="flex gap-2 pt-1 border-t border-gray-700/50">
+        <a href="/players/{{ pid }}/edit"
+           class="flex-1 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-xs font-medium text-center transition-colors">
+          Edit
+        </a>
+        <form method="POST" action="/players/{{ pid }}/delete"
+              onsubmit="return confirm('Delete #{{ p.jersey }} {{ p.first_name }} {{ p.last_name }}?')">
+          <button type="submit"
+                  class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-red-900 hover:border-red-700 text-gray-400 hover:text-red-300 text-xs font-medium transition-colors">
+            ✕
+          </button>
+        </form>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+
+<script>
+  const playerData = {
+    {% for pid, p in players %}
+      {% set song = songs.get(p.walkup_song_id) %}
+      {% if song %}
+      "{{ pid }}": {
+        file: "{{ song.filename }}",
+        start_ms: {{ song.start_ms or 0 }},
+        end_ms: {{ song.end_ms if song.end_ms is not none else 'null' }},
+        {% if p.announcement_file %}
+        announcement: "{{ p.announcement_file }}",
+        cue_ms: {{ p.music_cue_ms or 0 }},
+        {% endif %}
+      },
+      {% endif %}
+    {% endfor %}
+  }
+  async function quickPlay(pid) {
+    const clip = playerData[pid]
+    if (!clip) return
+    await fetch('/api/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(clip),
+    })
+  }
+</script>
+
+{% else %}
+<div class="bg-gray-800/50 border border-gray-700/50 rounded-xl p-12 text-center">
+  <div class="text-4xl mb-3">👤</div>
+  <div class="text-gray-300 font-medium mb-1">No players yet</div>
+  <div class="text-gray-500 text-sm mb-4">Build your roster to assign walk-up songs.</div>
+  <a href="/players/new"
+     class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold transition-colors">
+    + Add First Player
+  </a>
+</div>
+{% endif %}
+
+{% endblock %}

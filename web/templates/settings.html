@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">Settings</h1>
+</div>
+
+<form method="POST" action="/settings/save">
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5 space-y-5">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Audio Pi</h2>
+
+    <div class="grid sm:grid-cols-2 gap-4">
+      <div>
+        <label class="block text-xs text-gray-400 mb-1.5 font-medium">IP Address</label>
+        <input type="text" name="audio_pi_ip"
+               value="{{ system.audio_pi_ip or '' }}"
+               placeholder="192.168.1.x"
+               class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30">
+        <p class="text-xs text-gray-500 mt-1">Leave blank to use localhost (single-Pi setup).</p>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1.5 font-medium">Port</label>
+        <input type="number" name="audio_pi_port"
+               value="{{ system.audio_pi_port or 5100 }}"
+               min="1" max="65535"
+               class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30">
+      </div>
+    </div>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1.5 font-medium">
+        Default Volume — <span id="vol-display">{{ system.volume or 80 }}</span>%
+      </label>
+      <input type="range" name="volume" min="0" max="100"
+             value="{{ system.volume or 80 }}"
+             oninput="document.getElementById('vol-display').textContent = this.value"
+             class="w-full accent-green-500">
+    </div>
+
+    <div class="pt-2">
+      <button type="button" onclick="testConnection()"
+              class="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm font-medium transition-colors">
+        Test Connection
+      </button>
+      <span id="test-result" class="text-sm ml-3"></span>
+    </div>
+  </div>
+
+  <button type="submit"
+          class="px-6 py-2.5 rounded-lg bg-green-700 hover:bg-green-600 text-white font-semibold text-sm transition-colors">
+    Save Settings
+  </button>
+</form>
+
+<script>
+  async function testConnection() {
+    const el = document.getElementById('test-result')
+    el.textContent = 'Testing…'
+    el.className = 'text-sm ml-3 text-gray-400'
+    try {
+      const r = await fetch('/api/status')
+      const d = await r.json()
+      if (d.error) throw new Error(d.error)
+      el.textContent = `✔ Connected — state: ${d.state}, volume: ${d.volume}`
+      el.className = 'text-sm ml-3 text-green-400'
+    } catch (err) {
+      el.textContent = `✕ ${err.message}`
+      el.className = 'text-sm ml-3 text-red-400'
+    }
+  }
+</script>
+{% endblock %}
