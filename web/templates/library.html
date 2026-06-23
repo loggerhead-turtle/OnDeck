@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Library{% endblock %}
+{% block content %}
+
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">Music Library</h1>
+  <span class="text-sm text-gray-400">{{ songs | length }} song{% if songs | length != 1 %}s{% endif %}</span>
+</div>
+
+<!-- Upload + YouTube import -->
+<div class="grid sm:grid-cols-2 gap-4 mb-8">
+  <!-- Upload -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
+    <h2 class="font-semibold text-white mb-4 flex items-center gap-2">
+      <span>⬆</span> Upload Audio
+    </h2>
+    <form method="POST" action="/library/upload" enctype="multipart/form-data">
+      <label id="drop-zone"
+             class="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-600 hover:border-green-500 rounded-lg p-6 cursor-pointer transition-colors text-center"
+             for="file-input">
+        <span class="text-3xl">🎵</span>
+        <span class="text-sm text-gray-300 font-medium">Drop file here or click to browse</span>
+        <span class="text-xs text-gray-500">MP3, WAV, M4A, OGG, FLAC</span>
+        <input type="file" id="file-input" name="file" accept="audio/*" class="hidden"
+               onchange="this.form.submit()">
+      </label>
+    </form>
+  </div>
+
+  <!-- YouTube import -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
+    <h2 class="font-semibold text-white mb-4 flex items-center gap-2">
+      <span>▶</span> YouTube Import
+    </h2>
+    <form method="POST" action="/library/import" id="import-form">
+      <div class="flex gap-2">
+        <input type="url" name="url" placeholder="https://youtube.com/watch?v=…"
+               required
+               class="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30">
+        <button type="submit" id="import-btn"
+                class="px-4 py-2 bg-green-700 hover:bg-green-600 text-white text-sm font-semibold rounded-lg transition-colors whitespace-nowrap">
+          Import
+        </button>
+      </div>
+      <p class="text-xs text-gray-500 mt-2">Audio only, MP3. This can take 30–60 seconds.</p>
+    </form>
+  </div>
+</div>
+
+<!-- Song table -->
+{% if songs %}
+<div class="bg-gray-800 rounded-xl border border-gray-700/50 overflow-hidden">
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="border-b border-gray-700 text-xs text-gray-400 uppercase tracking-wider">
+        <th class="text-left px-4 py-3 font-medium">Name</th>
+        <th class="text-left px-4 py-3 font-medium hidden sm:table-cell">File</th>
+        <th class="text-left px-4 py-3 font-medium hidden md:table-cell">Trim</th>
+        <th class="text-right px-4 py-3 font-medium">Actions</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-700/50">
+      {% for sid, song in songs.items() | sort(attribute='1.display_name') %}
+        <tr class="hover:bg-gray-750 group transition-colors">
+          <td class="px-4 py-3">
+            <span class="font-medium text-white">{{ song.display_name }}</span>
+          </td>
+          <td class="px-4 py-3 text-gray-400 hidden sm:table-cell font-mono text-xs">
+            {{ song.filename }}
+          </td>
+          <td class="px-4 py-3 text-gray-400 hidden md:table-cell font-mono text-xs">
+            {% if song.start_ms or song.end_ms %}
+              {{ (song.start_ms / 1000) | round(2) }}s
+              {% if song.end_ms %} → {{ (song.end_ms / 1000) | round(2) }}s{% endif %}
+            {% else %}
+              <span class="text-gray-600">full</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3">
+            <div class="flex items-center justify-end gap-2">
+              <button onclick="previewSong('{{ song.filename }}', {{ song.start_ms or 0 }}, {{ song.end_ms if song.end_ms is not none else 'null' }})"
+                      class="px-2.5 py-1 rounded bg-gray-700 hover:bg-green-700 text-gray-300 hover:text-white text-xs font-medium transition-colors">
+                ▶
+              </button>
+              <a href="/library/{{ sid }}/edit"
+                 class="px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-xs font-medium transition-colors">
+                Edit
+              </a>
+              <form method="POST" action="/library/{{ sid }}/delete"
+                    onsubmit="return confirm('Delete "{{ song.display_name }}"?')">
+                <button type="submit"
+                        class="px-2.5 py-1 rounded bg-gray-700 hover:bg-red-800 text-gray-400 hover:text-red-200 text-xs font-medium transition-colors">
+                  ✕
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="bg-gray-800/50 border border-gray-700/50 rounded-xl p-12 text-center">
+  <div class="text-4xl mb-3">🎵</div>
+  <div class="text-gray-300 font-medium mb-1">Library is empty</div>
+  <div class="text-gray-500 text-sm">Upload an audio file or import from YouTube above.</div>
+</div>
+{% endif %}
+
+<script>
+  // Show spinner during YouTube import.
+  document.getElementById('import-form').addEventListener('submit', () => {
+    const btn = document.getElementById('import-btn')
+    btn.textContent = 'Importing…'
+    btn.disabled = true
+    btn.classList.add('opacity-60', 'cursor-not-allowed')
+  })
+
+  // Drag-over styling.
+  const dz = document.getElementById('drop-zone')
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('border-green-400', 'bg-green-900/10') })
+  dz.addEventListener('dragleave', () => dz.classList.remove('border-green-400', 'bg-green-900/10'))
+  dz.addEventListener('drop', e => {
+    e.preventDefault()
+    dz.classList.remove('border-green-400', 'bg-green-900/10')
+    const f = e.dataTransfer.files[0]
+    if (f) {
+      document.getElementById('file-input').files = e.dataTransfer.files
+      document.getElementById('file-input').form.submit()
+    }
+  })
+
+  async function previewSong(filename, startMs, endMs) {
+    await fetch('/api/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: filename, start_ms: startMs, end_ms: endMs }),
+    })
+    setTimeout(pollStatus, 400)
+  }
+</script>
+{% endblock %}

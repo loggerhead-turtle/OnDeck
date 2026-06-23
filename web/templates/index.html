@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Home{% endblock %}
+{% block content %}
+
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">Home</h1>
+  <div class="flex items-center gap-2 text-sm">
+    {% if status.error %}
+      <span class="flex items-center gap-1.5 text-red-400">
+        <span class="w-2 h-2 rounded-full bg-red-500"></span>{{ status.error }}
+      </span>
+    {% else %}
+      <span class="flex items-center gap-1.5 text-green-400">
+        <span class="w-2 h-2 rounded-full bg-green-500"></span>Audio Pi connected
+      </span>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Quick stats row -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+  <div class="bg-gray-800 rounded-xl p-4 border border-gray-700/50">
+    <div class="text-2xl font-bold text-white">{{ songs | length }}</div>
+    <div class="text-xs text-gray-400 mt-1">Songs in library</div>
+  </div>
+  <div class="bg-gray-800 rounded-xl p-4 border border-gray-700/50">
+    <div class="text-2xl font-bold text-white">{{ players | length }}</div>
+    <div class="text-xs text-gray-400 mt-1">Players</div>
+  </div>
+  <div class="bg-gray-800 rounded-xl p-4 border border-gray-700/50">
+    <div class="text-2xl font-bold text-white">
+      {{ players | selectattr('1.announcement_file') | list | length }}
+    </div>
+    <div class="text-xs text-gray-400 mt-1">With announcements</div>
+  </div>
+  <div class="bg-gray-800 rounded-xl p-4 border border-gray-700/50">
+    <div class="text-2xl font-bold {% if status.state == 'playing' %}text-green-400{% else %}text-white{% endif %}">
+      {{ status.state | default('—') | capitalize }}
+    </div>
+    <div class="text-xs text-gray-400 mt-1">Audio state</div>
+  </div>
+</div>
+
+<!-- Player quick-launch grid -->
+{% if players %}
+<h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">Roster — Quick Play</h2>
+<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-8">
+  {% for pid, p in players %}
+    {% set song = songs.get(p.walkup_song_id) %}
+    <div class="bg-gray-800 border border-gray-700/50 rounded-xl p-4 flex flex-col gap-2 hover:border-green-600/40 transition-colors">
+      <div class="flex items-start justify-between">
+        <span class="text-2xl font-bold text-green-400">#{{ p.jersey }}</span>
+        {% if p.announcement_file %}
+          <span class="text-xs text-green-500 bg-green-900/40 rounded px-1.5 py-0.5">ANN</span>
+        {% endif %}
+      </div>
+      <div class="font-semibold text-white leading-tight">{{ p.first_name }} {{ p.last_name }}</div>
+      <div class="text-xs text-gray-500 truncate">{{ song.display_name if song else 'No song' }}</div>
+      {% if song %}
+        <button onclick="quickPlay('{{ pid }}')"
+                class="mt-auto w-full py-1.5 rounded-lg bg-green-700 hover:bg-green-600 text-white text-xs font-semibold transition-colors">
+          ▶ Play
+        </button>
+      {% else %}
+        <a href="/players/{{ pid }}/edit"
+           class="mt-auto w-full py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-semibold text-center transition-colors block">
+          Set up
+        </a>
+      {% endif %}
+    </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="bg-gray-800/50 border border-gray-700/50 rounded-xl p-8 text-center">
+  <div class="text-4xl mb-3">⚾</div>
+  <div class="text-gray-300 font-medium mb-1">No players yet</div>
+  <div class="text-gray-500 text-sm mb-4">Add your roster to get started.</div>
+  <a href="/players/new" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold transition-colors">
+    + Add First Player
+  </a>
+</div>
+{% endif %}
+
+<script>
+  // Build player/song data for quick-play.
+  const playerData = {
+    {% for pid, p in players %}
+      {% set song = songs.get(p.walkup_song_id) %}
+      {% if song %}
+      "{{ pid }}": {
+        file: "{{ song.filename }}",
+        start_ms: {{ song.start_ms or 0 }},
+        end_ms: {{ song.end_ms if song.end_ms is not none else 'null' }},
+        {% if p.announcement_file %}
+        announcement: "{{ p.announcement_file }}",
+        cue_ms: {{ p.music_cue_ms or 0 }},
+        {% endif %}
+      },
+      {% endif %}
+    {% endfor %}
+  }
+
+  async function quickPlay(pid) {
+    const clip = playerData[pid]
+    if (!clip) return
+    await fetch('/api/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(clip),
+    })
+    setTimeout(pollStatus, 400)
+  }
+</script>
+{% endblock %}

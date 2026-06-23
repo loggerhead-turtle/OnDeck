@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}OnDeck{% endblock %} — OnDeck ⚾</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            green: {
+              450: '#34d058',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #111827; }
+    ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+
+    /* WaveSurfer region handles */
+    .wavesurfer-region-handle-left,
+    .wavesurfer-region-handle-right {
+      width: 6px !important;
+      background: #4ade80 !important;
+      border-radius: 2px !important;
+      cursor: ew-resize !important;
+    }
+
+    /* Fade-in for flash messages */
+    .flash-msg { animation: slideIn .2s ease; }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Time input monospace */
+    .time-input {
+      font-family: 'Courier New', monospace;
+      letter-spacing: 0.05em;
+    }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body class="h-full bg-gray-950 text-gray-100 flex flex-col">
+
+  <!-- Top nav -->
+  <header class="bg-gray-900 border-b border-gray-800 flex items-center px-4 h-14 shrink-0">
+    <a href="/" class="flex items-center gap-2 mr-8 shrink-0">
+      <span class="text-2xl leading-none">⚾</span>
+      <span class="font-bold text-lg tracking-tight text-white">OnDeck</span>
+    </a>
+
+    <nav class="flex gap-1 text-sm font-medium">
+      <a href="/"         class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'index' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Home</a>
+      <a href="/library"  class="nav-link px-3 py-1.5 rounded-md {% if 'library' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Library</a>
+      <a href="/players"  class="nav-link px-3 py-1.5 rounded-md {% if 'player' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Players</a>
+      <a href="/settings" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'settings' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Settings</a>
+    </nav>
+
+    <!-- Audio Pi status -->
+    <div class="ml-auto flex items-center gap-2 text-xs text-gray-400" id="pi-status-badge">
+      <span class="w-2 h-2 rounded-full bg-gray-600" id="pi-dot"></span>
+      <span id="pi-label">Audio Pi</span>
+    </div>
+  </header>
+
+  <!-- Flash messages -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="px-4 pt-3 space-y-2 shrink-0" id="flash-container">
+        {% for category, message in messages %}
+          <div class="flash-msg flex items-start justify-between gap-3 px-4 py-3 rounded-lg text-sm
+            {% if category == 'error' %}bg-red-900/60 border border-red-700/50 text-red-200
+            {% else %}bg-green-900/60 border border-green-700/50 text-green-200{% endif %}">
+            <span>{{ message }}</span>
+            <button onclick="this.parentElement.remove()" class="text-gray-400 hover:text-white shrink-0 leading-none mt-0.5">✕</button>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <!-- Page content -->
+  <main class="flex-1 overflow-y-auto">
+    <div class="max-w-6xl mx-auto px-4 py-6">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+
+  <!-- Global transport strip (bottom) -->
+  <div class="bg-gray-900 border-t border-gray-800 px-4 py-2 flex items-center gap-3 shrink-0" id="transport-bar">
+    <div class="flex items-center gap-1.5 text-xs text-gray-500 mr-auto" id="now-playing-label">
+      <span class="text-gray-600">●</span>
+      <span id="now-playing-text">Nothing playing</span>
+    </div>
+    <button onclick="apiStop()" class="px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-xs font-medium transition-colors">■ Stop</button>
+    <button onclick="apiFade()" class="px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-xs font-medium transition-colors">↘ Fade</button>
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-gray-500">Vol</span>
+      <input type="range" min="0" max="100" value="80" id="vol-slider"
+             class="w-20 accent-green-500 cursor-pointer"
+             onchange="apiVolume(this.value)">
+      <span class="text-xs text-gray-400 w-6 text-right" id="vol-label">80</span>
+    </div>
+  </div>
+
+  <script>
+    // Poll Audio Pi status every 3 seconds.
+    async function pollStatus() {
+      try {
+        const r = await fetch('/api/status')
+        if (!r.ok) throw new Error()
+        const d = await r.json()
+        const dot = document.getElementById('pi-dot')
+        const lbl = document.getElementById('pi-label')
+        const np  = document.getElementById('now-playing-text')
+        dot.className = 'w-2 h-2 rounded-full ' + (d.error ? 'bg-red-500' : 'bg-green-500')
+        lbl.textContent = d.error ? 'Audio Pi offline' : 'Audio Pi'
+        if (!d.error) {
+          document.getElementById('vol-slider').value = d.volume
+          document.getElementById('vol-label').textContent = d.volume
+          if (d.state === 'playing' && d.queued) {
+            np.textContent = '▶ ' + (d.queued.file || 'Playing')
+          } else if (d.state === 'queued' && d.queued) {
+            np.textContent = '⏸ ' + (d.queued.file || 'Queued')
+          } else {
+            np.textContent = 'Nothing playing'
+          }
+        }
+      } catch { /* unreachable */ }
+    }
+
+    async function apiStop() {
+      await fetch('/api/stop', { method: 'POST' })
+      setTimeout(pollStatus, 300)
+    }
+
+    async function apiFade() {
+      await fetch('/api/fade', { method: 'POST' })
+    }
+
+    async function apiVolume(level) {
+      document.getElementById('vol-label').textContent = level
+      await fetch('/api/volume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ level: parseInt(level) })
+      })
+    }
+
+    pollStatus()
+    setInterval(pollStatus, 3000)
+
+    // Auto-dismiss flash messages after 5s.
+    setTimeout(() => {
+      document.querySelectorAll('#flash-container .flash-msg').forEach(el => {
+        el.style.transition = 'opacity 0.4s'
+        el.style.opacity = '0'
+        setTimeout(() => el.remove(), 400)
+      })
+    }, 5000)
+  </script>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>
