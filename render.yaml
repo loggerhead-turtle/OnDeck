@@ -2,8 +2,8 @@ services:
   - type: web
     name: ondeck
     env: python
-    buildCommand: pip install --upgrade -r requirements.txt
-    startCommand: gunicorn --workers 1 --bind 0.0.0.0:$PORT --timeout 300 web.app:app
+    buildCommand: pip install --upgrade -r requirements.txt && pip install nodeenv && nodeenv --prebuilt /opt/render/project/src/.node
+    startCommand: PATH=/opt/render/project/src/.node/bin:$PATH gunicorn --workers 1 --bind 0.0.0.0:$PORT --timeout 300 web.app:app
     # Persistent disk keeps uploads and config across deploys.
     disk:
       name: ondeck-data

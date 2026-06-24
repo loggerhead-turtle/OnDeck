@@ -603,9 +603,6 @@ def _yt_dlp_import(url: str) -> tuple[str | None, str | None]:
     cmd = [
         "yt-dlp", "-x", "--audio-format", "mp3", "--no-playlist",
         "--print", "after_move:filepath", "-o", out_tmpl,
-        # iOS client uses a different extraction path that doesn't require
-        # n-challenge JS solving — needed on cloud/datacenter IPs.
-        "--extractor-args", "youtube:player_client=ios",
         url,
     ]
     if ffmpeg_location:
