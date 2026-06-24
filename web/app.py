@@ -585,8 +585,13 @@ def _yt_dlp_import(url: str) -> tuple[str | None, str | None]:
     except Exception:
         pass
 
-    cmd = ["yt-dlp", "-x", "--audio-format", "mp3", "--no-playlist",
-           "--print", "after_move:filepath", "-o", out_tmpl, url]
+    cmd = [
+        "yt-dlp", "-x", "--audio-format", "mp3", "--no-playlist",
+        "--print", "after_move:filepath", "-o", out_tmpl,
+        # Use the Android client to avoid YouTube bot-detection on datacenter IPs.
+        "--extractor-args", "youtube:player_client=android",
+        url,
+    ]
     if ffmpeg_location:
         cmd += ["--ffmpeg-location", ffmpeg_location]
 
