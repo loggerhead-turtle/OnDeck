@@ -53,6 +53,41 @@
   </button>
 </form>
 
+{% if cloud_mode %}
+<form method="POST" action="/settings/youtube-cookies" class="mt-6">
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 space-y-4">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">YouTube Cookies</h2>
+      {% if has_yt_cookies %}
+        <span class="text-xs bg-green-900/50 text-green-400 border border-green-700/40 rounded-full px-2.5 py-0.5">Cookies set</span>
+      {% else %}
+        <span class="text-xs bg-yellow-900/50 text-yellow-400 border border-yellow-700/40 rounded-full px-2.5 py-0.5">Not set — imports blocked</span>
+      {% endif %}
+    </div>
+
+    <p class="text-sm text-gray-400">
+      YouTube blocks downloads from cloud server IPs. Paste your cookies below to authenticate imports.
+      Use the
+      <a href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc"
+         target="_blank" class="text-indigo-400 hover:text-indigo-300 underline">Get cookies.txt LOCALLY</a>
+      Chrome extension: visit <strong class="text-gray-300">youtube.com</strong> while logged in, click the extension, export, then paste the file contents here.
+    </p>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1.5 font-medium">Netscape cookie file contents</label>
+      <textarea name="cookies" rows="6" placeholder="# Netscape HTTP Cookie File&#10;.youtube.com	TRUE	/	TRUE	…"
+                class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30 resize-y"></textarea>
+      <p class="text-xs text-gray-500 mt-1">Leave blank and save to clear saved cookies.</p>
+    </div>
+
+    <button type="submit"
+            class="px-5 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white font-semibold text-sm transition-colors">
+      Save Cookies
+    </button>
+  </div>
+</form>
+{% endif %}
+
 <script>
   async function testConnection() {
     const el = document.getElementById('test-result')

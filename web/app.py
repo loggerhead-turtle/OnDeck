@@ -42,7 +42,8 @@ from config_manager import ConfigManager, MUSIC_DIR, ONDECK_HOME
 CLOUD_MODE  = os.environ.get("ONDECK_MODE", "").lower() == "cloud"
 SYNC_TOKEN  = os.environ.get("ONDECK_SYNC_TOKEN", "")
 
-AUTH_FILE = ONDECK_HOME / "auth.json"
+AUTH_FILE    = ONDECK_HOME / "auth.json"
+COOKIES_FILE = ONDECK_HOME / "youtube_cookies.txt"
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("ONDECK_SECRET", "ondeck-dev-secret-change-me")
@@ -495,7 +496,8 @@ def api_volume():
 
 @app.get("/settings")
 def settings():
-    return render_template("settings.html", system=cfg.system)
+    return render_template("settings.html", system=cfg.system,
+                           has_yt_cookies=COOKIES_FILE.exists())
 
 
 @app.post("/settings/save")
@@ -513,6 +515,19 @@ def settings_save():
             pass
         cfg.save(mark_dirty=False)
     flash("Settings saved.", "success")
+    return redirect(url_for("settings"))
+
+
+@app.post("/settings/youtube-cookies")
+def settings_youtube_cookies():
+    text = request.form.get("cookies", "").strip()
+    if text:
+        ONDECK_HOME.mkdir(parents=True, exist_ok=True)
+        COOKIES_FILE.write_text(text)
+        flash("YouTube cookies saved.", "success")
+    else:
+        COOKIES_FILE.unlink(missing_ok=True)
+        flash("YouTube cookies cleared.", "success")
     return redirect(url_for("settings"))
 
 
@@ -588,12 +603,12 @@ def _yt_dlp_import(url: str) -> tuple[str | None, str | None]:
     cmd = [
         "yt-dlp", "-x", "--audio-format", "mp3", "--no-playlist",
         "--print", "after_move:filepath", "-o", out_tmpl,
-        # Use the Android client to avoid YouTube bot-detection on datacenter IPs.
-        "--extractor-args", "youtube:player_client=android",
         url,
     ]
     if ffmpeg_location:
         cmd += ["--ffmpeg-location", ffmpeg_location]
+    if COOKIES_FILE.exists():
+        cmd += ["--cookies", str(COOKIES_FILE)]
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
