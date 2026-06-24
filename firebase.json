@@ -1,0 +1,18 @@
+{
+  "hosting": {
+    "public": "firebase-public",
+    "ignore": ["firebase.json", "**/.*"],
+    "redirects": [
+      {
+        "source": "/OnDeck",
+        "destination": "https://ondeck.onrender.com",
+        "type": 302
+      },
+      {
+        "source": "/OnDeck/**",
+        "destination": "https://ondeck.onrender.com",
+        "type": 302
+      }
+    ]
+  }
+}

@@ -65,10 +65,26 @@
       <a href="/settings" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'settings' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Settings</a>
     </nav>
 
-    <!-- Audio Pi status -->
-    <div class="ml-auto flex items-center gap-2 text-xs text-gray-400" id="pi-status-badge">
-      <span class="w-2 h-2 rounded-full bg-gray-600" id="pi-dot"></span>
-      <span id="pi-label">Audio Pi</span>
+    <!-- User menu -->
+    {% if current_user %}
+    <div class="ml-auto flex items-center gap-3">
+      <span class="text-xs text-gray-500 hidden sm:inline">{{ current_user }}</span>
+      <a href="/logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>
+    </div>
+    {% endif %}
+
+    <!-- Mode badge + Audio Pi status -->
+    <div class="{% if not current_user %}ml-auto {% endif %}flex items-center gap-3">
+      {% if cloud_mode %}
+        <span class="px-2 py-0.5 rounded text-xs font-medium bg-indigo-900/60 border border-indigo-700/40 text-indigo-300">
+          ☁ Cloud
+        </span>
+      {% else %}
+        <div class="flex items-center gap-2 text-xs text-gray-400" id="pi-status-badge">
+          <span class="w-2 h-2 rounded-full bg-gray-600" id="pi-dot"></span>
+          <span id="pi-label">Audio Pi</span>
+        </div>
+      {% endif %}
     </div>
   </header>
 
@@ -95,7 +111,8 @@
     </div>
   </main>
 
-  <!-- Global transport strip (bottom) -->
+  <!-- Global transport strip (bottom) — hidden in cloud mode, no PA connected -->
+  {% if not cloud_mode %}
   <div class="bg-gray-900 border-t border-gray-800 px-4 py-2 flex items-center gap-3 shrink-0" id="transport-bar">
     <div class="flex items-center gap-1.5 text-xs text-gray-500 mr-auto" id="now-playing-label">
       <span class="text-gray-600">●</span>
@@ -111,8 +128,10 @@
       <span class="text-xs text-gray-400 w-6 text-right" id="vol-label">80</span>
     </div>
   </div>
+  {% endif %}{# cloud_mode #}
 
   <script>
+    {% if not cloud_mode %}
     // Poll Audio Pi status every 3 seconds.
     async function pollStatus() {
       try {
@@ -158,6 +177,10 @@
 
     pollStatus()
     setInterval(pollStatus, 3000)
+    {% else %}
+    // Cloud mode: no Audio Pi to poll.
+    function pollStatus() {}
+    {% endif %}
 
     // Auto-dismiss flash messages after 5s.
     setTimeout(() => {

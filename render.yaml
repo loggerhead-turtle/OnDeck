@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: ondeck
+    env: python
+    # Install ffmpeg for yt-dlp audio conversion, then Python deps.
+    buildCommand: sudo apt-get install -y ffmpeg && pip install -r requirements.txt
+    startCommand: gunicorn --workers 1 --bind 0.0.0.0:$PORT --timeout 300 web.app:app
+    # Persistent disk keeps uploads and config across deploys.
+    disk:
+      name: ondeck-data
+      mountPath: /data
+      sizeGB: 5
+    envVars:
+      # Point all data storage at the persistent disk.
+      - key: ONDECK_HOME
+        value: /data/ondeck
+      # Activate cloud mode (hides Audio Pi transport, enables sync API).
+      - key: ONDECK_MODE
+        value: cloud
+      # Session secret — Render will generate a random value.
+      - key: ONDECK_SECRET
+        generateValue: true
+      # Shared secret for the /sync/* API.
+      # Copy this value into ~/ondeck/sync.env on every Pi.
+      - key: ONDECK_SYNC_TOKEN
+        generateValue: true
