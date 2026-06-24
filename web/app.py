@@ -610,8 +610,15 @@ def _yt_dlp_import(url: str) -> tuple[str | None, str | None]:
     if COOKIES_FILE.exists():
         cmd += ["--cookies", str(COOKIES_FILE)]
 
+    # Prepend the nodeenv Node.js binary to PATH so yt-dlp can solve n-challenges.
+    proc_env = os.environ.copy()
+    node_bin = "/opt/render/project/src/.node/bin"
+    if os.path.isdir(node_bin):
+        proc_env["PATH"] = node_bin + ":" + proc_env.get("PATH", "")
+
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+                                env=proc_env)
     except FileNotFoundError:
         return None, "yt-dlp not installed"
     except subprocess.TimeoutExpired:
