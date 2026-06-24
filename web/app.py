@@ -266,38 +266,38 @@ def library_upload():
     except Exception:
         pass
 
-    flash(f"Uploaded “{name}”.", "success")
+    flash(f'Uploaded "{name}".', "success")
     return redirect(url_for("library"))
 
 
-@app.post(“/library/import”)
+@app.post("/library/import")
 def library_import():
-    url = request.form.get(“url”, “”).strip()
+    url = request.form.get("url", "").strip()
     if not url:
-        flash(“No URL provided.”, “error”)
-        return redirect(url_for(“library”))
+        flash("No URL provided.", "error")
+        return redirect(url_for("library"))
 
     if CLOUD_MODE:
         # Run yt-dlp directly on the cloud instance (no Audio Pi).
         filename, error = _yt_dlp_import(url)
         if error:
-            flash(f”Import failed: {error}”, “error”)
-            return redirect(url_for(“library”))
+            flash(f"Import failed: {error}", "error")
+            return redirect(url_for("library"))
     else:
-        data, status = _proxy(“POST”, “/import”, json={“url”: url})
+        data, status = _proxy("POST", "/import", json={"url": url})
         if status != 200:
-            flash(f”Import failed: {data.get('error', 'unknown')}”, “error”)
-            return redirect(url_for(“library”))
-        filename = data.get(“filename”)
+            flash(f"Import failed: {data.get('error', 'unknown')}", "error")
+            return redirect(url_for("library"))
+        filename = data.get("filename")
 
     if filename:
-        existing = {s[“filename”] for s in cfg.songs.values()}
+        existing = {s["filename"] for s in cfg.songs.values()}
         if filename not in existing:
-            cfg.add_song(filename, Path(filename).stem.replace(“_”, “ “))
-        flash(f”Imported \”{filename}\”.”, “success”)
+            cfg.add_song(filename, Path(filename).stem.replace("_", " "))
+        flash(f"Imported \"{filename}\".", "success")
     else:
-        flash(“Import completed.”, “success”)
-    return redirect(url_for(“library”))
+        flash("Import completed.", "success")
+    return redirect(url_for("library"))
 
 
 @app.get("/library/<sid>/edit")
@@ -333,7 +333,7 @@ def library_delete(sid: str):
         cfg.save()
     if song:
         (MUSIC_DIR / song["filename"]).unlink(missing_ok=True)
-        flash(f"Deleted “{song['display_name']}”.", "success")
+        flash(f"Deleted '{song['display_name']}'.", "success")
     return redirect(url_for("library"))
 
 
