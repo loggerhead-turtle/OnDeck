@@ -3,7 +3,7 @@ Flask>=3.0
 requests>=2.31
 
 # YouTube audio import (Audio Pi + cloud)
-yt-dlp>=2024.1.0
+yt-dlp>=2025.6.1
 imageio-ffmpeg>=0.5.1   # bundles ffmpeg binary; no apt-get needed on Render
 
 # Stream Deck control + button rendering (Coach Pi)
