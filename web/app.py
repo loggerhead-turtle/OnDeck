@@ -270,27 +270,34 @@ def library_upload():
     return redirect(url_for("library"))
 
 
-@app.post("/library/import")
+@app.post(“/library/import”)
 def library_import():
-    url = request.form.get("url", "").strip()
+    url = request.form.get(“url”, “”).strip()
     if not url:
-        flash("No URL provided.", "error")
-        return redirect(url_for("library"))
+        flash(“No URL provided.”, “error”)
+        return redirect(url_for(“library”))
 
-    data, status = _proxy("POST", "/import", json={"url": url})
-    if status != 200:
-        flash(f"Import failed: {data.get('error', 'unknown')}", "error")
-        return redirect(url_for("library"))
-
-    filename = data.get("filename")
-    if filename:
-        existing = {s["filename"] for s in cfg.songs.values()}
-        if filename not in existing:
-            cfg.add_song(filename, Path(filename).stem.replace("_", " "))
-        flash(f"Imported “{filename}”.", "success")
+    if CLOUD_MODE:
+        # Run yt-dlp directly on the cloud instance (no Audio Pi).
+        filename, error = _yt_dlp_import(url)
+        if error:
+            flash(f”Import failed: {error}”, “error”)
+            return redirect(url_for(“library”))
     else:
-        flash("Import completed.", "success")
-    return redirect(url_for("library"))
+        data, status = _proxy(“POST”, “/import”, json={“url”: url})
+        if status != 200:
+            flash(f”Import failed: {data.get('error', 'unknown')}”, “error”)
+            return redirect(url_for(“library”))
+        filename = data.get(“filename”)
+
+    if filename:
+        existing = {s[“filename”] for s in cfg.songs.values()}
+        if filename not in existing:
+            cfg.add_song(filename, Path(filename).stem.replace(“_”, “ “))
+        flash(f”Imported \”{filename}\”.”, “success”)
+    else:
+        flash(“Import completed.”, “success”)
+    return redirect(url_for(“library”))
 
 
 @app.get("/library/<sid>/edit")
@@ -563,6 +570,39 @@ def sync_ping():
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _yt_dlp_import(url: str) -> tuple[str | None, str | None]:
+    """Run yt-dlp on this process (cloud mode). Returns (filename, error)."""
+    import subprocess
+    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    out_tmpl = str(MUSIC_DIR / "%(title)s.%(ext)s")
+
+    # Use imageio-ffmpeg's bundled binary so we don't need a system ffmpeg.
+    ffmpeg_location = None
+    try:
+        import imageio_ffmpeg
+        ffmpeg_location = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        pass
+
+    cmd = ["yt-dlp", "-x", "--audio-format", "mp3", "--no-playlist",
+           "--print", "after_move:filepath", "-o", out_tmpl, url]
+    if ffmpeg_location:
+        cmd += ["--ffmpeg-location", ffmpeg_location]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except FileNotFoundError:
+        return None, "yt-dlp not installed"
+    except subprocess.TimeoutExpired:
+        return None, "import timed out"
+
+    if result.returncode != 0:
+        return None, (result.stderr.strip()[-500:] or "import failed")
+
+    filepath = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+    return (Path(filepath).name if filepath else None), None
+
 
 def _form_ms(field: str, default: int = 0) -> int:
     v = request.form.get(field, "").strip()
