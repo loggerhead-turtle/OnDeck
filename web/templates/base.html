@@ -58,15 +58,26 @@
       <span class="font-bold text-lg tracking-tight text-white">OnDeck</span>
     </a>
 
+    {% if current_player %}
+    <nav class="flex gap-1 text-sm font-medium">
+      <a href="/my-profile" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'my_profile' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">My Profile</a>
+    </nav>
+    {% else %}
     <nav class="flex gap-1 text-sm font-medium">
       <a href="/"         class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'index' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Home</a>
       <a href="/library"  class="nav-link px-3 py-1.5 rounded-md {% if 'library' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Library</a>
       <a href="/players"  class="nav-link px-3 py-1.5 rounded-md {% if 'player' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Players</a>
       <a href="/settings" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'settings' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Settings</a>
     </nav>
+    {% endif %}
 
-    <!-- User menu -->
-    {% if current_user %}
+    <!-- User / player menu -->
+    {% if current_player %}
+    <div class="ml-auto flex items-center gap-3">
+      <span class="text-xs text-gray-500 hidden sm:inline">#{{ current_player.jersey }} {{ current_player.first_name }} {{ current_player.last_name }}</span>
+      <a href="/player-logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>
+    </div>
+    {% elif current_user %}
     <div class="ml-auto flex items-center gap-3">
       <span class="text-xs text-gray-500 hidden sm:inline">{{ current_user }}</span>
       <a href="/logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>
@@ -74,7 +85,7 @@
     {% endif %}
 
     <!-- Mode badge + Audio Pi status -->
-    <div class="{% if not current_user %}ml-auto {% endif %}flex items-center gap-3">
+    <div class="{% if not current_user and not current_player %}ml-auto {% endif %}flex items-center gap-3">
       {% if cloud_mode %}
         <span class="px-2 py-0.5 rounded text-xs font-medium bg-indigo-900/60 border border-indigo-700/40 text-indigo-300">
           ☁ Cloud

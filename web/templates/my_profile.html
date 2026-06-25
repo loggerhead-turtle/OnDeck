@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% from '_trim_editor.html' import trim_editor %}
+
+{% block title %}My Profile{% endblock %}
+{% block content %}
+
+<div class="max-w-2xl mx-auto">
+
+  <!-- Header -->
+  <div class="mb-6">
+    <h1 class="text-3xl font-bold text-white">#{{ player.jersey }} {{ player.first_name }} {{ player.last_name }}</h1>
+    <p class="text-sm text-gray-500 mt-1">Manage your walk-up music</p>
+  </div>
+
+  <!-- Walk-up song card -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Walk-Up Song</h2>
+
+    {% if not song %}
+
+    <!-- No song yet — upload -->
+    <p class="text-sm text-gray-400 mb-5">
+      Upload your walk-up song. Use MP3, WAV, M4A, or OGG.
+    </p>
+    <form method="POST" action="{{ url_for('my_profile_upload') }}" enctype="multipart/form-data">
+      <div class="space-y-3">
+        <input type="file" name="file" accept="audio/*" required
+               class="block w-full text-sm text-gray-400
+                      file:mr-4 file:py-2.5 file:px-5 file:rounded-lg file:border-0
+                      file:text-sm file:font-semibold file:bg-gray-700 file:text-gray-200
+                      hover:file:bg-gray-600 cursor-pointer">
+        <button type="submit"
+                class="w-full py-3 rounded-lg bg-green-700 hover:bg-green-600 text-white font-bold text-sm transition-colors">
+          Upload Song
+        </button>
+      </div>
+    </form>
+
+    {% else %}
+
+    <!-- Replace song option -->
+    <details class="mb-5 group">
+      <summary class="text-xs text-gray-500 cursor-pointer select-none hover:text-gray-300 transition-colors list-none flex items-center gap-1.5">
+        <span class="text-gray-600 group-open:rotate-90 transition-transform inline-block">▶</span>
+        Current song: <span class="text-gray-300 font-medium">{{ song.display_name }}</span>
+        <span class="text-gray-600 ml-1">— click to replace</span>
+      </summary>
+      <form method="POST" action="{{ url_for('my_profile_upload') }}" enctype="multipart/form-data" class="mt-3 flex items-center gap-3">
+        <input type="file" name="file" accept="audio/*" required
+               class="flex-1 text-sm text-gray-400
+                      file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0
+                      file:text-sm file:font-semibold file:bg-gray-700 file:text-gray-200
+                      hover:file:bg-gray-600 cursor-pointer">
+        <button type="submit"
+                class="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-medium transition-colors shrink-0">
+          Replace
+        </button>
+      </form>
+    </details>
+
+    <!-- Trim editor -->
+    <form method="POST" action="{{ url_for('my_profile_save') }}">
+      {{ trim_editor(
+          editor_id   = 'song',
+          audio_url   = url_for('serve_audio', filename=song.filename),
+          start_ms    = song.start_ms or 0,
+          end_ms      = song.end_ms,
+          start_field = 'start_ms',
+          end_field   = 'end_ms',
+          label       = 'Set start and end of your walk-up'
+      ) }}
+
+      <div class="mt-5">
+        <button type="submit"
+                class="w-full py-3 rounded-lg bg-green-700 hover:bg-green-600 text-white font-bold text-sm transition-colors">
+          Save Trim Points
+        </button>
+      </div>
+    </form>
+
+    {% endif %}
+  </div>
+
+</div>
+
+{% endblock %}

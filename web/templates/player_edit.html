@@ -157,6 +157,45 @@
   <input type="hidden" name="song_end_ms" value="">
   {% endif %}
 
+  <!-- Player login credentials -->
+  {% if pid %}
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-1">Player Login</h2>
+    <p class="text-xs text-gray-500 mb-4">
+      Share these credentials with {{ player.first_name }} so they can manage their own profile at
+      <span class="text-gray-400 font-mono">/player-login</span>.
+    </p>
+    <form method="POST" action="/players/{{ pid }}/set-credentials">
+      <div class="grid sm:grid-cols-2 gap-4 mb-4">
+        <div>
+          <label class="block text-xs text-gray-400 mb-1.5 font-medium">Username</label>
+          <input type="text" name="player_username"
+                 value="{{ player.player_username or '' }}"
+                 placeholder="e.g. jsmith"
+                 autocomplete="off"
+                 class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1.5 font-medium">Password</label>
+          <input type="text" name="player_password"
+                 placeholder="{{ 'leave blank to keep existing' if player.player_password_hash else 'set a password (min 6 chars)' }}"
+                 autocomplete="new-password"
+                 class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30">
+          {% if player.player_password_hash %}
+            <p class="text-xs text-green-600 mt-1">✔ Password set</p>
+          {% else %}
+            <p class="text-xs text-yellow-600 mt-1">No password — player can't log in yet</p>
+          {% endif %}
+        </div>
+      </div>
+      <button type="submit"
+              class="px-5 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white font-semibold text-sm transition-colors">
+        Update Login
+      </button>
+    </form>
+  </div>
+  {% endif %}
+
   <!-- Save / delete -->
   <div class="flex items-center justify-between">
     <button type="submit"

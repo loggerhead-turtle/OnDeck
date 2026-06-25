@@ -80,25 +80,45 @@ def _check_auth():
     # Sync API: authenticated by Bearer token, not session.
     if request.path.startswith("/sync/"):
         return
-    # Auth routes and static files are always accessible.
+    # Player auth routes are always accessible.
+    if request.endpoint in ("player_login", "player_login_post", "player_logout"):
+        return
+    # Admin auth routes and static files are always accessible.
     if request.endpoint in ("login", "login_post", "logout", "setup", "setup_post", "static"):
         return
     # No password configured yet — force first-time setup.
     if _load_auth() is None:
-        if request.endpoint != "setup":
+        if request.endpoint not in ("setup", "setup_post"):
             return redirect(url_for("setup"))
         return
-    # All other routes require a logged-in session.
-    if not session.get("logged_in"):
-        dest = request.full_path if request.path != "/" else None
-        return redirect(url_for("login", next=dest))
+    # Admin session — full access.
+    if session.get("logged_in"):
+        return
+    # Player session — restricted to player-facing routes.
+    if session.get("player_id"):
+        _player_ok = {"my_profile", "my_profile_upload", "my_profile_save", "serve_audio"}
+        if request.endpoint not in _player_ok:
+            return redirect(url_for("my_profile"))
+        return
+    # No session — redirect based on destination.
+    if request.endpoint in ("my_profile", "my_profile_upload", "my_profile_save"):
+        return redirect(url_for("player_login"))
+    dest = request.full_path if request.path != "/" else None
+    return redirect(url_for("login", next=dest))
 
 
 @app.context_processor
 def _inject_globals():
+    current_player = None
+    pid = session.get("player_id")
+    if pid:
+        p = cfg.players.get(pid)
+        if p:
+            current_player = p
     return {
         "cloud_mode": CLOUD_MODE,
         "current_user": session.get("username"),
+        "current_player": current_player,
     }
 
 
@@ -209,6 +229,34 @@ def setup_post():
     session["username"] = username
     flash("Account created. Welcome to OnDeck!", "success")
     return redirect(url_for("index"))
+
+
+@app.get("/player-login")
+def player_login():
+    if session.get("player_id"):
+        return redirect(url_for("my_profile"))
+    return render_template("player_login.html")
+
+
+@app.post("/player-login")
+def player_login_post():
+    username = request.form.get("username", "").strip().lower()
+    password = request.form.get("password", "")
+    for pid, player in cfg.players.items():
+        pu = player.get("player_username", "")
+        if pu.lower() == username and player.get("player_password_hash"):
+            if check_password_hash(player["player_password_hash"], password):
+                session.permanent = True
+                session["player_id"] = pid
+                return redirect(url_for("my_profile"))
+    flash("Incorrect username or password.", "error")
+    return redirect(url_for("player_login"))
+
+
+@app.get("/player-logout")
+def player_logout():
+    session.pop("player_id", None)
+    return redirect(url_for("player_login"))
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +496,81 @@ def players_record(pid: str):
         pass
 
     return jsonify(ok=True, filename=filename)
+
+
+@app.post("/players/<pid>/set-credentials")
+def player_set_credentials(pid: str):
+    player = cfg.players.get(pid)
+    if not player:
+        abort(404)
+    username = request.form.get("player_username", "").strip()
+    password = request.form.get("player_password", "")
+    with cfg._lock:
+        if username:
+            player["player_username"] = username
+        if password:
+            if len(password) < 6:
+                flash("Password must be at least 6 characters.", "error")
+                return redirect(url_for("players_edit", pid=pid))
+            player["player_password_hash"] = generate_password_hash(password)
+        cfg.save()
+    flash("Player login updated.", "success")
+    return redirect(url_for("players_edit", pid=pid))
+
+
+# ---------------------------------------------------------------------------
+# Player self-service portal
+# ---------------------------------------------------------------------------
+
+@app.get("/my-profile")
+def my_profile():
+    pid = session.get("player_id")
+    player = cfg.players.get(pid)
+    if not player:
+        session.pop("player_id", None)
+        return redirect(url_for("player_login"))
+    song = cfg.songs.get(player["walkup_song_id"]) if player.get("walkup_song_id") else None
+    return render_template("my_profile.html", pid=pid, player=player, song=song)
+
+
+@app.post("/my-profile/upload")
+def my_profile_upload():
+    pid = session.get("player_id")
+    player = cfg.players.get(pid)
+    if not player:
+        abort(403)
+    f = request.files.get("file")
+    if not f or not f.filename:
+        flash("No file selected.", "error")
+        return redirect(url_for("my_profile"))
+    name = Path(f.filename).name
+    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    f.save(str(MUSIC_DIR / name))
+    existing = {s["filename"]: sid for sid, s in cfg.songs.items()}
+    song_id = existing.get(name) or cfg.add_song(
+        name, Path(name).stem.replace("_", " ").replace("-", " ")
+    )
+    with cfg._lock:
+        player["walkup_song_id"] = song_id
+        cfg.save()
+    flash("Song uploaded!", "success")
+    return redirect(url_for("my_profile"))
+
+
+@app.post("/my-profile/save")
+def my_profile_save():
+    pid = session.get("player_id")
+    with cfg._lock:
+        player = cfg.players.get(pid)
+        if not player:
+            abort(403)
+        sid = player.get("walkup_song_id")
+        if sid and sid in cfg.songs:
+            cfg.songs[sid]["start_ms"] = _form_ms("start_ms", 0)
+            cfg.songs[sid]["end_ms"] = _form_ms_or_none("end_ms")
+        cfg.save()
+    flash("Saved!", "success")
+    return redirect(url_for("my_profile"))
 
 
 # ---------------------------------------------------------------------------
