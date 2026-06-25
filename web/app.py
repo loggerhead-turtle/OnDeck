@@ -39,8 +39,10 @@ from config_manager import ConfigManager, MUSIC_DIR, ONDECK_HOME
 # Mode detection
 # ---------------------------------------------------------------------------
 
-CLOUD_MODE  = os.environ.get("ONDECK_MODE", "").lower() == "cloud"
-SYNC_TOKEN  = os.environ.get("ONDECK_SYNC_TOKEN", "")
+CLOUD_MODE         = os.environ.get("ONDECK_MODE", "").lower() == "cloud"
+SYNC_TOKEN         = os.environ.get("ONDECK_SYNC_TOKEN", "")
+ELEVENLABS_API_KEY  = os.environ.get("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "pNInz6obpgDQGcFmaJgB")
 
 AUTH_FILE    = ONDECK_HOME / "auth.json"
 COOKIES_FILE = ONDECK_HOME / "youtube_cookies.txt"
@@ -96,9 +98,17 @@ def _check_auth():
         return
     # Player session — restricted to player-facing routes.
     if session.get("player_id"):
-        _player_ok = {"my_profile", "my_profile_upload", "my_profile_save", "serve_audio"}
+        _player_ok = {
+            "my_profile", "my_profile_upload", "my_profile_save", "serve_audio",
+            "my_profile_change_password", "my_profile_change_password_post", "player_logout",
+        }
         if request.endpoint not in _player_ok:
             return redirect(url_for("my_profile"))
+        # Force password reset before anything else.
+        p = cfg.players.get(session["player_id"])
+        _reset_ok = {"my_profile_change_password", "my_profile_change_password_post", "player_logout"}
+        if p and p.get("force_reset") and request.endpoint not in _reset_ok:
+            return redirect(url_for("my_profile_change_password"))
         return
     # No session — redirect based on destination.
     if request.endpoint in ("my_profile", "my_profile_upload", "my_profile_save"):
@@ -119,6 +129,7 @@ def _inject_globals():
         "cloud_mode": CLOUD_MODE,
         "current_user": session.get("username"),
         "current_player": current_player,
+        "elevenlabs_ready": bool(ELEVENLABS_API_KEY),
     }
 
 
@@ -513,6 +524,7 @@ def player_set_credentials(pid: str):
                 flash("Password must be at least 6 characters.", "error")
                 return redirect(url_for("players_edit", pid=pid))
             player["player_password_hash"] = generate_password_hash(password)
+            player["force_reset"] = True  # player must choose their own password on first login
         cfg.save()
     flash("Player login updated.", "success")
     return redirect(url_for("players_edit", pid=pid))
@@ -521,6 +533,37 @@ def player_set_credentials(pid: str):
 # ---------------------------------------------------------------------------
 # Player self-service portal
 # ---------------------------------------------------------------------------
+
+@app.get("/my-profile/change-password")
+def my_profile_change_password():
+    pid = session.get("player_id")
+    player = cfg.players.get(pid)
+    if not player:
+        return redirect(url_for("player_login"))
+    return render_template("change_password.html", player=player)
+
+
+@app.post("/my-profile/change-password")
+def my_profile_change_password_post():
+    pid = session.get("player_id")
+    new_pw  = request.form.get("password", "")
+    confirm = request.form.get("confirm", "")
+    if len(new_pw) < 6:
+        flash("Password must be at least 6 characters.", "error")
+        return redirect(url_for("my_profile_change_password"))
+    if new_pw != confirm:
+        flash("Passwords do not match.", "error")
+        return redirect(url_for("my_profile_change_password"))
+    with cfg._lock:
+        player = cfg.players.get(pid)
+        if not player:
+            abort(403)
+        player["player_password_hash"] = generate_password_hash(new_pw)
+        player["force_reset"] = False
+        cfg.save()
+    flash("Password updated!", "success")
+    return redirect(url_for("my_profile"))
+
 
 @app.get("/my-profile")
 def my_profile():
@@ -708,6 +751,53 @@ def sync_ping():
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _elevenlabs_announce(text: str) -> tuple[bytes | None, str | None]:
+    """Call ElevenLabs TTS. Returns (audio_bytes, error)."""
+    if not ELEVENLABS_API_KEY:
+        return None, "ELEVENLABS_API_KEY not configured"
+    try:
+        r = rq.post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
+            headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+            json={
+                "text": text,
+                "model_id": "eleven_monolingual_v1",
+                "voice_settings": {"stability": 0.55, "similarity_boost": 0.75},
+            },
+            timeout=30,
+        )
+        if r.status_code != 200:
+            return None, f"ElevenLabs {r.status_code}: {r.text[:300]}"
+        return r.content, None
+    except Exception as exc:
+        return None, str(exc)
+
+
+@app.post("/players/<pid>/generate-announcement")
+def player_generate_announcement(pid: str):
+    player = cfg.players.get(pid)
+    if not player:
+        abort(404)
+    text = (
+        f"Now batting, number {player['jersey']}, "
+        f"{player['first_name']} {player['last_name']}."
+    )
+    audio, error = _elevenlabs_announce(text)
+    if error:
+        flash(f"TTS failed: {error}", "error")
+        return redirect(url_for("players_edit", pid=pid))
+    filename = f"ann_{pid}_tts.mp3"
+    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    (MUSIC_DIR / filename).write_bytes(audio)
+    with cfg._lock:
+        player["announcement_file"] = filename
+        player["announcement_start_ms"] = 0
+        player["announcement_end_ms"] = None
+        cfg.save()
+    flash("AI announcement generated!", "success")
+    return redirect(url_for("players_edit", pid=pid))
+
 
 def _yt_dlp_import(url: str) -> tuple[str | None, str | None]:
     """Run yt-dlp on this process (cloud mode). Returns (filename, error)."""

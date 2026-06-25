@@ -51,8 +51,8 @@
   <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5">
     <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Announcement</h2>
 
-    <!-- Record controls -->
-    <div class="flex items-center gap-3 mb-4">
+    <!-- Record / AI controls -->
+    <div class="flex flex-wrap items-center gap-3 mb-4">
       <button type="button" id="rec-btn"
               class="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-700 hover:bg-red-600 text-white text-sm font-semibold transition-colors">
         ● Record
@@ -61,14 +61,24 @@
               class="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-700 text-gray-500 text-sm font-semibold cursor-not-allowed">
         ■ Stop
       </button>
-      <div class="flex items-center gap-2 ml-2 hidden" id="rec-timer-wrap">
+      <div class="flex items-center gap-2 hidden" id="rec-timer-wrap">
         <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
         <span class="font-mono text-sm text-red-400" id="rec-timer">0:00</span>
       </div>
+
+      {% if elevenlabs_ready %}
+      <form method="POST" action="/players/{{ pid }}/generate-announcement">
+        <button type="submit"
+                class="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm font-semibold transition-colors">
+          ✦ AI Voice
+        </button>
+      </form>
+      {% endif %}
+
       {% if player.announcement_file %}
-        <span class="text-xs text-green-500 ml-auto">✔ Recording saved — re-record to replace</span>
+        <span class="text-xs text-green-500 ml-auto">✔ Saved — re-record or regenerate to replace</span>
       {% else %}
-        <span class="text-xs text-gray-600 ml-auto">No recording yet</span>
+        <span class="text-xs text-gray-600 ml-auto">No announcement yet</span>
       {% endif %}
     </div>
 
