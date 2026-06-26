@@ -42,8 +42,10 @@ from config_manager import ConfigManager, MUSIC_DIR, ONDECK_HOME
 
 CLOUD_MODE          = os.environ.get("ONDECK_MODE", "").lower() == "cloud"
 SYNC_TOKEN          = os.environ.get("ONDECK_SYNC_TOKEN", "")
+# ElevenLabs key/voice are normally configured in Settings → Announcer Voice;
+# these env vars act as fallbacks when the config fields are left blank.
 ELEVENLABS_API_KEY  = os.environ.get("ELEVENLABS_API_KEY", "")
-ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "pNInz6obpgDQGcFmaJgB")
+ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "")
 
 AUTH_FILE      = ONDECK_HOME / "auth.json"
 COOKIES_FILE   = ONDECK_HOME / "youtube_cookies.txt"
@@ -200,7 +202,7 @@ def _inject_globals():
         "current_user": session.get("username") if role in ("admin", "editor") else None,
         "current_role": role,
         "current_player": current_player,
-        "elevenlabs_ready": bool(ELEVENLABS_API_KEY),
+        "elevenlabs_ready": _elevenlabs_ready(),
     }
 
 
@@ -608,7 +610,8 @@ def ondeck_players_edit(pid: str):
     if not player:
         abort(404)
     return render_template("player_edit.html",
-                           pid=pid, player=player, songs=cfg.songs)
+                           pid=pid, player=player, songs=cfg.songs,
+                           default_announcement=_default_announcement(player))
 
 
 @app.post("/ondeck/players/<pid>/save")
@@ -705,22 +708,63 @@ def ondeck_player_generate_announcement(pid: str):
     player = cfg.players.get(pid)
     if not player:
         abort(404)
-    text = (f"Now batting, number {player['jersey']}, "
-            f"{player['first_name']} {player['last_name']}.")
+    # Editable text from the player editor; fall back to the saved template.
+    text = (request.form.get("text", "").strip()
+            or _default_announcement(player))
+
     audio, error = _elevenlabs_announce(text)
     if error:
         flash(f"TTS failed: {error}", "error")
         return redirect(url_for("ondeck_players_edit", pid=pid))
+
     filename = f"ann_{pid}_tts.mp3"
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)
     (MUSIC_DIR / filename).write_bytes(audio)
+
     with cfg._lock:
+        old = player.get("announcement_file")
         player["announcement_file"]     = filename
+        player["announcement_text"]     = text
         player["announcement_start_ms"] = 0
         player["announcement_end_ms"]   = None
         cfg.save()
+
+    # Drop a previous take under a different name (e.g. an old webm recording)
+    # so it doesn't linger in the music dir and the sync manifest.
+    if old and old != filename:
+        (MUSIC_DIR / old).unlink(missing_ok=True)
+
+    try:
+        rq.post(_audio_pi_url("/upload"),
+                files={"file": (filename, audio, "audio/mpeg")}, timeout=15)
+    except Exception:
+        pass
+
     flash("AI announcement generated!", "success")
     return redirect(url_for("ondeck_players_edit", pid=pid))
+
+
+@app.post("/ondeck/api/elevenlabs/voices")
+def ondeck_api_elevenlabs_voices():
+    """List the account's voices so an admin can pick one in Settings.
+
+    Accepts an optional ``key`` in the JSON body so a just-typed (unsaved) key
+    can be verified before saving.
+    """
+    body = request.get_json(silent=True) or {}
+    key = (body.get("key") or "").strip() or _elevenlabs_key()
+    if not key:
+        return jsonify(error="Enter an API key first."), 400
+    try:
+        r = rq.get("https://api.elevenlabs.io/v1/voices",
+                   headers={"xi-api-key": key}, timeout=15)
+    except Exception as exc:
+        return jsonify(error=f"Could not reach ElevenLabs: {exc}"), 502
+    if r.status_code != 200:
+        return jsonify(error=_elevenlabs_error(r)), 502
+    voices = [{"voice_id": v.get("voice_id"), "name": v.get("name", "")}
+              for v in (r.json().get("voices") or [])]
+    return jsonify(voices=voices)
 
 
 # ---------------------------------------------------------------------------
@@ -857,7 +901,8 @@ def ondeck_api_volume():
 @app.get("/ondeck/settings")
 def ondeck_settings():
     return render_template("settings.html", system=cfg.system,
-                           has_yt_cookies=COOKIES_FILE.exists())
+                           has_yt_cookies=COOKIES_FILE.exists(),
+                           elevenlabs_key_set=bool(_elevenlabs_key()))
 
 
 @app.post("/ondeck/settings/save")
@@ -873,6 +918,21 @@ def ondeck_settings_save():
             s["volume"] = max(0, min(100, int(request.form.get("volume", 80))))
         except ValueError:
             pass
+
+        # AI announcer voice (ElevenLabs).
+        s["elevenlabs_voice_id"] = request.form.get("elevenlabs_voice_id", "").strip()
+        s["elevenlabs_model"] = (request.form.get("elevenlabs_model", "").strip()
+                                 or "eleven_multilingual_v2")
+        s["announcement_template"] = (request.form.get("announcement_template", "").strip()
+                                      or s.get("announcement_template", ""))
+        # Only overwrite the stored key when a new one is typed; an empty field
+        # leaves the existing key untouched so it's never echoed back to the page.
+        new_key = request.form.get("elevenlabs_api_key", "").strip()
+        if new_key:
+            s["elevenlabs_api_key"] = new_key
+        elif request.form.get("clear_elevenlabs_key") == "on":
+            s["elevenlabs_api_key"] = ""
+
         cfg.save(mark_dirty=False)
     flash("Settings saved.", "success")
     return redirect(url_for("ondeck_settings"))
@@ -942,25 +1002,81 @@ def sync_ping():
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _elevenlabs_key() -> str:
+    """API key from config, falling back to the ELEVENLABS_API_KEY env var."""
+    return (cfg.system.get("elevenlabs_api_key") or ELEVENLABS_API_KEY).strip()
+
+
+def _elevenlabs_voice() -> str:
+    """Voice ID from config, falling back to the ELEVENLABS_VOICE_ID env var."""
+    return (cfg.system.get("elevenlabs_voice_id") or ELEVENLABS_VOICE_ID).strip()
+
+
+def _elevenlabs_model() -> str:
+    return cfg.system.get("elevenlabs_model") or "eleven_multilingual_v2"
+
+
+def _elevenlabs_ready() -> bool:
+    return bool(_elevenlabs_key() and _elevenlabs_voice())
+
+
+def _default_announcement(player: dict) -> str:
+    """Fill the announcement template with this player's details."""
+    tmpl = (cfg.system.get("announcement_template")
+            or "Now batting, number {jersey}, {first_name} {last_name}")
+    try:
+        return tmpl.format(
+            jersey=player.get("jersey", ""),
+            first_name=player.get("first_name", ""),
+            last_name=player.get("last_name", ""),
+        )
+    except Exception:
+        # A malformed template (bad placeholder) shouldn't break the page.
+        return tmpl
+
+
+def _elevenlabs_error(r) -> str:
+    """Pull a human-readable message out of an ElevenLabs error response."""
+    try:
+        detail = r.json().get("detail", "")
+        if isinstance(detail, dict):
+            detail = detail.get("message") or detail.get("status") or ""
+        if detail:
+            return f"ElevenLabs error {r.status_code}: {detail}"
+    except Exception:
+        pass
+    return f"ElevenLabs {r.status_code}: {r.text[:300]}"
+
+
 def _elevenlabs_announce(text: str) -> tuple[bytes | None, str | None]:
-    if not ELEVENLABS_API_KEY:
-        return None, "ELEVENLABS_API_KEY not configured"
+    """Synthesize ``text`` to MP3 bytes. Returns (audio_bytes, error_message)."""
+    key = _elevenlabs_key()
+    if not key:
+        return None, "No ElevenLabs API key set (Settings → Announcer Voice)."
+    voice = _elevenlabs_voice()
+    if not voice:
+        return None, "No ElevenLabs voice selected (Settings → Announcer Voice)."
     try:
         r = rq.post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
-            headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+            f"https://api.elevenlabs.io/v1/text-to-speech/{voice}",
+            params={"output_format": "mp3_44100_128"},
+            headers={
+                "xi-api-key": key,
+                "Content-Type": "application/json",
+                "Accept": "audio/mpeg",
+            },
             json={
                 "text": text,
-                "model_id": "eleven_monolingual_v1",
+                "model_id": _elevenlabs_model(),
                 "voice_settings": {"stability": 0.55, "similarity_boost": 0.75},
             },
             timeout=30,
         )
-        if r.status_code != 200:
-            return None, f"ElevenLabs {r.status_code}: {r.text[:300]}"
-        return r.content, None
     except Exception as exc:
-        return None, str(exc)
+        return None, f"Could not reach ElevenLabs: {exc}"
+    if r.status_code != 200:
+        return None, _elevenlabs_error(r)
+    return r.content, None
 
 
 def _yt_dlp_import(url: str) -> tuple[str | None, str | None]:
