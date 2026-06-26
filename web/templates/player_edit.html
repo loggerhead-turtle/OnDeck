@@ -45,6 +45,25 @@
     </div>
   </div>
 
+  <!-- Team Assignment -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Teams</h2>
+    <div class="space-y-2">
+      {% if teams %}
+        {% for team_id, team in teams %}
+        <label class="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-900 hover:bg-gray-850 cursor-pointer">
+          <input type="checkbox" name="team_ids" value="{{ team_id }}"
+                 {% if player and team_id in player.get('team_ids', []) %}checked{% endif %}
+                 class="accent-green-500">
+          <span class="text-gray-200">{{ team['name'] }}</span>
+        </label>
+        {% endfor %}
+      {% else %}
+      <p class="text-gray-500 text-sm">No teams yet. <a href="/ondeck/teams" class="text-green-400 hover:text-green-300">Create a team</a></p>
+      {% endif %}
+    </div>
+  </div>
+
   {% if pid %}
 
   <!-- Announcement section -->

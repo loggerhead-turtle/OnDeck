@@ -129,6 +129,27 @@
   </button>
 </form>
 
+<!-- Signup link settings -->
+<form method="POST" action="/ondeck/settings/signup-link-expires" class="mt-6">
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 space-y-4">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Team Signup Links</h2>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1.5 font-medium">Link Expiration (hours)</label>
+      <input type="number" name="signup_link_expires_hours"
+             value="{{ system.signup_link_expires_hours or 168 }}"
+             min="1" max="52560"
+             class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30">
+      <p class="text-xs text-gray-500 mt-1">How long signup links remain valid. (168 hours = 1 week)</p>
+    </div>
+
+    <button type="submit"
+            class="px-5 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white font-semibold text-sm transition-colors">
+      Save
+    </button>
+  </div>
+</form>
+
 {% if cloud_mode %}
 <form method="POST" action="/ondeck/settings/youtube-cookies" class="mt-6">
   <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 space-y-4">

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Team Roster{% endblock %}
+{% block content %}
+
+<h1 class="text-2xl font-bold mb-6">Team Roster</h1>
+
+{% if not teams %}
+<div class="bg-gray-800/50 border border-gray-700/50 rounded-xl p-12 text-center">
+  <div class="text-4xl mb-3">👥</div>
+  <div class="text-gray-300 font-medium mb-1">No teams available</div>
+  <div class="text-gray-500 text-sm">You're not assigned to any teams yet.</div>
+</div>
+{% else %}
+
+<div class="space-y-6">
+  {% for team in teams %}
+  <div class="bg-gray-800 border border-gray-700/50 rounded-xl p-6">
+    <h2 class="text-xl font-bold text-white mb-4">{{ team['name'] }}</h2>
+
+    {% if not team['members'] %}
+    <p class="text-gray-400 text-sm">No players on this team yet.</p>
+    {% else %}
+    <div class="space-y-2">
+      {% for player_id, player in team['members'] %}
+      <div class="bg-gray-900 border border-gray-700/50 rounded-lg p-4">
+        <div class="flex items-center justify-between gap-4">
+          <div class="flex-1">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-lg font-black text-green-400">#{{ player['jersey'] }}</span>
+              <span class="text-white font-semibold">{{ player['first_name'] }} {{ player['last_name'] }}</span>
+            </div>
+            {% set walkup_song = cfg.songs.get(player['walkup_song_id']) %}
+            {% if walkup_song %}
+            <div class="text-sm text-gray-400">
+              Walk-up: <span class="text-gray-200">{{ walkup_song['display_name'] }}</span>
+            </div>
+            {% else %}
+            <div class="text-sm text-gray-500 italic">No walk-up song assigned</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+{% endif %}
+
+{% endblock %}
