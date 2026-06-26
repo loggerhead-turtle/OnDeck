@@ -131,13 +131,8 @@
     }
   })
 
-  async function previewSong(filename, startMs, endMs) {
-    await fetch('/api/preview', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: filename, start_ms: startMs, end_ms: endMs }),
-    })
-    setTimeout(pollStatus, 400)
+  function previewSong(filename, startMs, endMs) {
+    OnDeck.preview({ file: filename, start_ms: startMs, end_ms: endMs })
   }
 </script>
 {% endblock %}

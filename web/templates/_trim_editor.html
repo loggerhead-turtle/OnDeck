@@ -45,17 +45,17 @@
 
     <!-- Playback -->
     <div class="flex items-center gap-2">
-      <button id="{{ editor_id }}-play-btn"
+      <button type="button" id="{{ editor_id }}-play-btn"
               class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-700 hover:bg-green-600 text-white text-xs font-semibold transition-colors"
               onclick="editors['{{ editor_id }}'].togglePlay()">
         ▶ Play Trim
       </button>
-      <button class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors"
+      <button type="button" class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors"
               onclick="editors['{{ editor_id }}'].stop()">
         ■ Stop
       </button>
       {% if show_cue %}
-      <button class="px-3 py-1.5 rounded-lg bg-indigo-800 hover:bg-indigo-700 text-indigo-200 text-xs font-medium transition-colors ml-auto"
+      <button type="button" class="px-3 py-1.5 rounded-lg bg-indigo-800 hover:bg-indigo-700 text-indigo-200 text-xs font-medium transition-colors ml-auto"
               onclick="editors['{{ editor_id }}'].setToCursor('cue')">
         Set Music Cue Here
       </button>
@@ -65,41 +65,41 @@
     <!-- Start handle -->
     <div class="flex items-center gap-1.5">
       <span class="text-xs text-gray-500 w-10 shrink-0">Start</span>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start',-0.1)">−0.1</button>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start',-0.01)">−0.01</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start',-0.1)">−0.1</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start',-0.01)">−0.01</button>
       <input id="{{ editor_id }}-in-start" type="text" value="0:00.00"
              class="time-input flex-1 min-w-0 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-green-300 text-center focus:outline-none focus:border-green-500"
              onchange="editors['{{ editor_id }}'].setHandleFromInput('start', this.value)"
              onkeydown="editors['{{ editor_id }}'].inputKeydown(event, 'start')">
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start', 0.01)">+0.01</button>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start', 0.1)">+0.1</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start', 0.01)">+0.01</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start', 0.1)">+0.1</button>
     </div>
 
     <!-- End handle -->
     <div class="flex items-center gap-1.5">
       <span class="text-xs text-gray-500 w-10 shrink-0">End</span>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end',-0.1)">−0.1</button>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end',-0.01)">−0.01</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end',-0.1)">−0.1</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end',-0.01)">−0.01</button>
       <input id="{{ editor_id }}-in-end" type="text" value="0:00.00"
              class="time-input flex-1 min-w-0 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-red-300 text-center focus:outline-none focus:border-red-500"
              onchange="editors['{{ editor_id }}'].setHandleFromInput('end', this.value)"
              onkeydown="editors['{{ editor_id }}'].inputKeydown(event, 'end')">
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end', 0.01)">+0.01</button>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end', 0.1)">+0.1</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end', 0.01)">+0.01</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end', 0.1)">+0.1</button>
     </div>
 
     {% if show_cue %}
     <!-- Music cue -->
     <div class="flex items-center gap-1.5">
       <span class="text-xs text-indigo-400 w-10 shrink-0">Cue</span>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue',-0.1)">−0.1</button>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue',-0.01)">−0.01</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue',-0.1)">−0.1</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue',-0.01)">−0.01</button>
       <input id="{{ editor_id }}-in-cue" type="text" value="{{ '{}:{}'.format(cue_ms // 60000, '{:.2f}'.format((cue_ms % 60000) / 1000).zfill(5)) }}"
              class="time-input flex-1 min-w-0 bg-gray-800 border border-indigo-700 rounded px-2 py-1 text-xs text-indigo-300 text-center focus:outline-none focus:border-indigo-400"
              onchange="editors['{{ editor_id }}'].setHandleFromInput('cue', this.value)"
              onkeydown="editors['{{ editor_id }}'].inputKeydown(event, 'cue')">
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue', 0.01)">+0.01</button>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue', 0.1)">+0.1</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue', 0.01)">+0.01</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue', 0.1)">+0.1</button>
     </div>
     <p class="text-xs text-gray-600 pl-[3.25rem]">Music fades in at this point during the announcement.</p>
     {% endif %}
@@ -322,6 +322,13 @@ class TrimEditor {
   }
 
   inputKeydown(event, handle) {
+    if (event.key === 'Enter') {
+      // These inputs live inside the player/song <form>; Enter would submit
+      // it (reloading the page). Apply the value instead.
+      event.preventDefault()
+      this.setHandleFromInput(handle, event.target.value)
+      return
+    }
     if (event.key === 'ArrowUp' || event.key === 'ArrowRight') {
       event.preventDefault()
       this.nudge(handle, event.shiftKey ? 0.1 : 0.01)

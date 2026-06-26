@@ -131,15 +131,10 @@
     {% endfor %}
   }
 
-  async function quickPlay(pid) {
+  function quickPlay(pid) {
     const clip = playerData[pid]
     if (!clip) return
-    await fetch('/api/preview', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(clip),
-    })
-    setTimeout(pollStatus, 400)
+    OnDeck.preview(clip)   // plays on the Pi, or in this browser when Demo is on
   }
 </script>
 {% endblock %}
