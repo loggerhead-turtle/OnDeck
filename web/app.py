@@ -451,7 +451,19 @@ def player_signup_post(code: str):
 @app.get("/admin")
 def admin_panel():
     users = _load_users()
-    return render_template("admin.html", users=users)
+    players = cfg.players_by_jersey()
+    teams = cfg.teams
+    return render_template("admin.html", users=users, players=players, teams=teams)
+
+
+@app.post("/admin/players/<pid>/teams")
+def admin_update_player_teams(pid: str):
+    """Update team assignments for a player via AJAX."""
+    if pid not in cfg.players:
+        return jsonify(error="player not found"), 404
+    team_ids = request.form.getlist("team_ids")
+    cfg.set_player_teams(pid, team_ids)
+    return jsonify(ok=True)
 
 
 @app.post("/admin/users/add")
@@ -928,8 +940,18 @@ def ondeck_my_profile():
         session.pop("player_id", None)
         session.pop("role", None)
         return redirect(url_for("ondeck_login"))
-    song = cfg.songs.get(player["walkup_song_id"]) if player.get("walkup_song_id") else None
-    return render_template("my_profile.html", pid=pid, player=player, song=song)
+    walkup_song = cfg.songs.get(player["walkup_song_id"]) if player.get("walkup_song_id") else None
+    warmup_song = cfg.songs.get(player["pitching_warmup_song_id"]) if player.get("pitching_warmup_song_id") else None
+    midgame_song = cfg.songs.get(player["midgame_song_id"]) if player.get("midgame_song_id") else None
+
+    # Get player's team names
+    player_teams = [cfg.teams.get(tid) for tid in player.get("team_ids", [])]
+    player_teams = [t for t in player_teams if t]  # Filter out None values
+
+    return render_template("my_profile.html", pid=pid, player=player,
+                          walkup_song=walkup_song, warmup_song=warmup_song,
+                          midgame_song=midgame_song, songs=cfg.songs,
+                          player_teams=player_teams)
 
 
 @app.post("/ondeck/my-profile/upload")
@@ -968,14 +990,44 @@ def ondeck_my_profile_save():
         player = cfg.players.get(pid)
         if not player:
             abort(403)
+
+        # Update walk-up song selection and trim
+        new_walkup = request.form.get("walkup_song_id")
+        if new_walkup != player.get("walkup_song_id"):
+            player["walkup_song_id"] = new_walkup if new_walkup else None
+            _add_notification(pid, player, "changed their walk-up song")
+
         sid = player.get("walkup_song_id")
         if sid and sid in cfg.songs:
-            cfg.songs[sid]["start_ms"] = _form_ms("start_ms", 0)
-            cfg.songs[sid]["end_ms"]   = _form_ms_or_none("end_ms")
+            cfg.songs[sid]["start_ms"] = _form_ms("walkup_start_ms", 0)
+            cfg.songs[sid]["end_ms"]   = _form_ms_or_none("walkup_end_ms")
+
+        # Update warm-up song selection and trim
+        new_warmup = request.form.get("warmup_song_id")
+        if new_warmup != player.get("pitching_warmup_song_id"):
+            player["pitching_warmup_song_id"] = new_warmup if new_warmup else None
+            _add_notification(pid, player, "changed their warm-up song")
+
+        warmup_id = player.get("pitching_warmup_song_id")
+        if warmup_id and warmup_id in cfg.songs:
+            cfg.songs[warmup_id]["start_ms"] = _form_ms("warmup_start_ms", 0)
+            cfg.songs[warmup_id]["end_ms"]   = _form_ms_or_none("warmup_end_ms")
+
+        # Update mid-game song selection and trim
+        new_midgame = request.form.get("midgame_song_id")
+        if new_midgame != player.get("midgame_song_id"):
+            player["midgame_song_id"] = new_midgame if new_midgame else None
+            _add_notification(pid, player, "changed their mid-inning song")
+
+        midgame_id = player.get("midgame_song_id")
+        if midgame_id and midgame_id in cfg.songs:
+            cfg.songs[midgame_id]["start_ms"] = _form_ms("midgame_start_ms", 0)
+            cfg.songs[midgame_id]["end_ms"]   = _form_ms_or_none("midgame_end_ms")
+
         # Players can set the music cue only when they have an announcement.
         if player.get("announcement_file") and "music_cue_ms" in request.form:
             player["music_cue_ms"] = _form_ms("music_cue_ms", 0)
-        _add_notification(pid, player, "edited their walk-up timing")
+
         cfg.save()
     flash("Saved!", "success")
     return redirect(url_for("ondeck_my_profile"))
