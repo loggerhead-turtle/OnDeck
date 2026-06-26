@@ -45,6 +45,14 @@ def _serve_web() -> None:
     """
     from web.app import app
 
+    # Coach Pi-only routes (Wi-Fi + cloud link). Registered here so they never
+    # exist on the cloud deployment, which runs web.app:app directly.
+    try:
+        from pi.web_routes import register as register_pi_routes
+        register_pi_routes(app)
+    except Exception as exc:  # missing optional deps must not stop the portal
+        log.warning("Pi web routes not registered: %s", exc)
+
     log.info("Web portal → http://%s:%s", WEB_HOST, WEB_PORT)
     app.run(host=WEB_HOST, port=WEB_PORT, threaded=True, use_reloader=False)
 

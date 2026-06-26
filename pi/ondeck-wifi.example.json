@@ -1,0 +1,5 @@
+{
+  "_comment": "Drop a copy named 'ondeck-wifi.json' on the SD card's boot partition to set/replace the Pi's Wi-Fi by editing the card. Applied on boot, then deleted (it holds the password in plaintext). For an open network leave password empty. A plain-text 'ondeck-wifi.txt' with lines 'ssid=...' and 'password=...' also works.",
+  "ssid": "YourNetworkName",
+  "password": "YourWiFiPassword"
+}
