@@ -181,6 +181,11 @@ class ConfigManager:
             player.setdefault("team_ids", [])
             player.setdefault("pitching_warmup_song_id", None)
             player.setdefault("midgame_song_id", None)
+            player.setdefault("walkup_songs", [])  # List of walkup song IDs (carousel)
+            player.setdefault("warmup_songs", [])  # List of warmup song IDs (carousel)
+        # Ensure all songs have alias field.
+        for song in self._data.get("songs", {}).values():
+            song.setdefault("alias", "")
 
     # -- convenient accessors --------------------------------------------
 
@@ -347,6 +352,7 @@ class ConfigManager:
                 "display_name": display_name,
                 "start_ms": 0,
                 "end_ms": None,
+                "alias": "",  # User-friendly name override
             }
             self.save()
         return sid
@@ -489,6 +495,60 @@ class ConfigManager:
             if team_id in p.get("team_ids", [])
         ]
         return sorted(members, key=lambda kv: (kv[1].get("jersey") or 0, kv[1].get("last_name", "")))
+
+    # -- song carousel helpers ---
+
+    def add_player_walkup_song(self, player_id: str, song_id: str) -> None:
+        """Add a song to a player's walk-up carousel."""
+        with self._lock:
+            player = self.players.get(player_id)
+            if player and song_id in self.songs:
+                if "walkup_songs" not in player:
+                    player["walkup_songs"] = []
+                if song_id not in player["walkup_songs"]:
+                    player["walkup_songs"].append(song_id)
+                    self.save()
+
+    def remove_player_walkup_song(self, player_id: str, song_id: str) -> None:
+        """Remove a song from a player's walk-up carousel."""
+        with self._lock:
+            player = self.players.get(player_id)
+            if player and song_id in player.get("walkup_songs", []):
+                player["walkup_songs"].remove(song_id)
+                self.save()
+
+    def add_player_warmup_song(self, player_id: str, song_id: str) -> None:
+        """Add a song to a player's warm-up carousel."""
+        with self._lock:
+            player = self.players.get(player_id)
+            if player and song_id in self.songs:
+                if "warmup_songs" not in player:
+                    player["warmup_songs"] = []
+                if song_id not in player["warmup_songs"]:
+                    player["warmup_songs"].append(song_id)
+                    self.save()
+
+    def remove_player_warmup_song(self, player_id: str, song_id: str) -> None:
+        """Remove a song from a player's warm-up carousel."""
+        with self._lock:
+            player = self.players.get(player_id)
+            if player and song_id in player.get("warmup_songs", []):
+                player["warmup_songs"].remove(song_id)
+                self.save()
+
+    def get_song_display_name(self, song_id: str) -> str:
+        """Get display name for a song (alias if set, otherwise display_name)."""
+        song = self.songs.get(song_id)
+        if not song:
+            return "Unknown"
+        return song.get("alias") or song.get("display_name", "")
+
+    def set_song_alias(self, song_id: str, alias: str) -> None:
+        """Set a display alias for a song."""
+        with self._lock:
+            if song_id in self.songs:
+                self.songs[song_id]["alias"] = alias.strip()
+                self.save()
 
 
 def _now_ms() -> int:

@@ -29,25 +29,43 @@
               <span class="text-lg font-black text-green-400">#{{ player['jersey'] }}</span>
               <span class="text-white font-semibold">{{ player['first_name'] }} {{ player['last_name'] }}</span>
             </div>
-            <div class="space-y-2 text-sm">
+            <div class="space-y-3 text-sm">
               {% set walkup_song = cfg.songs.get(player['walkup_song_id']) %}
               {% if walkup_song %}
-              <div class="text-gray-400">
-                🎵 Walk-up: <span class="text-gray-200">{{ walkup_song['display_name'] }}</span>
+              <div class="bg-gray-800/50 rounded p-2 border border-gray-700/30">
+                <div class="text-gray-400 mb-2">
+                  🎵 Walk-up: <span class="text-gray-200">{{ walkup_song['display_name'] }}</span>
+                </div>
+                <audio controls class="w-full h-8" style="max-width: 300px;">
+                  <source src="{{ url_for('ondeck_serve_audio', filename=walkup_song['filename']) }}" type="audio/mpeg">
+                  Your browser does not support the audio element.
+                </audio>
               </div>
               {% endif %}
 
               {% set warmup_song = cfg.songs.get(player['pitching_warmup_song_id']) %}
               {% if warmup_song %}
-              <div class="text-gray-400">
-                ⚾ Warm-up: <span class="text-gray-200">{{ warmup_song['display_name'] }}</span>
+              <div class="bg-gray-800/50 rounded p-2 border border-gray-700/30">
+                <div class="text-gray-400 mb-2">
+                  ⚾ Warm-up: <span class="text-gray-200">{{ warmup_song['display_name'] }}</span>
+                </div>
+                <audio controls class="w-full h-8" style="max-width: 300px;">
+                  <source src="{{ url_for('ondeck_serve_audio', filename=warmup_song['filename']) }}" type="audio/mpeg">
+                  Your browser does not support the audio element.
+                </audio>
               </div>
               {% endif %}
 
               {% set midgame_song = cfg.songs.get(player['midgame_song_id']) %}
               {% if midgame_song %}
-              <div class="text-gray-400">
-                🎪 Mid-Inning: <span class="text-gray-200">{{ midgame_song['display_name'] }}</span>
+              <div class="bg-gray-800/50 rounded p-2 border border-gray-700/30">
+                <div class="text-gray-400 mb-2">
+                  🎪 Mid-Inning: <span class="text-gray-200">{{ midgame_song['display_name'] }}</span>
+                </div>
+                <audio controls class="w-full h-8" style="max-width: 300px;">
+                  <source src="{{ url_for('ondeck_serve_audio', filename=midgame_song['filename']) }}" type="audio/mpeg">
+                  Your browser does not support the audio element.
+                </audio>
               </div>
               {% endif %}
 

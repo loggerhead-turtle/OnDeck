@@ -164,12 +164,37 @@ def _unread_notification_count() -> int:
     return sum(1 for n in cfg.data.get("notifications", []) if not n.get("seen"))
 
 
+def _check_song_duplicates(pid: str, song_id: str, song_type: str) -> tuple[list[str], list[str]]:
+    """Check if a song is already assigned to other players.
+
+    Returns (duplicate_player_ids, duplicate_player_names) of players who have this song assigned.
+    """
+    duplicate_ids = []
+    duplicate_names = []
+
+    for other_pid, other_player in cfg.players.items():
+        if other_pid == pid:
+            continue
+
+        if song_type == "walkup" and song_id == other_player.get("walkup_song_id"):
+            duplicate_ids.append(other_pid)
+            duplicate_names.append(f"{other_player.get('first_name')} {other_player.get('last_name')}".strip())
+        elif song_type == "warmup" and song_id == other_player.get("pitching_warmup_song_id"):
+            duplicate_ids.append(other_pid)
+            duplicate_names.append(f"{other_player.get('first_name')} {other_player.get('last_name')}".strip())
+        elif song_type == "midgame" and song_id == other_player.get("midgame_song_id"):
+            duplicate_ids.append(other_pid)
+            duplicate_names.append(f"{other_player.get('first_name')} {other_player.get('last_name')}".strip())
+
+    return duplicate_ids, duplicate_names
+
+
 # ---------------------------------------------------------------------------
 # Access control
 # ---------------------------------------------------------------------------
 
 @app.before_request
-def _check_auth():
+def _check_auth(allowed_roles=None):
     # Sync API: authenticated by Bearer token, not session.
     if request.path.startswith("/sync/"):
         return
@@ -177,7 +202,7 @@ def _check_auth():
     always_ok = {
         "public_home", "static",
         "ondeck_login", "ondeck_login_post", "ondeck_logout",
-        "ondeck_setup", "ondeck_setup_post",
+        "ondeck_setup", "ondeck_setup_post", "player_signup", "player_signup_post",
     }
     if request.endpoint in always_ok:
         return
@@ -186,6 +211,11 @@ def _check_auth():
         return redirect(url_for("ondeck_setup"))
 
     role = session.get("role")
+
+    # Check if specific roles are required for this route
+    if allowed_roles and role not in allowed_roles:
+        flash("Access denied.", "error")
+        return redirect(url_for("ondeck_dashboard"))
 
     if role == "admin":
         return
@@ -206,7 +236,7 @@ def _check_auth():
             "ondeck_my_profile", "ondeck_my_profile_upload", "ondeck_my_profile_save",
             "ondeck_serve_audio",
             "ondeck_my_profile_change_password", "ondeck_my_profile_change_password_post",
-            "ondeck_logout",
+            "ondeck_logout", "ondeck_team_roster",
         }
         if request.endpoint not in player_ok:
             return redirect(url_for("ondeck_my_profile"))
@@ -996,6 +1026,15 @@ def ondeck_my_profile_save():
         if new_walkup != player.get("walkup_song_id"):
             player["walkup_song_id"] = new_walkup if new_walkup else None
             _add_notification(pid, player, "changed their walk-up song")
+            # Check for duplicate song assignment
+            if new_walkup:
+                dups, dup_names = _check_song_duplicates(pid, new_walkup, "walkup")
+                if dups:
+                    song = cfg.songs.get(new_walkup)
+                    song_name = song.get("display_name", "Unknown") if song else "Unknown"
+                    _add_notification(pid, player,
+                                    f"chose a song already used by {', '.join(dup_names)}",
+                                    detail=f"Walk-up: {song_name}")
 
         sid = player.get("walkup_song_id")
         if sid and sid in cfg.songs:
@@ -1007,6 +1046,15 @@ def ondeck_my_profile_save():
         if new_warmup != player.get("pitching_warmup_song_id"):
             player["pitching_warmup_song_id"] = new_warmup if new_warmup else None
             _add_notification(pid, player, "changed their warm-up song")
+            # Check for duplicate song assignment
+            if new_warmup:
+                dups, dup_names = _check_song_duplicates(pid, new_warmup, "warmup")
+                if dups:
+                    song = cfg.songs.get(new_warmup)
+                    song_name = song.get("display_name", "Unknown") if song else "Unknown"
+                    _add_notification(pid, player,
+                                    f"chose a song already used by {', '.join(dup_names)}",
+                                    detail=f"Warm-up: {song_name}")
 
         warmup_id = player.get("pitching_warmup_song_id")
         if warmup_id and warmup_id in cfg.songs:
@@ -1018,6 +1066,15 @@ def ondeck_my_profile_save():
         if new_midgame != player.get("midgame_song_id"):
             player["midgame_song_id"] = new_midgame if new_midgame else None
             _add_notification(pid, player, "changed their mid-inning song")
+            # Check for duplicate song assignment
+            if new_midgame:
+                dups, dup_names = _check_song_duplicates(pid, new_midgame, "midgame")
+                if dups:
+                    song = cfg.songs.get(new_midgame)
+                    song_name = song.get("display_name", "Unknown") if song else "Unknown"
+                    _add_notification(pid, player,
+                                    f"chose a song already used by {', '.join(dup_names)}",
+                                    detail=f"Mid-inning: {song_name}")
 
         midgame_id = player.get("midgame_song_id")
         if midgame_id and midgame_id in cfg.songs:
@@ -1031,6 +1088,83 @@ def ondeck_my_profile_save():
         cfg.save()
     flash("Saved!", "success")
     return redirect(url_for("ondeck_my_profile"))
+
+
+@app.post("/ondeck/carousel/add/<song_type>")
+def ondeck_carousel_add(song_type: str):
+    """AJAX: Add a song to player's carousel (walkup/warmup)."""
+    pid = session.get("player_id")
+    if not pid:
+        return {"error": "Unauthorized"}, 403
+    song_id = request.form.get("song_id")
+    if not song_id or song_id not in cfg.songs:
+        return {"error": "Invalid song"}, 400
+
+    with cfg._lock:
+        player = cfg.players.get(pid)
+        if not player:
+            return {"error": "Player not found"}, 404
+
+        if song_type == "walkup":
+            cfg.add_player_walkup_song(pid, song_id)
+        elif song_type == "warmup":
+            cfg.add_player_warmup_song(pid, song_id)
+        else:
+            return {"error": "Invalid song type"}, 400
+
+    return {"success": True}
+
+
+@app.post("/ondeck/carousel/remove/<song_type>/<song_id>")
+def ondeck_carousel_remove(song_type: str, song_id: str):
+    """AJAX: Remove a song from player's carousel."""
+    pid = session.get("player_id")
+    if not pid:
+        return {"error": "Unauthorized"}, 403
+
+    with cfg._lock:
+        player = cfg.players.get(pid)
+        if not player:
+            return {"error": "Player not found"}, 404
+
+        if song_type == "walkup":
+            cfg.remove_player_walkup_song(pid, song_id)
+        elif song_type == "warmup":
+            cfg.remove_player_warmup_song(pid, song_id)
+        else:
+            return {"error": "Invalid song type"}, 400
+
+    return {"success": True}
+
+
+@app.post("/ondeck/carousel/activate/<song_type>/<song_id>")
+def ondeck_carousel_activate(song_type: str, song_id: str):
+    """AJAX: Set a carousel song as the active/current song."""
+    pid = session.get("player_id")
+    if not pid:
+        return {"error": "Unauthorized"}, 403
+
+    with cfg._lock:
+        player = cfg.players.get(pid)
+        if not player:
+            return {"error": "Player not found"}, 404
+
+        if song_type == "walkup":
+            if song_id in player.get("walkup_songs", []):
+                player["walkup_song_id"] = song_id
+                cfg.save()
+            else:
+                return {"error": "Song not in carousel"}, 400
+        elif song_type == "warmup":
+            if song_id in player.get("warmup_songs", []):
+                player["pitching_warmup_song_id"] = song_id
+                cfg.save()
+            else:
+                return {"error": "Song not in carousel"}, 400
+        else:
+            return {"error": "Invalid song type"}, 400
+
+    return {"success": True}
 
 
 # ---------------------------------------------------------------------------
