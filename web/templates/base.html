@@ -285,18 +285,24 @@
           if (an.readyState >= 1) seek(); else an.addEventListener('loadedmetadata', seek, { once: true });
           log('demo walk-up', { ann: clip.announcement, cueAt: cue, song: clip.file });
           let musicStarted = false;
-          annWatch = function () {
-            if (!musicStarted && an.currentTime >= cue) {
-              musicStarted = true;
-              an.removeEventListener('timeupdate', annWatch); annWatch = null;
-              log('demo cue reached — song fades in');
-              startMusic(clip, 800);
-            }
+          const kickMusic = function (why) {
+            if (musicStarted) return;
+            musicStarted = true;
+            if (annWatch) { an.removeEventListener('timeupdate', annWatch); annWatch = null; }
+            log('demo song fades in (' + why + ')');
+            startMusic(clip, 800);
           };
+          annWatch = function () { if (an.currentTime >= cue) kickMusic('cue reached'); };
           an.addEventListener('timeupdate', annWatch);
-          // If the cue is at/near 0, the timeupdate may not fire first — kick the song now.
-          if (cue <= 0.05) { musicStarted = true; if (annWatch) { an.removeEventListener('timeupdate', annWatch); annWatch = null; } startMusic(clip, 800); }
-          an.play().then(function () { log('demo announcement ok'); }).catch(function (e) { log('demo announcement play() rejected', String(e)); });
+          // If the announcement finishes before the cue (e.g. cue past its end),
+          // start the song anyway so the walk-up is never silent.
+          an.addEventListener('ended', function () { kickMusic('announcement ended'); }, { once: true });
+          // Cue at/near 0: timeupdate may not fire first — kick the song now.
+          if (cue <= 0.05) kickMusic('cue at start');
+          an.play().then(function () { log('demo announcement ok'); }).catch(function (e) {
+            log('demo announcement play() rejected', String(e));
+            kickMusic('announcement failed');  // still play the song
+          });
           nowPlaying('▶ ' + clip.file + ' (demo walk-up)');
           return;
         }
@@ -318,8 +324,12 @@
 
       async function preview(clip) {
         if (!clip || !clip.file) { log('preview: nothing to play'); return; }
-        log('preview', { demo: state.demo, file: clip.file, start_ms: clip.start_ms, end_ms: clip.end_ms });
-        if (state.demo) { playInBrowser(clip); return; }
+        // In cloud mode there is no Audio Pi to reach, so always play in this
+        // browser. In local mode, the Demo toggle decides Pi vs. browser.
+        const useBrowser = state.demo || window.ONDECK_CLOUD;
+        log('preview', { useBrowser: useBrowser, cloud: window.ONDECK_CLOUD, demo: state.demo,
+                         file: clip.file, announcement: clip.announcement || null, cue_ms: clip.cue_ms });
+        if (useBrowser) { playInBrowser(clip); return; }
         try {
           const r = await fetch('/api/preview', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(clip),
@@ -352,9 +362,16 @@
         const db = document.getElementById('debug-toggle');
         const panel = document.getElementById('debug-panel');
         if (dt) {
-          dt.textContent = '🎧 Demo: ' + (state.demo ? 'on' : 'off');
-          dt.className = 'px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ' +
-            (state.demo ? 'bg-green-700 border-green-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-300');
+          if (window.ONDECK_CLOUD) {
+            // No Pi in the cloud — playback is always in this browser.
+            dt.textContent = '🎧 In-browser play';
+            dt.className = 'px-3 py-1.5 rounded-full text-xs font-semibold border bg-green-800 border-green-600 text-green-100 cursor-default';
+            dt.title = 'Cloud mode has no Audio Pi, so Play always plays here in your browser.';
+          } else {
+            dt.textContent = '🎧 Demo: ' + (state.demo ? 'on' : 'off');
+            dt.className = 'px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ' +
+              (state.demo ? 'bg-green-700 border-green-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-300');
+          }
         }
         if (db) {
           db.className = 'px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ' +
@@ -365,6 +382,7 @@
       }
 
       function toggleDemo() {
+        if (window.ONDECK_CLOUD) return;  // always in-browser in cloud; toggle is informational
         state.demo = !state.demo;
         LS.setItem('ondeck_demo', state.demo ? '1' : '0');
         if (!state.demo) stopMedia();
