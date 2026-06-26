@@ -547,6 +547,19 @@ class TrimEditor {
     const btn = this.$('play-btn')
     if (btn) btn.textContent = playing ? '⏸ Pause' : '▶ Play{{ ' Trim' if show_trim else '' }}'
   }
+
+  // Public API: Get current region bounds for external listeners
+  getRegionBounds() {
+    if (!this._region) return null
+    return { start: this._region.start, end: this._region.end }
+  }
+
+  // Public API: Register a callback for region updates
+  onRegionUpdate(callback) {
+    if (this._region) {
+      this._region.on('update-end', callback)
+    }
+  }
 }
 
 // Instantiate this editor.

@@ -328,10 +328,10 @@ let trimEditorChanges = {};
 // Track trim editor changes
 function watchTrimEditor(editorId, songType) {
   const editor = window.editors?.[editorId];
-  if (!editor) return;
+  if (!editor || !editor.onRegionUpdate) return;
 
   // Watch for region changes
-  editor.on('region-update-end', () => {
+  editor.onRegionUpdate(() => {
     trimEditorChanges[songType] = true;
     updateTrimSaveButton(songType);
   });
@@ -356,15 +356,17 @@ async function saveTrimEditor(songType, songId) {
   const editor = window.editors?.[songType];
   if (!editor) return;
 
-  const startMs = Math.round(editor.getCurrentTime() * 1000 || 0);
-  const region = Object.values(editor.regions.list || {})[0];
-  const endMs = region ? Math.round(region.end * 1000) : null;
+  const bounds = editor.getRegionBounds();
+  if (!bounds) return;
+
+  const startMs = Math.round(bounds.start * 1000);
+  const endMs = Math.round(bounds.end * 1000);
 
   try {
     const response = await fetch(`/ondeck/trim-save/${songType}/${songId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `start_ms=${startMs}&end_ms=${endMs || ''}`
+      body: `start_ms=${startMs}&end_ms=${endMs}`
     });
 
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
