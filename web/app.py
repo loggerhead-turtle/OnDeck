@@ -235,7 +235,8 @@ def _check_auth(allowed_roles=None):
         player_ok = {
             "ondeck_my_profile", "ondeck_my_profile_upload", "ondeck_my_profile_save",
             "ondeck_player_upload",
-            "ondeck_carousel_add", "ondeck_carousel_remove", "ondeck_carousel_activate",
+            "ondeck_carousel_add", "ondeck_carousel_remove", "ondeck_carousel_activate", "ondeck_carousel_deactivate",
+            "ondeck_trim_save",
             "ondeck_serve_audio",
             "ondeck_my_profile_change_password", "ondeck_my_profile_change_password_post",
             "ondeck_team_roster",
@@ -1210,6 +1211,66 @@ def ondeck_carousel_activate(song_type: str, song_id: str):
                 return {"error": "Song not in carousel"}, 400
         else:
             return {"error": "Invalid song type"}, 400
+
+    return {"success": True}
+
+
+@app.post("/ondeck/carousel/deactivate/<song_type>/<song_id>")
+def ondeck_carousel_deactivate(song_type: str, song_id: str):
+    """AJAX: Deactivate an active song (remove from active list)."""
+    pid = session.get("player_id")
+    if not pid:
+        return {"error": "Unauthorized"}, 403
+
+    with cfg._lock:
+        player = cfg.players.get(pid)
+        if not player:
+            return {"error": "Player not found"}, 404
+
+        if song_type == "walkup":
+            if player.get("walkup_song_id") == song_id:
+                player["walkup_song_id"] = None
+                cfg.save()
+            else:
+                return {"error": "Song is not active"}, 400
+        elif song_type == "warmup":
+            if player.get("pitching_warmup_song_id") == song_id:
+                player["pitching_warmup_song_id"] = None
+                cfg.save()
+            else:
+                return {"error": "Song is not active"}, 400
+        elif song_type == "midgame":
+            if player.get("midgame_song_id") == song_id:
+                player["midgame_song_id"] = None
+                cfg.save()
+            else:
+                return {"error": "Song is not active"}, 400
+        else:
+            return {"error": "Invalid song type"}, 400
+
+    return {"success": True}
+
+
+@app.post("/ondeck/trim-save/<song_type>/<song_id>")
+def ondeck_trim_save(song_type: str, song_id: str):
+    """AJAX: Save trim editor changes for a song."""
+    pid = session.get("player_id")
+    if not pid:
+        return {"error": "Unauthorized"}, 403
+
+    if song_id not in cfg.songs:
+        return {"error": "Song not found"}, 404
+
+    start_ms = request.form.get("start_ms")
+    end_ms = request.form.get("end_ms")
+
+    with cfg._lock:
+        song = cfg.songs[song_id]
+        if start_ms is not None:
+            song["start_ms"] = int(start_ms) if start_ms else 0
+        if end_ms is not None:
+            song["end_ms"] = int(end_ms) if end_ms else None
+        cfg.save()
 
     return {"success": True}
 

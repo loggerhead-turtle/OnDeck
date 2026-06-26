@@ -23,63 +23,70 @@
     {% endif %}
   </div>
 
-  <form method="POST" action="{{ url_for('ondeck_my_profile_save') }}" class="space-y-5">
+  <!-- Walk-Up Song -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Walk-Up Song</h2>
+    <p class="text-xs text-gray-500 mb-4">Song to play when you step up to bat. You can have multiple songs that rotate between at-bats.</p>
 
-    <!-- Walk-Up Song -->
-    <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
-      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Walk-Up Song</h2>
-      <p class="text-xs text-gray-500 mb-4">Song to play when you step up to bat. You can have multiple songs that rotate between at-bats.</p>
+    <!-- Upload section -->
+    <div class="mb-4 p-4 rounded-lg bg-gray-900/50 border border-gray-600/30">
+      <label class="block text-xs text-gray-400 mb-2 font-medium">Upload New Songs</label>
+      <input type="file" id="walkup_upload" multiple accept="audio/*" class="block w-full text-sm text-gray-400 mb-2">
+      <button type="button" onclick="uploadSongs('walkup')"
+              class="w-full px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-medium text-sm transition-colors">
+        ⬆ Upload
+      </button>
+    </div>
 
-      <!-- Upload section -->
-      <div class="mb-4 p-4 rounded-lg bg-gray-900/50 border border-gray-600/30">
-        <label class="block text-xs text-gray-400 mb-2 font-medium">Upload New Songs</label>
-        <input type="file" id="walkup_upload" multiple accept="audio/*" class="block w-full text-sm text-gray-400 mb-2">
-        <button type="button" onclick="uploadSongs('walkup')"
-                class="w-full px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-medium text-sm transition-colors">
-          ⬆ Upload
-        </button>
-      </div>
+    <!-- Select from library section -->
+    <div class="mb-4">
+      <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select From Library</label>
+      <select id="walkup_add_select" onchange="selectSong('walkup', this.value)"
+              class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
+        <option value="">— Select song —</option>
+        {% for sid, song in songs.items() | sort(attribute='1.display_name') %}
+          <option value="{{ sid }}">{{ song.display_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
 
-      <!-- Select from library section -->
+    <!-- Active songs section -->
+    {% set active_walkup_id = player.get('walkup_song_id') %}
+    {% if active_walkup_id and active_walkup_id in songs %}
+      {% set active_song = songs[active_walkup_id] %}
       <div class="mb-4">
-        <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select From Library</label>
-        <div class="flex gap-2">
-          <select id="walkup_add_select"
-                  class="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
-            <option value="">— Select song to add —</option>
-            {% for sid, song in songs.items() | sort(attribute='1.display_name') %}
-              <option value="{{ sid }}">{{ song.display_name }}</option>
-            {% endfor %}
-          </select>
-          <button type="button" onclick="addToCarousel('walkup')"
-                  class="px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white font-medium text-sm transition-colors">
-            + Add
-          </button>
-        </div>
-      </div>
-
-      <!-- Active song display and trim editor -->
-      {% set active_walkup_id = player.get('walkup_song_id') %}
-      {% if active_walkup_id and active_walkup_id in songs %}
-        {% set active_song = songs[active_walkup_id] %}
-        <div class="mb-4 p-4 rounded-lg bg-green-900/20 border border-green-700/50">
-          <p class="text-xs text-gray-400 mb-2 font-medium">ACTIVE WALK-UP SONGS</p>
-          <p class="text-white font-semibold mb-3">{{ active_song.display_name }}</p>
-          <button type="button" onclick="removeFromCarousel('walkup', '{{ active_walkup_id }}')"
-                  class="text-xs text-red-400 hover:text-red-300">
-            ✕ Remove
+        <p class="text-xs text-gray-400 font-medium uppercase tracking-wider mb-3">ACTIVE WALK-UP SONGS</p>
+        <div class="p-4 rounded-lg bg-green-900/20 border border-green-700/50 mb-4">
+          <p class="text-white font-semibold mb-2">{{ active_song.display_name }}</p>
+          <button type="button" onclick="deactivateSong('walkup', '{{ active_walkup_id }}')"
+                  class="text-xs px-3 py-1 rounded bg-red-700 hover:bg-red-600 text-white transition-colors">
+            ✕ Deactivate
           </button>
         </div>
 
-        {{ trim_editor(
-            editor_id   = 'walkup',
-            audio_url   = url_for('ondeck_serve_audio', filename=active_song.filename),
-            start_ms    = active_song.start_ms or 0,
-            end_ms      = active_song.end_ms,
-            start_field = 'walkup_start_ms',
-            end_field   = 'walkup_end_ms',
-            label       = 'Set start and end of your walk-up'
-        ) }}
+        <!-- Trim editor with separate save button -->
+        <div class="relative">
+          <div class="flex items-center justify-between mb-2">
+            <p class="text-xs text-gray-400 font-medium">Edit Trim</p>
+            <button type="button" id="walkup-trim-save" onclick="saveTrimEditor('walkup', '{{ active_walkup_id }}')"
+                    class="px-3 py-1 rounded text-xs font-medium bg-gray-600 text-gray-400 cursor-not-allowed transition-colors"
+                    disabled>
+              Save Trim
+            </button>
+          </div>
+
+          <div id="walkup-trim-editor">
+            {{ trim_editor(
+                editor_id   = 'walkup',
+                audio_url   = url_for('ondeck_serve_audio', filename=active_song.filename),
+                start_ms    = active_song.start_ms or 0,
+                end_ms      = active_song.end_ms,
+                start_field = 'walkup_start_ms',
+                end_field   = 'walkup_end_ms',
+                label       = 'Set start and end of your walk-up'
+            ) }}
+          </div>
+        </div>
 
         {% if player.announcement_file %}
         <!-- Music cue: where the song drops during the announcer's intro -->
@@ -100,190 +107,200 @@
         </div>
         {% endif %}
       {% else %}
-        <input type="hidden" name="walkup_start_ms" value="0">
-        <input type="hidden" name="walkup_end_ms" value="">
         <div class="text-sm text-gray-600 text-center py-6">
-          Upload or select a song to get started.
-        </div>
-      {% endif %}
-
-      <!-- Carousel of other songs -->
-      {% set walkup_songs = player.get('walkup_songs', []) %}
-      {% if walkup_songs %}
-        <div class="mt-4 pt-4 border-t border-gray-700/50">
-          <p class="text-xs text-gray-400 font-medium uppercase tracking-wider mb-3">Click to activate</p>
-          <div class="space-y-2">
-            {% for song_id in walkup_songs %}
-              {% if song_id != active_walkup_id and song_id in songs %}
-                {% set song = songs[song_id] %}
-                <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900 border border-gray-700/50 hover:bg-gray-850 transition-colors">
-                  <span class="text-white text-sm">{{ song.display_name }}</span>
-                  <div class="flex gap-2">
-                    <button type="button" onclick="activateCarouselSong('walkup', '{{ song_id }}')"
-                            class="text-xs px-3 py-1 rounded bg-green-700 hover:bg-green-600 text-white transition-colors">
-                      Activate
-                    </button>
-                    <button type="button" onclick="removeFromCarousel('walkup', '{{ song_id }}')"
-                            class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-red-800 text-gray-400 hover:text-red-200 transition-colors">
-                      ✕
-                    </button>
-                  </div>
-                </div>
-              {% endif %}
-            {% endfor %}
-          </div>
+          Select or upload a song to get started.
         </div>
       {% endif %}
     </div>
 
-    <!-- Pitching Warm-Up Song -->
-    <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
-      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Pitching Warm-Up Song</h2>
-      <p class="text-xs text-gray-500 mb-4">Song to play while warming up to pitch. You can have multiple songs that rotate between appearances.</p>
-
-      <!-- Upload section -->
-      <div class="mb-4 p-4 rounded-lg bg-gray-900/50 border border-gray-600/30">
-        <label class="block text-xs text-gray-400 mb-2 font-medium">Upload New Songs</label>
-        <input type="file" id="warmup_upload" multiple accept="audio/*" class="block w-full text-sm text-gray-400 mb-2">
-        <button type="button" onclick="uploadSongs('warmup')"
-                class="w-full px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-medium text-sm transition-colors">
-          ⬆ Upload
-        </button>
-      </div>
-
-      <!-- Select from library section -->
-      <div class="mb-4">
-        <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select From Library</label>
-        <div class="flex gap-2">
-          <select id="warmup_add_select"
-                  class="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
-            <option value="">— Select song to add —</option>
-            {% for sid, song in songs.items() | sort(attribute='1.display_name') %}
-              <option value="{{ sid }}">{{ song.display_name }}</option>
-            {% endfor %}
-          </select>
-          <button type="button" onclick="addToCarousel('warmup')"
-                  class="px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white font-medium text-sm transition-colors">
-            + Add
-          </button>
-        </div>
-      </div>
-
-      <!-- Active song display and trim editor -->
-      {% set active_warmup_id = player.get('pitching_warmup_song_id') %}
-      {% if active_warmup_id and active_warmup_id in songs %}
-        {% set active_song = songs[active_warmup_id] %}
-        <div class="mb-4 p-4 rounded-lg bg-green-900/20 border border-green-700/50">
-          <p class="text-xs text-gray-400 mb-2 font-medium">ACTIVE WARM-UP SONGS</p>
-          <p class="text-white font-semibold mb-3">{{ active_song.display_name }}</p>
-          <button type="button" onclick="removeFromCarousel('warmup', '{{ active_warmup_id }}')"
-                  class="text-xs text-red-400 hover:text-red-300">
-            ✕ Remove
-          </button>
-        </div>
-
-        {{ trim_editor(
-            editor_id   = 'warmup',
-            audio_url   = url_for('ondeck_serve_audio', filename=active_song.filename),
-            start_ms    = active_song.start_ms or 0,
-            end_ms      = active_song.end_ms,
-            start_field = 'warmup_start_ms',
-            end_field   = 'warmup_end_ms',
-            label       = 'Set intro and outro'
-        ) }}
-      {% else %}
-        <input type="hidden" name="warmup_start_ms" value="0">
-        <input type="hidden" name="warmup_end_ms" value="">
-        <div class="text-sm text-gray-600 text-center py-6">
-          Upload or select a song to get started.
-        </div>
-      {% endif %}
-
-      <!-- Carousel of other songs -->
-      {% set warmup_songs = player.get('warmup_songs', []) %}
-      {% if warmup_songs %}
-        <div class="mt-4 pt-4 border-t border-gray-700/50">
-          <p class="text-xs text-gray-400 font-medium uppercase tracking-wider mb-3">Click to activate</p>
-          <div class="space-y-2">
-            {% for song_id in warmup_songs %}
-              {% if song_id != active_warmup_id and song_id in songs %}
-                {% set song = songs[song_id] %}
-                <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900 border border-gray-700/50 hover:bg-gray-850 transition-colors">
-                  <span class="text-white text-sm">{{ song.display_name }}</span>
-                  <div class="flex gap-2">
-                    <button type="button" onclick="activateCarouselSong('warmup', '{{ song_id }}')"
-                            class="text-xs px-3 py-1 rounded bg-green-700 hover:bg-green-600 text-white transition-colors">
-                      Activate
-                    </button>
-                    <button type="button" onclick="removeFromCarousel('warmup', '{{ song_id }}')"
-                            class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-red-800 text-gray-400 hover:text-red-200 transition-colors">
-                      ✕
-                    </button>
-                  </div>
-                </div>
-              {% endif %}
-            {% endfor %}
-          </div>
-        </div>
-      {% endif %}
-    </div>
-
-    <!-- Mid-Inning Song -->
-    <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
-      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Mid-Inning Song</h2>
-      <p class="text-xs text-gray-500 mb-4">Song you'd like played during mid-inning breaks.</p>
-
-      <!-- Upload section -->
-      <div class="mb-4 p-4 rounded-lg bg-gray-900/50 border border-gray-600/30">
-        <label class="block text-xs text-gray-400 mb-2 font-medium">Upload New Song</label>
-        <input type="file" id="midgame_upload" accept="audio/*" class="block w-full text-sm text-gray-400 mb-2">
-        <button type="button" onclick="uploadSongs('midgame')"
-                class="w-full px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-medium text-sm transition-colors">
-          ⬆ Upload
-        </button>
-      </div>
-
-      <!-- Select from library section -->
-      <div class="mb-4">
-        <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select Song</label>
-        <select name="midgame_song_id"
-                class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
-          <option value="">— none —</option>
-          {% for sid, song in songs.items() | sort(attribute='1.display_name') %}
-            <option value="{{ sid }}" {% if midgame_song and midgame_song.filename == song.filename %}selected{% endif %}>
-              {{ song.display_name }}
-            </option>
+    <!-- Inactive carousel of other songs -->
+    {% set walkup_songs = player.get('walkup_songs', []) %}
+    {% if walkup_songs and active_walkup_id %}
+      <div class="mt-4 pt-4 border-t border-gray-700/50">
+        <p class="text-xs text-gray-400 font-medium uppercase tracking-wider mb-3">Click to activate</p>
+        <div class="space-y-2">
+          {% for song_id in walkup_songs %}
+            {% if song_id != active_walkup_id and song_id in songs %}
+              {% set song = songs[song_id] %}
+              <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900 border border-gray-700/50 hover:bg-gray-850 transition-colors">
+                <span class="text-white text-sm">{{ song.display_name }}</span>
+                <button type="button" onclick="selectSongDirect('walkup', '{{ song_id }}')"
+                        class="text-xs px-3 py-1 rounded bg-green-700 hover:bg-green-600 text-white transition-colors">
+                  Activate
+                </button>
+              </div>
+            {% endif %}
           {% endfor %}
-        </select>
+        </div>
       </div>
+    {% endif %}
+  </div>
 
-      {% if midgame_song %}
-      {{ trim_editor(
-          editor_id   = 'midgame',
-          audio_url   = url_for('ondeck_serve_audio', filename=midgame_song.filename),
-          start_ms    = midgame_song.start_ms or 0,
-          end_ms      = midgame_song.end_ms,
-          start_field = 'midgame_start_ms',
-          end_field   = 'midgame_end_ms',
-          label       = 'Set intro and outro'
-      ) }}
-      {% else %}
-      <input type="hidden" name="midgame_start_ms" value="0">
-      <input type="hidden" name="midgame_end_ms" value="">
-      <div class="text-sm text-gray-600 text-center py-6">
-        Upload or select a song to show the trim editor.
-      </div>
-      {% endif %}
-    </div>
+  <!-- Pitching Warm-Up Song -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Pitching Warm-Up Song</h2>
+    <p class="text-xs text-gray-500 mb-4">Song to play while warming up to pitch. You can have multiple songs that rotate between appearances.</p>
 
-    <!-- Save Button -->
-    <div class="mt-5">
-      <button type="submit"
-              class="w-full py-3 rounded-lg bg-green-700 hover:bg-green-600 text-white font-bold text-sm transition-colors">
-        Save All Settings
+    <!-- Upload section -->
+    <div class="mb-4 p-4 rounded-lg bg-gray-900/50 border border-gray-600/30">
+      <label class="block text-xs text-gray-400 mb-2 font-medium">Upload New Songs</label>
+      <input type="file" id="warmup_upload" multiple accept="audio/*" class="block w-full text-sm text-gray-400 mb-2">
+      <button type="button" onclick="uploadSongs('warmup')"
+              class="w-full px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-medium text-sm transition-colors">
+        ⬆ Upload
       </button>
     </div>
-  </form>
+
+    <!-- Select from library section -->
+    <div class="mb-4">
+      <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select From Library</label>
+      <select id="warmup_add_select" onchange="selectSong('warmup', this.value)"
+              class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
+        <option value="">— Select song —</option>
+        {% for sid, song in songs.items() | sort(attribute='1.display_name') %}
+          <option value="{{ sid }}">{{ song.display_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Active songs section -->
+    {% set active_warmup_id = player.get('pitching_warmup_song_id') %}
+    {% if active_warmup_id and active_warmup_id in songs %}
+      {% set active_song = songs[active_warmup_id] %}
+      <div class="mb-4">
+        <p class="text-xs text-gray-400 font-medium uppercase tracking-wider mb-3">ACTIVE WARM-UP SONGS</p>
+        <div class="p-4 rounded-lg bg-green-900/20 border border-green-700/50 mb-4">
+          <p class="text-white font-semibold mb-2">{{ active_song.display_name }}</p>
+          <button type="button" onclick="deactivateSong('warmup', '{{ active_warmup_id }}')"
+                  class="text-xs px-3 py-1 rounded bg-red-700 hover:bg-red-600 text-white transition-colors">
+            ✕ Deactivate
+          </button>
+        </div>
+
+        <!-- Trim editor with separate save button -->
+        <div class="relative">
+          <div class="flex items-center justify-between mb-2">
+            <p class="text-xs text-gray-400 font-medium">Edit Trim</p>
+            <button type="button" id="warmup-trim-save" onclick="saveTrimEditor('warmup', '{{ active_warmup_id }}')"
+                    class="px-3 py-1 rounded text-xs font-medium bg-gray-600 text-gray-400 cursor-not-allowed transition-colors"
+                    disabled>
+              Save Trim
+            </button>
+          </div>
+
+          <div id="warmup-trim-editor">
+            {{ trim_editor(
+                editor_id   = 'warmup',
+                audio_url   = url_for('ondeck_serve_audio', filename=active_song.filename),
+                start_ms    = active_song.start_ms or 0,
+                end_ms      = active_song.end_ms,
+                start_field = 'warmup_start_ms',
+                end_field   = 'warmup_end_ms',
+                label       = 'Set intro and outro'
+            ) }}
+          </div>
+        </div>
+      {% else %}
+        <div class="text-sm text-gray-600 text-center py-6">
+          Select or upload a song to get started.
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- Inactive carousel of other songs -->
+    {% set warmup_songs = player.get('warmup_songs', []) %}
+    {% if warmup_songs and active_warmup_id %}
+      <div class="mt-4 pt-4 border-t border-gray-700/50">
+        <p class="text-xs text-gray-400 font-medium uppercase tracking-wider mb-3">Click to activate</p>
+        <div class="space-y-2">
+          {% for song_id in warmup_songs %}
+            {% if song_id != active_warmup_id and song_id in songs %}
+              {% set song = songs[song_id] %}
+              <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900 border border-gray-700/50 hover:bg-gray-850 transition-colors">
+                <span class="text-white text-sm">{{ song.display_name }}</span>
+                <button type="button" onclick="selectSongDirect('warmup', '{{ song_id }}')"
+                        class="text-xs px-3 py-1 rounded bg-green-700 hover:bg-green-600 text-white transition-colors">
+                  Activate
+                </button>
+              </div>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- Mid-Inning Song -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Mid-Inning Song</h2>
+    <p class="text-xs text-gray-500 mb-4">Song you'd like played during mid-inning breaks.</p>
+
+    <!-- Upload section -->
+    <div class="mb-4 p-4 rounded-lg bg-gray-900/50 border border-gray-600/30">
+      <label class="block text-xs text-gray-400 mb-2 font-medium">Upload New Song</label>
+      <input type="file" id="midgame_upload" accept="audio/*" class="block w-full text-sm text-gray-400 mb-2">
+      <button type="button" onclick="uploadSongs('midgame')"
+              class="w-full px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-medium text-sm transition-colors">
+        ⬆ Upload
+      </button>
+    </div>
+
+    <!-- Select from library section -->
+    <div class="mb-4">
+      <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select Song</label>
+      <select id="midgame_add_select" onchange="selectSong('midgame', this.value)"
+              class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
+        <option value="">— Select song —</option>
+        {% for sid, song in songs.items() | sort(attribute='1.display_name') %}
+          <option value="{{ sid }}">{{ song.display_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Active song section -->
+    {% set active_midgame_id = player.get('midgame_song_id') %}
+    {% if active_midgame_id and active_midgame_id in songs %}
+      {% set active_song = songs[active_midgame_id] %}
+      <div class="mb-4">
+        <p class="text-xs text-gray-400 font-medium uppercase tracking-wider mb-3">ACTIVE MID-INNING SONG</p>
+        <div class="p-4 rounded-lg bg-green-900/20 border border-green-700/50 mb-4">
+          <p class="text-white font-semibold mb-2">{{ active_song.display_name }}</p>
+          <button type="button" onclick="deactivateSong('midgame', '{{ active_midgame_id }}')"
+                  class="text-xs px-3 py-1 rounded bg-red-700 hover:bg-red-600 text-white transition-colors">
+            ✕ Deactivate
+          </button>
+        </div>
+
+        <!-- Trim editor with separate save button -->
+        <div class="relative">
+          <div class="flex items-center justify-between mb-2">
+            <p class="text-xs text-gray-400 font-medium">Edit Trim</p>
+            <button type="button" id="midgame-trim-save" onclick="saveTrimEditor('midgame', '{{ active_midgame_id }}')"
+                    class="px-3 py-1 rounded text-xs font-medium bg-gray-600 text-gray-400 cursor-not-allowed transition-colors"
+                    disabled>
+              Save Trim
+            </button>
+          </div>
+
+          <div id="midgame-trim-editor">
+            {{ trim_editor(
+                editor_id   = 'midgame',
+                audio_url   = url_for('ondeck_serve_audio', filename=active_song.filename),
+                start_ms    = active_song.start_ms or 0,
+                end_ms      = active_song.end_ms,
+                start_field = 'midgame_start_ms',
+                end_field   = 'midgame_end_ms',
+                label       = 'Set intro and outro'
+            ) }}
+          </div>
+        </div>
+      {% else %}
+        <div class="text-sm text-gray-600 text-center py-6">
+          Select or upload a song to get started.
+        </div>
+      {% endif %}
+    </div>
+  </div>
 
 </div>
 
@@ -306,6 +323,59 @@
 <script>
 let pendingUploadFile = null;
 let pendingUploadType = null;
+let trimEditorChanges = {};
+
+// Track trim editor changes
+function watchTrimEditor(editorId, songType) {
+  const editor = window.editors?.[editorId];
+  if (!editor) return;
+
+  // Watch for region changes
+  editor.on('region-update-end', () => {
+    trimEditorChanges[songType] = true;
+    updateTrimSaveButton(songType);
+  });
+}
+
+function updateTrimSaveButton(songType) {
+  const btn = document.getElementById(`${songType}-trim-save`);
+  if (!btn) return;
+
+  if (trimEditorChanges[songType]) {
+    btn.disabled = false;
+    btn.className = 'px-3 py-1 rounded text-xs font-medium bg-green-700 text-white hover:bg-green-600 cursor-pointer transition-colors';
+  } else {
+    btn.disabled = true;
+    btn.className = 'px-3 py-1 rounded text-xs font-medium bg-gray-600 text-gray-400 cursor-not-allowed transition-colors';
+  }
+}
+
+async function saveTrimEditor(songType, songId) {
+  if (!trimEditorChanges[songType]) return;
+
+  const editor = window.editors?.[songType];
+  if (!editor) return;
+
+  const startMs = Math.round(editor.getCurrentTime() * 1000 || 0);
+  const region = Object.values(editor.regions.list || {})[0];
+  const endMs = region ? Math.round(region.end * 1000) : null;
+
+  try {
+    const response = await fetch(`/ondeck/trim-save/${songType}/${songId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `start_ms=${startMs}&end_ms=${endMs || ''}`
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    trimEditorChanges[songType] = false;
+    updateTrimSaveButton(songType);
+    alert('Trim saved!');
+  } catch (err) {
+    alert(`Error saving trim: ${err.message}`);
+  }
+}
 
 function generateDisplayName(filename) {
   return filename
@@ -377,20 +447,11 @@ async function confirmSongName() {
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: `song_id=${encodeURIComponent(songId)}`
         });
-
-        await fetch(`/ondeck/carousel/activate/${songType}/${songId}`, {
-          method: 'POST'
-        });
-      } else {
-        const select = document.querySelector('select[name="midgame_song_id"]');
-        if (select) {
-          select.value = songId;
-        }
       }
 
-      window.location.reload();
+      // Auto-activate the song
+      await selectSongDirect(songType, songId);
     } else {
-      alert('Song added!');
       window.location.reload();
     }
   } catch (err) {
@@ -405,16 +466,14 @@ function cancelUpload() {
   pendingUploadType = null;
 }
 
-async function addToCarousel(songType) {
-  const selectId = songType + '_add_select';
-  const select = document.getElementById(selectId);
-  const songId = select.value;
+async function selectSong(songType, songId) {
+  if (!songId) return;
 
-  if (!songId) {
-    alert('Please select a song');
-    return;
-  }
+  document.getElementById(`${songType}_add_select`).value = '';
+  await selectSongDirect(songType, songId);
+}
 
+async function selectSongDirect(songType, songId) {
   try {
     const response = await fetch(`/ondeck/carousel/add/${songType}`, {
       method: 'POST',
@@ -422,49 +481,43 @@ async function addToCarousel(songType) {
       body: `song_id=${encodeURIComponent(songId)}`
     });
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-    window.location.reload();
-  } catch (err) {
-    alert(`Error adding song: ${err.message}`);
-  }
-}
-
-async function removeFromCarousel(songType, songId) {
-  if (!confirm('Remove this song?')) return;
-
-  try {
-    const response = await fetch(`/ondeck/carousel/remove/${songType}/${songId}`, {
+    // Then immediately activate it
+    const activateResponse = await fetch(`/ondeck/carousel/activate/${songType}/${songId}`, {
       method: 'POST'
     });
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
+    if (!activateResponse.ok) throw new Error(`HTTP ${activateResponse.status}`);
 
     window.location.reload();
   } catch (err) {
-    alert(`Error removing song: ${err.message}`);
+    alert(`Error selecting song: ${err.message}`);
   }
 }
 
-async function activateCarouselSong(songType, songId) {
+async function deactivateSong(songType, songId) {
+  if (!confirm('Deactivate this song?')) return;
+
   try {
-    const response = await fetch(`/ondeck/carousel/activate/${songType}/${songId}`, {
+    const response = await fetch(`/ondeck/carousel/deactivate/${songType}/${songId}`, {
       method: 'POST'
     });
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     window.location.reload();
   } catch (err) {
-    alert(`Error activating song: ${err.message}`);
+    alert(`Error deactivating song: ${err.message}`);
   }
 }
+
+// Initialize trim editor watchers when page loads
+document.addEventListener('DOMContentLoaded', function() {
+  watchTrimEditor('walkup', 'walkup');
+  watchTrimEditor('warmup', 'warmup');
+  watchTrimEditor('midgame', 'midgame');
+});
 </script>
 
 {% endblock %}
