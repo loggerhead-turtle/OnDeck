@@ -615,7 +615,7 @@ def ondeck_dashboard():
 
 @app.get("/ondeck/library")
 def ondeck_library():
-    return render_template("library.html", songs=cfg.songs)
+    return render_template("library.html", songs=cfg.songs, cfg=cfg)
 
 
 @app.post("/ondeck/library/upload")

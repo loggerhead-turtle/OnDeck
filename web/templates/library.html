@@ -47,37 +47,49 @@
   </div>
 </div>
 
-<!-- Song table -->
+<!-- Song table: base songs with expandable variants -->
 {% if songs %}
-<div class="bg-gray-800 rounded-xl border border-gray-700/50 overflow-hidden">
-  <table class="w-full text-sm">
-    <thead>
-      <tr class="border-b border-gray-700 text-xs text-gray-400 uppercase tracking-wider">
-        <th class="text-left px-4 py-3 font-medium">Name</th>
-        <th class="text-left px-4 py-3 font-medium hidden sm:table-cell">File</th>
-        <th class="text-left px-4 py-3 font-medium hidden md:table-cell">Trim</th>
-        <th class="text-right px-4 py-3 font-medium">Actions</th>
-      </tr>
-    </thead>
-    <tbody class="divide-y divide-gray-700/50">
-      {% for sid, song in songs.items() | sort(attribute='1.display_name') %}
-        <tr class="hover:bg-gray-750 group transition-colors">
-          <td class="px-4 py-3">
-            <span class="font-medium text-white">{{ song.display_name }}</span>
-          </td>
-          <td class="px-4 py-3 text-gray-400 hidden sm:table-cell font-mono text-xs">
-            {{ song.filename }}
-          </td>
-          <td class="px-4 py-3 text-gray-400 hidden md:table-cell font-mono text-xs">
-            {% if song.start_ms or song.end_ms %}
-              {{ (song.start_ms / 1000) | round(2) }}s
-              {% if song.end_ms %} → {{ (song.end_ms / 1000) | round(2) }}s{% endif %}
-            {% else %}
-              <span class="text-gray-600">full</span>
-            {% endif %}
-          </td>
-          <td class="px-4 py-3">
-            <div class="flex items-center justify-end gap-2">
+<div class="space-y-2">
+  {% set base_songs = {} %}
+  {# Group songs by base_song_id: base songs have None, variants point to their base #}
+  {% for sid, song in songs.items() %}
+    {% set base_id = song.get('base_song_id') or sid %}
+    {% if base_id not in base_songs %}
+      {% set _ = base_songs.update({base_id: {'base': None, 'variants': []}}) %}
+    {% endif %}
+    {% if not song.get('base_song_id') %}
+      {% set _ = base_songs[base_id].update({'base': (sid, song)}) %}
+    {% else %}
+      {% set _ = base_songs[base_id]['variants'].append((sid, song)) %}
+    {% endif %}
+  {% endfor %}
+
+  {# Display base songs with expandable variant sections #}
+  {% for base_id, group in base_songs.items() | sort(attribute='1.base.1.display_name', reverse=False) %}
+    {% if group.base %}
+      {% set sid, song = group.base %}
+      <div class="bg-gray-800 rounded-xl border border-gray-700/50">
+        <!-- Base song row -->
+        <div class="border-b border-gray-700/50">
+          <div class="flex items-center justify-between px-4 py-3 hover:bg-gray-750 transition-colors">
+            <div class="flex items-center gap-3 flex-1 min-w-0">
+              <div>
+                <div class="font-medium text-white">{{ song.display_name }}</div>
+                <div class="text-xs text-gray-500 font-mono">{{ song.filename }}</div>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2 shrink-0 ml-4">
+              <!-- Variants badge (if any) -->
+              {% if group.variants %}
+              <button type="button" onclick="toggleVariants('{{ sid }}')"
+                      class="px-2.5 py-1 rounded bg-blue-900/30 border border-blue-700/50 text-blue-300 hover:bg-blue-900/50 text-xs font-medium transition-colors"
+                      title="Click to expand trimmed versions">
+                📋 {{ group.variants | length }} variant{% if group.variants | length != 1 %}s{% endif %}
+              </button>
+              {% endif %}
+
+              <!-- Action buttons -->
               <button onclick="previewSong('{{ song.filename }}', {{ song.start_ms or 0 }}, {{ song.end_ms if song.end_ms is not none else 'null' }})"
                       class="px-2.5 py-1 rounded bg-gray-700 hover:bg-green-700 text-gray-300 hover:text-white text-xs font-medium transition-colors">
                 ▶
@@ -87,18 +99,53 @@
                 Edit
               </a>
               <form method="POST" action="/ondeck/library/{{ sid }}/delete"
-                    onsubmit="return confirm('Delete "{{ song.display_name }}"?')">
+                    onsubmit="return confirm('Delete "{{ song.display_name }}"?')" style="display: inline;">
                 <button type="submit"
                         class="px-2.5 py-1 rounded bg-gray-700 hover:bg-red-800 text-gray-400 hover:text-red-200 text-xs font-medium transition-colors">
                   ✕
                 </button>
               </form>
             </div>
-          </td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+          </div>
+        </div>
+
+        <!-- Variants section (collapsible) -->
+        {% if group.variants %}
+        <div id="variants-{{ sid }}" class="hidden divide-y divide-gray-700/50 bg-gray-900/50">
+          {% for var_sid, var_song in group.variants | sort(attribute='1.created_by_player') %}
+            {% set player = cfg.players.get(var_song.created_by_player) %}
+            <div class="px-4 py-3 flex items-center justify-between hover:bg-gray-800/50 transition-colors">
+              <div>
+                <div class="text-sm text-gray-300">
+                  <span class="text-indigo-400">📌 Trimmed by</span>
+                  {% if player %}
+                    #{{ player.jersey }} {{ player.first_name }} {{ player.last_name }}
+                  {% else %}
+                    Unknown player
+                  {% endif %}
+                </div>
+                <div class="text-xs text-gray-500 font-mono mt-0.5">
+                  {% if var_song.start_ms or var_song.end_ms %}
+                    {{ (var_song.start_ms / 1000) | round(2) }}s
+                    {% if var_song.end_ms %} → {{ (var_song.end_ms / 1000) | round(2) }}s{% endif %}
+                  {% else %}
+                    full
+                  {% endif %}
+                </div>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <button onclick="previewSong('{{ var_song.filename }}', {{ var_song.start_ms or 0 }}, {{ var_song.end_ms if var_song.end_ms is not none else 'null' }})"
+                        class="px-2.5 py-1 rounded bg-gray-700 hover:bg-indigo-700 text-gray-300 hover:text-white text-xs font-medium transition-colors">
+                  ▶
+                </button>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    {% endif %}
+  {% endfor %}
 </div>
 {% else %}
 <div class="bg-gray-800/50 border border-gray-700/50 rounded-xl p-12 text-center">
@@ -109,6 +156,13 @@
 {% endif %}
 
 <script>
+  function toggleVariants(baseSongId) {
+    const section = document.getElementById(`variants-${baseSongId}`)
+    if (section) {
+      section.classList.toggle('hidden')
+    }
+  }
+
   // Show spinner during YouTube import.
   document.getElementById('import-form').addEventListener('submit', () => {
     const btn = document.getElementById('import-btn')
