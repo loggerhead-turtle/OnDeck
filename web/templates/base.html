@@ -59,11 +59,12 @@
     </a>
 
     {% if current_player %}
-    <nav class="flex gap-1 text-sm font-medium">
+    <nav class="flex flex-wrap gap-1 text-sm font-medium">
       <a href="/ondeck/my-profile" class="nav-link px-3 py-1.5 rounded-md {% if 'my_profile' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">My Profile</a>
+      <a href="/ondeck/team-roster" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'ondeck_team_roster' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Team</a>
     </nav>
     {% elif current_user %}
-    <nav class="flex gap-1 text-sm font-medium">
+    <nav class="flex flex-wrap gap-1 text-sm font-medium">
       <a href="/ondeck/dashboard" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'ondeck_dashboard' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Home</a>
       <a href="/ondeck/library"   class="nav-link px-3 py-1.5 rounded-md {% if 'library' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Library</a>
       <a href="/ondeck/players"   class="nav-link px-3 py-1.5 rounded-md {% if 'players' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Players</a>

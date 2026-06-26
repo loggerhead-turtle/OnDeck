@@ -1465,21 +1465,20 @@ def ondeck_settings_signup_expires():
 
 @app.get("/ondeck/team-roster")
 def ondeck_team_roster():
-    _check_auth(["player", "editor", "admin"])
-    user_id = session.get("user_id")
+    role = session.get("role")
 
-    # Get the current user's teams (if they're a player)
-    user_teams = []
-    if session.get("role") == "player":
-        # Find the player associated with this user (if any)
-        # For now, we'll show all teams if they're not a player in the system
-        user_teams = []
-
-    # For admins/editors, show all teams; for players, show their assigned teams
-    if session.get("role") in ("admin", "editor"):
+    # Players see their own teams; admins/editors see all
+    if role == "player":
+        pid = session.get("player_id")
+        player = cfg.players.get(pid)
+        if not player:
+            abort(403)
+        team_ids = player.get("team_ids", [])
+        teams_to_show = [(tid, cfg.teams[tid]) for tid in team_ids if tid in cfg.teams]
+    elif role in ("admin", "editor"):
         teams_to_show = [(tid, cfg.teams[tid]) for tid in cfg.teams.keys()]
     else:
-        teams_to_show = []
+        abort(403)
 
     teams_data = []
     for team_id, team in teams_to_show:
@@ -1490,7 +1489,7 @@ def ondeck_team_roster():
             "members": members,
         })
 
-    return render_template("team_roster.html", teams=teams_data)
+    return render_template("team_roster.html", teams=teams_data, cfg=cfg)
 
 
 # ---------------------------------------------------------------------------
