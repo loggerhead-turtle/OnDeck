@@ -45,8 +45,29 @@ SYNC_TOKEN          = os.environ.get("ONDECK_SYNC_TOKEN", "")
 ELEVENLABS_API_KEY  = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "pNInz6obpgDQGcFmaJgB")
 
-AUTH_FILE    = ONDECK_HOME / "auth.json"
-COOKIES_FILE = ONDECK_HOME / "youtube_cookies.txt"
+AUTH_FILE      = ONDECK_HOME / "auth.json"
+COOKIES_FILE   = ONDECK_HOME / "youtube_cookies.txt"
+HOMEPAGE_FILE  = ONDECK_HOME / "homepage.json"
+
+_HOMEPAGE_DEFAULTS: dict = {
+    "tagline":     "Builder, coach, and creator. I make tools that solve real problems.",
+    "bio_1":       "",
+    "bio_2":       "",
+    "bio_3":       "",
+    "ondeck_desc": "Baseball walk-up music system. Manage player walk-up songs, generate stadium announcements, and trigger live playback from the dugout via Stream Deck.",
+}
+
+def _load_homepage() -> dict:
+    if HOMEPAGE_FILE.exists():
+        try:
+            data = json.loads(HOMEPAGE_FILE.read_text())
+            return {**_HOMEPAGE_DEFAULTS, **data}
+        except Exception:
+            pass
+    return dict(_HOMEPAGE_DEFAULTS)
+
+def _save_homepage(data: dict) -> None:
+    HOMEPAGE_FILE.write_text(json.dumps(data, indent=2))
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("ONDECK_SECRET", "ondeck-dev-secret-change-me")
@@ -130,6 +151,7 @@ def _check_auth():
     if role == "editor":
         admin_only = {
             "admin_panel", "admin_add_user", "admin_delete_user", "admin_change_role",
+            "admin_homepage", "admin_homepage_save",
             "ondeck_settings", "ondeck_settings_save", "ondeck_settings_youtube_cookies",
         }
         if request.endpoint in admin_only:
@@ -222,7 +244,7 @@ def _proxy(method: str, path: str, **kwargs):
 def public_home():
     if session.get("role") in ("admin", "editor"):
         return redirect(url_for("ondeck_dashboard"))
-    return render_template("public_home.html")
+    return render_template("public_home.html", hp=_load_homepage())
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +417,29 @@ def admin_change_role(uid: str):
     _save_users(users)
     flash(f"Updated '{target['username']}' to {new_role}.", "success")
     return redirect(url_for("admin_panel"))
+
+
+# ---------------------------------------------------------------------------
+# Homepage editor  /admin/homepage  (admin only)
+# ---------------------------------------------------------------------------
+
+@app.get("/admin/homepage")
+def admin_homepage():
+    return render_template("admin_homepage.html", hp=_load_homepage())
+
+
+@app.post("/admin/homepage/save")
+def admin_homepage_save():
+    hp = {
+        "tagline":     request.form.get("tagline", "").strip(),
+        "bio_1":       request.form.get("bio_1", "").strip(),
+        "bio_2":       request.form.get("bio_2", "").strip(),
+        "bio_3":       request.form.get("bio_3", "").strip(),
+        "ondeck_desc": request.form.get("ondeck_desc", "").strip(),
+    }
+    _save_homepage(hp)
+    flash("Homepage updated.", "success")
+    return redirect(url_for("admin_homepage"))
 
 
 # ---------------------------------------------------------------------------
