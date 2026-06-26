@@ -38,12 +38,22 @@ def _default_config() -> dict[str, Any]:
             "wifi_configured": False,
             "bluetooth_device": None,
             "volume": 80,
+            # AI announcer voice (ElevenLabs text-to-speech). The API key may
+            # also be supplied via the ELEVENLABS_API_KEY env var.
+            "elevenlabs_api_key": "",
+            "elevenlabs_voice_id": "",
+            "elevenlabs_model": "eleven_multilingual_v2",
+            "announcement_template": "Now batting, number {jersey}, {first_name} {last_name}",
             # Cloud sync bookkeeping.
             "last_synced_at": None,
             "dirty": False,
         },
         "players": {},          # player_id -> player dict
         "songs": {},            # song_id -> song dict
+        # Activity log of player-made changes for the coach to review. Newest
+        # first; capped in app.py. Each entry: {id, ts, player_id, jersey,
+        # player_name, action, detail, seen}.
+        "notifications": [],
         "lineup": [None] * 9,   # batting order, indexes 0..size-1 used
         "lineup_size": 9,
         "celebrations": {
@@ -145,6 +155,11 @@ class ConfigManager:
         defaults = _default_config()
         for key, value in defaults.items():
             self._data.setdefault(key, value)
+        # Backfill any new system sub-keys (e.g. the ElevenLabs settings) so a
+        # config written by an older version doesn't KeyError on upgrade.
+        system = self._data.setdefault("system", {})
+        for key, value in defaults["system"].items():
+            system.setdefault(key, value)
         # Make sure built-in pages always exist even if a config predates them.
         pages = self._data.setdefault("pages", {})
         for pid, page in _default_pages().items():
@@ -265,6 +280,7 @@ class ConfigManager:
                 "first_name": first_name,
                 "last_name": last_name,
                 "announcement_file": None,
+                "announcement_text": "",
                 "announcement_start_ms": 0,
                 "announcement_end_ms": None,
                 "walkup_song_id": None,

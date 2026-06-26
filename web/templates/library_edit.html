@@ -4,12 +4,12 @@
 {% block content %}
 
 <div class="flex items-center gap-3 mb-6">
-  <a href="/library" class="text-gray-400 hover:text-white transition-colors text-sm">← Library</a>
+  <a href="/ondeck/library" class="text-gray-400 hover:text-white transition-colors text-sm">← Library</a>
   <span class="text-gray-600">/</span>
   <h1 class="text-2xl font-bold">{{ song.display_name }}</h1>
 </div>
 
-<form method="POST" action="/library/{{ sid }}/save" id="save-form">
+<form method="POST" action="/ondeck/library/{{ sid }}/save" id="save-form">
 
   <!-- Display name -->
   <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5">
@@ -22,7 +22,7 @@
   <!-- Trim editor -->
   {{ trim_editor(
       editor_id  = 'song',
-      audio_url  = url_for('serve_audio', filename=song.filename),
+      audio_url  = url_for('ondeck_serve_audio', filename=song.filename),
       start_ms   = song.start_ms or 0,
       end_ms     = song.end_ms,
       start_field = 'start_ms',
@@ -43,28 +43,24 @@
         ▶ Preview on PA
       </button>
     </div>
-    <form method="POST" action="/library/{{ sid }}/delete"
-          onsubmit="return confirm('Delete this song?')">
-      <button type="submit"
-              class="px-4 py-2 rounded-lg bg-gray-800 hover:bg-red-900 border border-gray-700 hover:border-red-700 text-gray-400 hover:text-red-300 text-sm transition-colors">
-        Delete
-      </button>
-    </form>
+    {# Submits #delete-song-form below (declared outside #save-form) so it
+       isn't a nested <form>, which would otherwise hijack the Save button. #}
+    <button type="submit" form="delete-song-form"
+            class="px-4 py-2 rounded-lg bg-gray-800 hover:bg-red-900 border border-gray-700 hover:border-red-700 text-gray-400 hover:text-red-300 text-sm transition-colors">
+      Delete
+    </button>
   </div>
 </form>
 
+<form id="delete-song-form" method="POST" action="/ondeck/library/{{ sid }}/delete"
+      onsubmit="return confirm('Delete this song?')"></form>
+
 <script>
-  async function previewSong() {
+  function previewSong() {
     const startMs = parseInt(document.getElementById('song-h-start').value) || 0
     const endVal  = document.getElementById('song-h-end').value
     const endMs   = endVal ? parseInt(endVal) : null
-
-    await fetch('/api/preview', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: '{{ song.filename }}', start_ms: startMs, end_ms: endMs }),
-    })
-    setTimeout(pollStatus, 400)
+    OnDeck.preview({ file: '{{ song.filename }}', start_ms: startMs, end_ms: endMs })
   }
 </script>
 {% endblock %}

@@ -13,11 +13,14 @@
     show_cue    : whether to render the music-cue handle (bool)
     cue_ms      : initial cue position in ms (used if show_cue)
     cue_field   : name of the hidden form field for cue_ms
+    show_trim   : whether to render the start/end (green) trim handles. Set
+                  False for a cue-only editor (e.g. players placing the music
+                  cue on an announcement they're not allowed to trim).
 #}
 {% macro trim_editor(editor_id, audio_url, start_ms=0, end_ms=None,
                      start_field='start_ms', end_field='end_ms',
                      label='Trim', show_cue=False, cue_ms=0,
-                     cue_field='music_cue_ms') %}
+                     cue_field='music_cue_ms', show_trim=True) %}
 <div class="bg-gray-900 rounded-xl border border-gray-700/50 overflow-hidden" id="{{ editor_id }}-wrap">
 
   <!-- Header -->
@@ -28,9 +31,35 @@
     </div>
   </div>
 
+  <!-- Timeline scrubber: drag this to move the playhead with a finger on
+       mobile without nudging the trim region or the cue marker. -->
+  <div class="px-4 pt-4 pb-1 bg-gray-950">
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-gray-500 shrink-0">⏵</span>
+      <input type="range" id="{{ editor_id }}-scrub" min="0" max="1000" value="0" step="1"
+             aria-label="Scrub timeline"
+             class="flex-1 min-w-0 accent-white cursor-pointer h-2">
+    </div>
+  </div>
+
   <!-- Waveform -->
-  <div class="px-4 pt-4 pb-2 bg-gray-950">
-    <div id="{{ editor_id }}-waveform" class="rounded overflow-hidden" style="min-height:100px;"></div>
+  <div class="px-4 pt-1 pb-2 bg-gray-950">
+    <div id="{{ editor_id }}-waveform" class="rounded" style="min-height:100px;"></div>
+    <!-- Legend so the on-waveform markers are self-explanatory -->
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-1 pt-2 text-xs text-gray-500">
+      {% if show_trim %}
+      <span class="flex items-center gap-1.5">
+        <span class="inline-block w-3 h-3 rounded-sm" style="background:rgba(74,222,128,0.35)"></span>
+        Green band = the part that plays (drag its edges)
+      </span>
+      {% endif %}
+      {% if show_cue %}
+      <span class="flex items-center gap-1.5">
+        <span class="inline-block w-1.5 h-3 rounded-sm" style="background:rgba(129,140,248,0.95)"></span>
+        Indigo bar = music cue (drag to set)
+      </span>
+      {% endif %}
+    </div>
   </div>
 
   <!-- Time ruler -->
@@ -45,61 +74,72 @@
 
     <!-- Playback -->
     <div class="flex items-center gap-2">
-      <button id="{{ editor_id }}-play-btn"
+      <button type="button" id="{{ editor_id }}-play-btn"
               class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-700 hover:bg-green-600 text-white text-xs font-semibold transition-colors"
               onclick="editors['{{ editor_id }}'].togglePlay()">
-        ▶ Play Trim
+        ▶ Play{{ ' Trim' if show_trim else '' }}
       </button>
-      <button class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors"
+      <button type="button" class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors"
               onclick="editors['{{ editor_id }}'].stop()">
         ■ Stop
       </button>
       {% if show_cue %}
-      <button class="px-3 py-1.5 rounded-lg bg-indigo-800 hover:bg-indigo-700 text-indigo-200 text-xs font-medium transition-colors ml-auto"
+      <button type="button" class="px-3 py-1.5 rounded-lg bg-indigo-800 hover:bg-indigo-700 text-indigo-200 text-xs font-medium transition-colors ml-auto"
               onclick="editors['{{ editor_id }}'].setToCursor('cue')">
         Set Music Cue Here
       </button>
       {% endif %}
     </div>
 
+    <!-- Zoom -->
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-gray-500 w-10 shrink-0">Zoom</span>
+      <button type="button" class="px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].zoomBy(0.5)">− out</button>
+      <button type="button" class="px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors select-none" onclick="editors['{{ editor_id }}'].zoomReset()">Fit</button>
+      <button type="button" class="px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].zoomBy(2)">+ in</button>
+      <span class="text-xs text-gray-600 hidden sm:inline">(then drag the waveform sideways)</span>
+    </div>
+
+    {% if show_trim %}
     <!-- Start handle -->
     <div class="flex items-center gap-1.5">
       <span class="text-xs text-gray-500 w-10 shrink-0">Start</span>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start',-0.1)">−0.1</button>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start',-0.01)">−0.01</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start',-0.1)">−0.1</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start',-0.01)">−0.01</button>
       <input id="{{ editor_id }}-in-start" type="text" value="0:00.00"
              class="time-input flex-1 min-w-0 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-green-300 text-center focus:outline-none focus:border-green-500"
              onchange="editors['{{ editor_id }}'].setHandleFromInput('start', this.value)"
              onkeydown="editors['{{ editor_id }}'].inputKeydown(event, 'start')">
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start', 0.01)">+0.01</button>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start', 0.1)">+0.1</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start', 0.01)">+0.01</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('start', 0.1)">+0.1</button>
     </div>
 
     <!-- End handle -->
     <div class="flex items-center gap-1.5">
       <span class="text-xs text-gray-500 w-10 shrink-0">End</span>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end',-0.1)">−0.1</button>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end',-0.01)">−0.01</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end',-0.1)">−0.1</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end',-0.01)">−0.01</button>
       <input id="{{ editor_id }}-in-end" type="text" value="0:00.00"
              class="time-input flex-1 min-w-0 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-red-300 text-center focus:outline-none focus:border-red-500"
              onchange="editors['{{ editor_id }}'].setHandleFromInput('end', this.value)"
              onkeydown="editors['{{ editor_id }}'].inputKeydown(event, 'end')">
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end', 0.01)">+0.01</button>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end', 0.1)">+0.1</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end', 0.01)">+0.01</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end', 0.1)">+0.1</button>
     </div>
+    {% endif %}
 
     {% if show_cue %}
     <!-- Music cue -->
     <div class="flex items-center gap-1.5">
       <span class="text-xs text-indigo-400 w-10 shrink-0">Cue</span>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue',-0.1)">−0.1</button>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue',-0.01)">−0.01</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue',-0.1)">−0.1</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue',-0.01)">−0.01</button>
       <input id="{{ editor_id }}-in-cue" type="text" value="{{ '{}:{}'.format(cue_ms // 60000, '{:.2f}'.format((cue_ms % 60000) / 1000).zfill(5)) }}"
              class="time-input flex-1 min-w-0 bg-gray-800 border border-indigo-700 rounded px-2 py-1 text-xs text-indigo-300 text-center focus:outline-none focus:border-indigo-400"
              onchange="editors['{{ editor_id }}'].setHandleFromInput('cue', this.value)"
              onkeydown="editors['{{ editor_id }}'].inputKeydown(event, 'cue')">
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue', 0.01)">+0.01</button>
-      <button class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue', 0.1)">+0.1</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue', 0.01)">+0.01</button>
+      <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('cue', 0.1)">+0.1</button>
     </div>
     <p class="text-xs text-gray-600 pl-[3.25rem]">Music fades in at this point during the announcement.</p>
     {% endif %}
@@ -120,8 +160,10 @@
 <audio id="{{ editor_id }}-audio" src="{{ audio_url }}" preload="metadata" playsinline class="hidden"></audio>
 
 <!-- Hidden form fields -->
+{% if show_trim %}
 <input type="hidden" name="{{ start_field }}" id="{{ editor_id }}-h-start" value="{{ start_ms }}">
 <input type="hidden" name="{{ end_field }}"   id="{{ editor_id }}-h-end"   value="{{ end_ms if end_ms is not none else '' }}">
+{% endif %}
 {% if show_cue %}
 <input type="hidden" name="{{ cue_field }}"   id="{{ editor_id }}-h-cue"   value="{{ cue_ms }}">
 {% endif %}
@@ -135,18 +177,23 @@ import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plu
 window.editors = window.editors || {}
 
 class TrimEditor {
-  constructor({ id, audioUrl, startMs, endMs, showCue, cueMs }) {
+  constructor({ id, audioUrl, startMs, endMs, showCue, cueMs, showTrim }) {
     this.id       = id
     this.audioUrl = audioUrl
     this.startMs  = startMs
     this.endMs    = endMs
     this.showCue  = showCue
+    this.showTrim = showTrim
     this.cueMs    = cueMs
     this._ws      = null
     this._regions = null
     this._region  = null
     this._cueRegion = null
     this._audio   = null
+    this._scrub   = null
+    this._scrubbing = false
+    this._basePx  = 0
+    this._px      = 0
     this._ready   = false
     this._playing = false
     this._dur     = 0
@@ -168,47 +215,64 @@ class TrimEditor {
       height: 100,
       normalize: true,
       interact: true,
+      autoScroll: true,
       plugins: [regions],
     })
+
+    // Finger-friendly scrubber: seek without disturbing region/cue.
+    this._scrub = this.$('scrub')
+    if (this._scrub) {
+      this._scrub.addEventListener('input', e => {
+        this._scrubbing = true
+        this._onScrub(Number(e.target.value))
+      })
+      this._scrub.addEventListener('change', () => { this._scrubbing = false })
+    }
 
     this._ws.on('ready', () => {
       this._ready = true
       this._dur = this._ws.getDuration()
       this.$('dur').textContent = this._fmt(this._dur)
       this.$('tend').textContent = this._fmt(this._dur)
+      // Pixels-per-second that exactly fits the container = the "Fit" zoom.
+      const w = this.$('waveform').clientWidth || 600
+      this._basePx = w / (this._dur || 1)
+      this._px = this._basePx
 
       const startS = this.startMs / 1000
       const endS   = this.endMs != null ? this.endMs / 1000 : this._dur
 
-      this._region = regions.addRegion({
-        start: startS,
-        end:   endS,
-        color: 'rgba(74, 222, 128, 0.12)',
-        drag:  true,
-        resize: true,
-        minLength: 0.02,
-      })
-      this._updateHandles()
+      if (this.showTrim) {
+        this._region = regions.addRegion({
+          start: startS,
+          end:   endS,
+          color: 'rgba(74, 222, 128, 0.12)',
+          drag:  true,
+          resize: true,
+          minLength: 0.02,
+        })
+        this._updateHandles()
+        this._region.on('update-end', () => {
+          this._updateHandles()
+          this._notifyUpdate()
+        })
+      }
 
       if (this.showCue) {
         const cueS = this.cueMs / 1000
         this._cueRegion = regions.addRegion({
           start: cueS,
-          end:   cueS + 0.001,  // zero-width marker
-          color: 'rgba(129, 140, 248, 0.25)',
+          end:   cueS + 0.001,  // a point, not a span
+          color: 'rgba(129, 140, 248, 0.9)',
           drag:  true,
           resize: false,
           id:    `${this.id}-cue`,
         })
+        this._styleCue()
         this._updateCueDisplay()
-      }
-
-      this._region.on('update-end', () => {
-        this._updateHandles()
-        this._notifyUpdate()
-      })
-      if (this._cueRegion) {
+        this._cueRegion.on('update', () => this._styleCue())
         this._cueRegion.on('update-end', () => {
+          this._styleCue()
           this._updateCueDisplay()
           this._notifyCue()
         })
@@ -227,6 +291,12 @@ class TrimEditor {
       this.$('tcur').textContent = this._fmt(t)
       // Mirror the cursor on the waveform (WaveSurfer stays paused).
       if (this._ready) { try { this._ws.setTime(t) } catch {} }
+      // Keep the scrubber thumb in step with playback (unless the user is
+      // actively dragging it).
+      const max = this._maxTime()
+      if (this._scrub && !this._scrubbing && isFinite(max) && max > 0) {
+        this._scrub.value = Math.round((t / max) * 1000)
+      }
       // Stop at the end of the trim window and reset to its start.
       if (this._playing && t >= this._bounds().end) {
         this._audio.pause()
@@ -242,6 +312,31 @@ class TrimEditor {
     })
 
     await this._ws.load(this.audioUrl)
+  }
+
+  // ---- Scrubber & zoom ---------------------------------------------------
+
+  _onScrub(val) {
+    const max = this._maxTime()
+    if (!isFinite(max) || max <= 0) return
+    const t = (val / 1000) * max
+    if (this._audio) this._audio.currentTime = t
+    if (this._ready) { try { this._ws.setTime(t) } catch {} }
+    this.$('tcur').textContent = this._fmt(t)
+  }
+
+  zoomBy(factor) {
+    if (!this._ready) return
+    const base = this._basePx || 1
+    // Never zoom out past "Fit"; cap zoom-in so the waveform stays usable.
+    this._px = Math.max(base, Math.min(base * 40, (this._px || base) * factor))
+    try { this._ws.zoom(this._px) } catch {}
+  }
+
+  zoomReset() {
+    if (!this._ready) return
+    this._px = this._basePx
+    try { this._ws.zoom(this._basePx) } catch {}
   }
 
   // ---- Playback ----------------------------------------------------------
@@ -284,23 +379,32 @@ class TrimEditor {
     return { start, end }
   }
 
+  // Upper bound for clamping. WaveSurfer's reported duration can be 0/NaN for
+  // recorded .webm announcements (no duration in the container header), which
+  // would otherwise clamp every cue/handle edit to 0. Fall back gracefully.
+  _maxTime() {
+    if (isFinite(this._dur) && this._dur > 0) return this._dur
+    const d = this._audio && this._audio.duration
+    return (isFinite(d) && d > 0) ? d : Infinity
+  }
+
   // ---- Handle nudging & input --------------------------------------------
 
   nudge(handle, deltaS) {
-    if (!this._region) return
     if (handle === 'cue') {
       if (!this._cueRegion) return
-      const newS = Math.max(0, Math.min(this._dur, this._cueRegion.start + deltaS))
+      const newS = Math.max(0, Math.min(this._maxTime(), this._cueRegion.start + deltaS))
       this._moveCue(newS)
       return
     }
+    if (!this._region) return
     const start = this._region.start
     const end   = this._region.end
     if (handle === 'start') {
       const newS = Math.max(0, Math.min(end - 0.02, start + deltaS))
       this._moveRegion(newS, end)
     } else {
-      const newS = Math.min(this._dur, Math.max(start + 0.02, end + deltaS))
+      const newS = Math.min(this._maxTime(), Math.max(start + 0.02, end + deltaS))
       this._moveRegion(start, newS)
     }
   }
@@ -309,19 +413,27 @@ class TrimEditor {
     const s = this._parse(str)
     if (isNaN(s)) return
     if (handle === 'cue') {
-      this._moveCue(Math.max(0, Math.min(this._dur, s)))
+      this._moveCue(Math.max(0, Math.min(this._maxTime(), s)))
       return
     }
+    if (!this._region) return
     const start = this._region.start
     const end   = this._region.end
     if (handle === 'start') {
       this._moveRegion(Math.max(0, Math.min(end - 0.02, s)), end)
     } else {
-      this._moveRegion(start, Math.min(this._dur, Math.max(start + 0.02, s)))
+      this._moveRegion(start, Math.min(this._maxTime(), Math.max(start + 0.02, s)))
     }
   }
 
   inputKeydown(event, handle) {
+    if (event.key === 'Enter') {
+      // These inputs live inside the player/song <form>; Enter would submit
+      // it (reloading the page). Apply the value instead.
+      event.preventDefault()
+      this.setHandleFromInput(handle, event.target.value)
+      return
+    }
     if (event.key === 'ArrowUp' || event.key === 'ArrowRight') {
       event.preventDefault()
       this.nudge(handle, event.shiftKey ? 0.1 : 0.01)
@@ -334,7 +446,8 @@ class TrimEditor {
   }
 
   setToCursor(handle) {
-    if (!this._audio || !this._region) return
+    if (!this._audio) return
+    if (handle !== 'cue' && !this._region) return
     const cur = this._audio.currentTime
     this.setHandleFromInput(handle, this._fmt(cur))
   }
@@ -349,35 +462,60 @@ class TrimEditor {
 
   _moveCue(s) {
     this._cueRegion.setOptions({ start: s, end: s + 0.001 })
+    this._styleCue()
     this._updateCueDisplay()
     this._notifyCue()
+  }
+
+  // The cue is a single point, so WaveSurfer renders it ~0px wide — invisible
+  // and impossible to grab on a touch screen. Force a fixed-width, clearly
+  // styled, finger-friendly bar. Re-applied after drags/moves because the
+  // plugin recomputes left/right on every render.
+  _styleCue() {
+    const cel = this._cueRegion && this._cueRegion.element
+    if (!cel) return
+    cel.style.width = '14px'
+    cel.style.marginLeft = '-7px'   // center the bar on the cue point
+    cel.style.background = 'rgba(129, 140, 248, 0.95)'
+    cel.style.borderRadius = '3px'
+    cel.style.cursor = 'grab'
+    cel.style.zIndex = '5'
+    cel.style.boxShadow = '0 0 0 1px rgba(0,0,0,0.45)'
+    cel.title = 'Music cue — drag to set where the song fades in'
   }
 
   _updateHandles() {
     if (!this._region) return
     const startS = this._region.start
     const endS   = this._region.end
-    this.$('in-start').value = this._fmt(startS)
-    this.$('in-end').value   = this._fmt(endS)
+    const inStart = this.$('in-start')
+    const inEnd   = this.$('in-end')
+    if (inStart) inStart.value = this._fmt(startS)
+    if (inEnd)   inEnd.value   = this._fmt(endS)
     this.$('t0').textContent = this._fmt(startS)
   }
 
   _updateCueDisplay() {
     if (!this._cueRegion) return
-    this.$('in-cue').value = this._fmt(this._cueRegion.start)
+    const inCue = this.$('in-cue')
+    if (inCue) inCue.value = this._fmt(this._cueRegion.start)
   }
 
   _notifyUpdate() {
     if (!this._region) return
     const startMs = Math.round(this._region.start * 1000)
     const endMs   = Math.round(this._region.end   * 1000)
-    this.$('h-start').value = startMs
-    this.$('h-end').value   = endMs < Math.round(this._dur * 1000) ? endMs : ''
+    const hStart = this.$('h-start')
+    const hEnd   = this.$('h-end')
+    if (hStart) hStart.value = startMs
+    const durMs = Math.round(this._maxTime() * 1000)
+    if (hEnd) hEnd.value = endMs < durMs ? endMs : ''
   }
 
   _notifyCue() {
     if (!this._cueRegion) return
-    this.$('h-cue').value = Math.round(this._cueRegion.start * 1000)
+    const hCue = this.$('h-cue')
+    if (hCue) hCue.value = Math.round(this._cueRegion.start * 1000)
   }
 
   _currentInputValue(handle) {
@@ -407,7 +545,7 @@ class TrimEditor {
 
   _setPlayBtn(playing) {
     const btn = this.$('play-btn')
-    if (btn) btn.textContent = playing ? '⏸ Pause' : '▶ Play Trim'
+    if (btn) btn.textContent = playing ? '⏸ Pause' : '▶ Play{{ ' Trim' if show_trim else '' }}'
   }
 }
 
@@ -418,6 +556,7 @@ window.editors['{{ editor_id }}'] = new TrimEditor({
   startMs:  {{ start_ms }},
   endMs:    {{ end_ms if end_ms is not none else 'null' }},
   showCue:  {{ 'true' if show_cue else 'false' }},
+  showTrim: {{ 'true' if show_trim else 'false' }},
   cueMs:    {{ cue_ms }},
 })
 </script>

@@ -4,7 +4,7 @@
 
 <div class="flex items-center justify-between mb-6">
   <h1 class="text-2xl font-bold">Batting Order</h1>
-  <form method="POST" action="/lineup/size" class="flex items-center gap-2">
+  <form method="POST" action="/ondeck/lineup/size" class="flex items-center gap-2">
     <label class="text-sm text-gray-400">Slots</label>
     <input type="number" name="size" min="1" max="20" value="{{ size }}"
            class="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-center">
@@ -16,7 +16,7 @@
 </div>
 
 {% if players %}
-<form method="POST" action="/lineup/save">
+<form method="POST" action="/ondeck/lineup/save">
   <div class="space-y-2 max-w-2xl">
     {% for i, p in slots %}
     <div class="flex items-center gap-3 bg-gray-800 border border-gray-700/50 rounded-xl px-4 py-3">
@@ -50,7 +50,7 @@
   <div class="text-4xl mb-3">⚾</div>
   <div class="text-gray-300 font-medium mb-1">No players yet</div>
   <div class="text-gray-500 text-sm mb-4">Add players before building a lineup.</div>
-  <a href="/players/new"
+  <a href="/ondeck/players/new"
      class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold transition-colors">
     + Add Player
   </a>

@@ -9,7 +9,7 @@
   <div class="text-4xl mb-3">🎵</div>
   <div class="text-gray-300 font-medium mb-1">No songs in the library</div>
   <div class="text-gray-500 text-sm mb-4">Upload or import songs first, then assign them here.</div>
-  <a href="/library"
+  <a href="/ondeck/library"
      class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold transition-colors">
     Go to Library
   </a>
@@ -20,7 +20,7 @@
 <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Celebration Stingers</h2>
 <div class="grid gap-3 sm:grid-cols-2 mb-8">
   {% for kind, label in celebrations %}
-  <form method="POST" action="/sounds/celebration/{{ kind }}"
+  <form method="POST" action="/ondeck/sounds/celebration/{{ kind }}"
         class="bg-gray-800 border border-gray-700/50 rounded-xl p-4 flex items-center gap-3">
     <span class="font-semibold text-white w-28 shrink-0">{{ label }}</span>
     <select name="song_id"
@@ -50,7 +50,7 @@
       <span class="font-semibold text-white">{{ label }}</span>
       <span class="text-xs text-gray-400">{{ selected | length }} song{{ '' if selected | length == 1 else 's' }}</span>
     </summary>
-    <form method="POST" action="/sounds/page/{{ page_id }}" class="px-4 pb-4 border-t border-gray-700/50">
+    <form method="POST" action="/ondeck/sounds/page/{{ page_id }}" class="px-4 pb-4 border-t border-gray-700/50">
       <div class="grid gap-1.5 sm:grid-cols-2 py-3">
         {% for sid, s in songs %}
         <label class="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-900 hover:bg-gray-850 cursor-pointer text-sm">
