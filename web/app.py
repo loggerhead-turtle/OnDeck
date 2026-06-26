@@ -1187,7 +1187,10 @@ def ondeck_carousel_remove(song_type: str, song_id: str):
 
 @app.post("/ondeck/carousel/activate/<song_type>/<song_id>")
 def ondeck_carousel_activate(song_type: str, song_id: str):
-    """AJAX: Set a carousel song as the active/current song."""
+    """AJAX: Set a carousel song as the active/current song.
+
+    If activating a base song, automatically creates or uses the player's variant.
+    """
     pid = session.get("player_id")
     if not pid:
         return {"error": "Unauthorized"}, 403
@@ -1197,15 +1200,27 @@ def ondeck_carousel_activate(song_type: str, song_id: str):
         if not player:
             return {"error": "Player not found"}, 404
 
+        # If this is a base song, get/create the player's variant
+        base_song_id = cfg.get_base_song_id(song_id)
+        if base_song_id != song_id:
+            # song_id is already a variant, use it as-is
+            active_song_id = song_id
+        else:
+            # song_id is a base song, get/create player's variant
+            variant_id = cfg.get_or_create_player_song_variant(base_song_id, pid)
+            if not variant_id:
+                return {"error": "Failed to create variant"}, 500
+            active_song_id = variant_id
+
         if song_type == "walkup":
             if song_id in player.get("walkup_songs", []):
-                player["walkup_song_id"] = song_id
+                player["walkup_song_id"] = active_song_id
                 cfg.save()
             else:
                 return {"error": "Song not in carousel"}, 400
         elif song_type == "warmup":
             if song_id in player.get("warmup_songs", []):
-                player["pitching_warmup_song_id"] = song_id
+                player["pitching_warmup_song_id"] = active_song_id
                 cfg.save()
             else:
                 return {"error": "Song not in carousel"}, 400
@@ -1253,7 +1268,11 @@ def ondeck_carousel_deactivate(song_type: str, song_id: str):
 
 @app.post("/ondeck/trim-save/<song_type>/<song_id>")
 def ondeck_trim_save(song_type: str, song_id: str):
-    """AJAX: Save trim editor changes for a song."""
+    """AJAX: Save trim editor changes for a song.
+
+    Creates or updates a player-specific variant of the song with the trim bounds.
+    The original song is never modified.
+    """
     pid = session.get("player_id")
     if not pid:
         return {"error": "Unauthorized"}, 403
@@ -1261,18 +1280,26 @@ def ondeck_trim_save(song_type: str, song_id: str):
     if song_id not in cfg.songs:
         return {"error": "Song not found"}, 404
 
+    # Get the base song (or use the provided song_id if it's already a base)
+    base_song_id = cfg.get_base_song_id(song_id)
+
+    # Get or create the player's variant
+    variant_id = cfg.get_or_create_player_song_variant(base_song_id, pid)
+    if not variant_id:
+        return {"error": "Failed to create variant"}, 500
+
     start_ms = request.form.get("start_ms")
     end_ms = request.form.get("end_ms")
 
     with cfg._lock:
-        song = cfg.songs[song_id]
+        variant = cfg.songs[variant_id]
         if start_ms is not None:
-            song["start_ms"] = int(start_ms) if start_ms else 0
+            variant["start_ms"] = int(start_ms) if start_ms else 0
         if end_ms is not None:
-            song["end_ms"] = int(end_ms) if end_ms else None
+            variant["end_ms"] = int(end_ms) if end_ms else None
         cfg.save()
 
-    return {"success": True}
+    return {"success": True, "variant_id": variant_id}
 
 
 # ---------------------------------------------------------------------------

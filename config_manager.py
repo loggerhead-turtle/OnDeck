@@ -183,9 +183,11 @@ class ConfigManager:
             player.setdefault("midgame_song_id", None)
             player.setdefault("walkup_songs", [])  # List of walkup song IDs (carousel)
             player.setdefault("warmup_songs", [])  # List of warmup song IDs (carousel)
-        # Ensure all songs have alias field.
+        # Ensure all songs have alias and variant fields.
         for song in self._data.get("songs", {}).values():
             song.setdefault("alias", "")
+            song.setdefault("base_song_id", None)  # null for originals; song_id for variants
+            song.setdefault("created_by_player", None)  # player_id who created this variant
 
     # -- convenient accessors --------------------------------------------
 
@@ -356,6 +358,45 @@ class ConfigManager:
             }
             self.save()
         return sid
+
+    def get_or_create_player_song_variant(
+        self, base_song_id: str, player_id: str
+    ) -> str | None:
+        """Get or create a song variant for a player.
+
+        Returns the variant song_id. If base_song_id doesn't exist, returns None.
+        """
+        base_song = self.songs.get(base_song_id)
+        if not base_song:
+            return None
+
+        # Check if variant already exists for this player
+        with self._lock:
+            for sid, song in self.songs.items():
+                if (song.get("base_song_id") == base_song_id and
+                    song.get("created_by_player") == player_id):
+                    return sid
+
+            # Create new variant
+            variant_id = uuid.uuid4().hex
+            self.songs[variant_id] = {
+                "filename": base_song["filename"],
+                "display_name": base_song["display_name"],
+                "start_ms": base_song.get("start_ms", 0),
+                "end_ms": base_song.get("end_ms"),
+                "alias": base_song.get("alias", ""),
+                "base_song_id": base_song_id,
+                "created_by_player": player_id,
+            }
+            self.save()
+            return variant_id
+
+    def get_base_song_id(self, song_id: str) -> str:
+        """Get the base song id for a variant, or the song_id itself if it's a base."""
+        song = self.songs.get(song_id)
+        if song and song.get("base_song_id"):
+            return song.get("base_song_id")
+        return song_id
 
     def players_by_jersey(self) -> list[tuple[str, dict[str, Any]]]:
         """Players sorted by jersey number, for stable page layout."""
