@@ -79,6 +79,47 @@
   </p>
 </div>
 
+<!-- Team assignments section -->
+<div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-8">
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Team Assignments</h2>
+    <a href="/ondeck/teams" class="text-xs text-indigo-400 hover:text-indigo-300">Manage Teams</a>
+  </div>
+
+  <p class="text-sm text-gray-500 mb-4">
+    Assign players to teams. Players can belong to multiple teams (e.g., Varsity and JV).
+  </p>
+
+  {% if players %}
+  <div class="space-y-3 max-h-96 overflow-y-auto">
+    {% for pid, player in players %}
+    <div class="bg-gray-900 border border-gray-700/50 rounded-lg p-3">
+      <div class="flex items-center justify-between gap-4 mb-2">
+        <span class="text-white font-semibold">#{{ player.jersey }} {{ player.first_name }} {{ player.last_name }}</span>
+      </div>
+      {% if teams %}
+      <div class="flex flex-wrap gap-2">
+        {% for team_id, team in teams.items() %}
+        <label class="flex items-center gap-2 text-sm">
+          <input type="checkbox" name="player_teams_{{ pid }}" value="{{ team_id }}"
+                 {% if team_id in player.get('team_ids', []) %}checked{% endif %}
+                 onchange="updatePlayerTeams('{{ pid }}', this.form)"
+                 class="accent-green-500">
+          <span class="text-gray-300">{{ team.name }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-xs text-gray-500 italic">No teams available. <a href="/ondeck/teams" class="text-indigo-400">Create a team</a></p>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="text-sm text-gray-500">No players yet.</p>
+  {% endif %}
+</div>
+
 <!-- Add user form -->
 <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
   <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Add Staff Account</h2>
@@ -110,5 +151,33 @@
     </button>
   </form>
 </div>
+
+<script>
+function updatePlayerTeams(playerId, form) {
+  const teamIds = Array.from(form.querySelectorAll(`[name="player_teams_${playerId}"]:checked`))
+    .map(cb => cb.value);
+  const formData = new FormData();
+  teamIds.forEach(tid => formData.append('team_ids', tid));
+
+  fetch(`/admin/players/${playerId}/teams`, {
+    method: 'POST',
+    body: formData
+  }).then(r => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }).then(() => {
+    // Show brief success indicator
+    const el = form.closest('.bg-gray-900');
+    if (el) {
+      el.style.borderColor = '#4ade80';
+      setTimeout(() => {
+        el.style.borderColor = '';
+      }, 1500);
+    }
+  }).catch(err => {
+    alert(`Error updating teams: ${err.message}`);
+  });
+}
+</script>
 
 {% endblock %}
