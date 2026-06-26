@@ -107,6 +107,18 @@
   </div>
 </div>
 
+<!--
+  Dedicated streaming audio element used for preview playback.
+
+  WaveSurfer fetches and decodes the *entire* file as an in-memory blob before
+  it can play, which stalls on mobile (you hear a split second, then it sits
+  buffering). Playing through a plain <audio> element instead streams via HTTP
+  range requests and starts instantly, so playback no longer depends on the
+  waveform finishing its download/decode. WaveSurfer is kept only for drawing
+  the waveform and the drag-to-trim region UI.
+-->
+<audio id="{{ editor_id }}-audio" src="{{ audio_url }}" preload="metadata" playsinline class="hidden"></audio>
+
 <!-- Hidden form fields -->
 <input type="hidden" name="{{ start_field }}" id="{{ editor_id }}-h-start" value="{{ start_ms }}">
 <input type="hidden" name="{{ end_field }}"   id="{{ editor_id }}-h-end"   value="{{ end_ms if end_ms is not none else '' }}">
@@ -134,12 +146,16 @@ class TrimEditor {
     this._regions = null
     this._region  = null
     this._cueRegion = null
+    this._audio   = null
+    this._ready   = false
     this._playing = false
     this._dur     = 0
     this._init()
   }
 
   async _init() {
+    this._audio = this.$('audio')
+
     const regions = RegionsPlugin.create()
     this._regions = regions
 
@@ -156,6 +172,7 @@ class TrimEditor {
     })
 
     this._ws.on('ready', () => {
+      this._ready = true
       this._dur = this._ws.getDuration()
       this.$('dur').textContent = this._fmt(this._dur)
       this.$('tend').textContent = this._fmt(this._dur)
@@ -198,17 +215,28 @@ class TrimEditor {
       }
     })
 
-    this._ws.on('timeupdate', t => {
+    // Clicking the waveform seeks the streaming audio element too, so the
+    // playback position and the visible cursor stay in sync.
+    this._ws.on('interaction', t => {
+      if (this._audio) this._audio.currentTime = t
+    })
+
+    // Playback runs on the streaming <audio> element, not WaveSurfer.
+    this._audio.addEventListener('timeupdate', () => {
+      const t = this._audio.currentTime
       this.$('tcur').textContent = this._fmt(t)
-      if (this._playing && this._region && t >= this._region.end) {
-        this._ws.pause()
-        this._ws.setTime(this._region.start)
+      // Mirror the cursor on the waveform (WaveSurfer stays paused).
+      if (this._ready) { try { this._ws.setTime(t) } catch {} }
+      // Stop at the end of the trim window and reset to its start.
+      if (this._playing && t >= this._bounds().end) {
+        this._audio.pause()
+        this._audio.currentTime = this._bounds().start
         this._playing = false
         this._setPlayBtn(false)
       }
     })
 
-    this._ws.on('finish', () => {
+    this._audio.addEventListener('ended', () => {
       this._playing = false
       this._setPlayBtn(false)
     })
@@ -219,25 +247,41 @@ class TrimEditor {
   // ---- Playback ----------------------------------------------------------
 
   togglePlay() {
-    if (!this._ws || !this._region) return
+    if (!this._audio) return
     if (this._playing) {
-      this._ws.pause()
+      this._audio.pause()
       this._playing = false
       this._setPlayBtn(false)
     } else {
-      this._ws.setTime(this._region.start)
-      this._ws.play()
+      // Start from the trim-window start. Set currentTime *before* play() so
+      // the play() call stays inside the user gesture (required on mobile).
+      this._audio.currentTime = this._bounds().start
       this._playing = true
       this._setPlayBtn(true)
+      this._audio.play().catch(() => {
+        this._playing = false
+        this._setPlayBtn(false)
+      })
     }
   }
 
   stop() {
-    if (!this._ws) return
-    this._ws.pause()
-    if (this._region) this._ws.setTime(this._region.start)
+    if (!this._audio) return
+    this._audio.pause()
+    this._audio.currentTime = this._bounds().start
     this._playing = false
     this._setPlayBtn(false)
+  }
+
+  // Current trim window in seconds. Falls back to the server-provided values
+  // so playback works even before WaveSurfer has finished rendering the
+  // waveform (which on mobile can take a while to download and decode).
+  _bounds() {
+    if (this._region) return { start: this._region.start, end: this._region.end }
+    const start = this.startMs / 1000
+    const end   = this.endMs != null ? this.endMs / 1000
+                                      : (this._audio && this._audio.duration) || Infinity
+    return { start, end }
   }
 
   // ---- Handle nudging & input --------------------------------------------
@@ -290,8 +334,8 @@ class TrimEditor {
   }
 
   setToCursor(handle) {
-    if (!this._ws || !this._region) return
-    const cur = this._ws.getCurrentTime()
+    if (!this._audio || !this._region) return
+    const cur = this._audio.currentTime
     this.setHandleFromInput(handle, this._fmt(cur))
   }
 
