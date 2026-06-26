@@ -66,19 +66,35 @@
         <span class="font-mono text-sm text-red-400" id="rec-timer">0:00</span>
       </div>
 
-      {% if elevenlabs_ready %}
-      {# Submits the separate #ai-voice-form below — NOT nested in #player-form. #}
-      <button type="submit" form="ai-voice-form"
-              class="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm font-semibold transition-colors">
-        ✦ AI Voice
-      </button>
-      {% endif %}
-
       {% if player.announcement_file %}
         <span class="text-xs text-green-500 ml-auto">✔ Saved — re-record or regenerate to replace</span>
       {% else %}
         <span class="text-xs text-gray-600 ml-auto">No announcement yet</span>
       {% endif %}
+    </div>
+
+    <!-- AI announcer voice (ElevenLabs). The textarea + button submit the
+         separate #ai-voice-form below — NOT nested in #player-form. -->
+    <div class="mb-4 pt-4 border-t border-gray-700/50">
+      <label class="block text-xs text-gray-400 mb-1.5 font-medium">
+        Or generate with the AI announcer voice
+      </label>
+      <textarea form="ai-voice-form" name="text" rows="2"
+                class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30"
+                placeholder="Now batting…">{{ default_announcement }}</textarea>
+      <div class="flex items-center gap-3 mt-2">
+        <button type="submit" form="ai-voice-form"
+                class="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm font-semibold transition-colors">
+          ✦ Generate
+        </button>
+        {% if not elevenlabs_ready %}
+        <span class="text-xs text-amber-500/90">
+          Add your key and voice in
+          <a href="/ondeck/settings" class="underline hover:text-amber-400">Settings → Announcer Voice</a>
+          first.
+        </span>
+        {% endif %}
+      </div>
     </div>
 
     {% if player.announcement_file %}
@@ -226,9 +242,7 @@
 {# Secondary forms kept OUTSIDE #player-form so they don't nest and corrupt it.
    Their buttons/inputs above reference these via the HTML5 form= attribute. #}
 {% if pid %}
-{% if elevenlabs_ready %}
 <form id="ai-voice-form" method="POST" action="/ondeck/players/{{ pid }}/generate-announcement"></form>
-{% endif %}
 <form id="creds-form" method="POST" action="/ondeck/players/{{ pid }}/set-credentials"></form>
 <form id="delete-form" method="POST" action="/ondeck/players/{{ pid }}/delete"
       onsubmit="return confirm('Delete this player?')"></form>
