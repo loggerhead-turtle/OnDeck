@@ -166,8 +166,14 @@ class StreamDeckController:
     # ── Content handler ──────────────────────────────────
 
     def _handle_content(self, btn_idx: int) -> None:
-        kind = self.config.pages.get(self.current_page_id, {}).get(
-            "kind", self.current_page_id)
+        page = self.config.pages.get(self.current_page_id, {})
+        # A page with hand-edited slots is driven entirely by them (the web
+        # Stream Deck editor); otherwise fall back to the built-in auto-layout.
+        if page.get("slots"):
+            self._handle_slot_press(btn_idx)
+            return
+
+        kind = page.get("kind", self.current_page_id)
         slot = CONTENT_SLOTS.index(btn_idx)
 
         if kind == "home":
@@ -243,8 +249,11 @@ class StreamDeckController:
                 self._btn(btn_idx, "", (15, 15, 15))
 
     def _render_content_area(self) -> None:
-        kind = self.config.pages.get(self.current_page_id, {}).get(
-            "kind", self.current_page_id)
+        page = self.config.pages.get(self.current_page_id, {})
+        if page.get("slots"):
+            self._render_slot_page()
+            return
+        kind = page.get("kind", self.current_page_id)
         if kind == "home":
             self._render_home_page()
         elif kind == "lineup":
@@ -325,6 +334,63 @@ class StreamDeckController:
                 self._btn(btn_idx, name, bg)
             else:
                 self._btn(btn_idx, "", EMPTY_COLOR)
+
+    # ── Slot-driven pages (web Stream Deck editor) ───────
+
+    def _slot_default_label(self, slot: dict) -> str:
+        """A sensible button label when the editor left the label blank."""
+        kind, ref = slot.get("type"), slot.get("ref", "")
+        if kind == "player_walkup":
+            p = self.config.players.get(ref, {})
+            return f"#{p.get('jersey', '')}\n{(p.get('last_name', '') or '')[:8]}"
+        if kind == "song":
+            return (self.config.get_song_display_name(ref) or "")[:14]
+        if kind == "celebration":
+            return dict(CELEBRATIONS).get(ref, ref)
+        if kind == "nav":
+            return (self.config.pages.get(ref, {}).get("name", ref) or "")[:10]
+        if kind == "action":
+            return {"stop": "Stop", "fade": "Fade"}.get(ref, ref)
+        return ""
+
+    def _render_slot_page(self) -> None:
+        """Paint a page from its hand-edited slots; empty keys stay dark."""
+        slots = self.config.pages.get(self.current_page_id, {}).get("slots", {})
+        for btn_idx in CONTENT_SLOTS:
+            slot = slots.get(str(btn_idx))
+            if not slot or slot.get("type") in (None, "", "blank"):
+                self._btn(btn_idx, "", EMPTY_COLOR)
+                continue
+            label = slot.get("label") or self._slot_default_label(slot)
+            color = self._hex2rgb(slot["color"]) if slot.get("color") else DEFAULT_BG
+            self._btn(btn_idx, label[:16], color)
+
+    def _handle_slot_press(self, btn_idx: int) -> None:
+        slots = self.config.pages.get(self.current_page_id, {}).get("slots", {})
+        slot = slots.get(str(btn_idx))
+        if not slot:
+            return
+        kind, ref = slot.get("type"), slot.get("ref", "")
+        ok = False
+        if kind == "player_walkup":
+            self.lineup.note_external_playback()
+            ok = self.music.play_walkup(ref)
+        elif kind == "song":
+            self.lineup.note_external_playback()
+            ok = self.music.play_song(ref)
+        elif kind == "celebration":
+            self.lineup.note_external_playback()
+            ok = self.music.play_celebration(ref)
+        elif kind == "nav":
+            self.go_to_page(ref)
+            return
+        elif kind == "action":
+            if ref == "stop":
+                ok = self.music.stop()
+            elif ref == "fade":
+                ok = self.music.fade()
+        if ok:
+            self._flash(btn_idx)
 
     # ── Button drawing ───────────────────────────────────
 

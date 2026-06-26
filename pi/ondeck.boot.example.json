@@ -1,6 +1,6 @@
 {
-  "_comment": "ZERO-TOUCH LINKING. Rename this to 'ondeck.json' and copy it onto the Raspberry Pi's boot partition (the FAT volume that mounts on your computer when you insert the freshly-flashed SD card). Combined with Wi-Fi set via Raspberry Pi Imager (gear icon), the Pi connects and links itself to the cloud on first boot with no setup-hotspot step. boot_mode.py deletes this file after linking so the token is not left on the card. The sync_token must match ONDECK_SYNC_TOKEN in the cloud (Render env / Team Settings).",
+  "_comment": "ZERO-TOUCH LINKING. Rename this to 'ondeck.json' and copy it onto the Raspberry Pi's boot partition (the FAT volume that mounts on your computer when you insert the freshly-flashed SD card). Combined with Wi-Fi set via Raspberry Pi Imager (gear icon), the Pi connects and links itself to the cloud on first boot with no setup-hotspot step. boot_mode.py deletes this file after linking. Use a 'pairing_code' (generate it in the cloud portal under Devices) so the Pi gets its own revocable per-device token. Alternatively a raw 'sync_token' matching the cloud ONDECK_SYNC_TOKEN also works.",
   "cloud_url": "https://your-app.onrender.com",
-  "sync_token": "paste-your-ONDECK_SYNC_TOKEN-here",
-  "device_name": "Coach Pi"
+  "pairing_code": "PASTE-CODE-FROM-DEVICES-PAGE",
+  "device_name": "Stream Deck Pi"
 }

@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from netconfig import (  # noqa: E402
     list_saved_networks,
     read_sync_env,
+    redeem_pairing_code,
     scan_networks,
     write_sync_env,
 )
@@ -129,16 +130,21 @@ def register(app) -> None:
     def pi_cloud_settings():
         env = read_sync_env()
         msg = request.args.get("ok", "")
+        err = request.args.get("err", "")
         body = (
             (f"<div class='card'><div class='ok'>{msg}</div></div>" if msg else "")
+            + (f"<div class='card'><div class='err'>{err}</div></div>" if err else "")
             + "<div class='card'><h2>Cloud link</h2>"
-            + "<div class='small'>From the cloud portal's Settings page.</div>"
+            + "<div class='small'>Generate a pairing code in the cloud portal under "
+              "<b>Devices</b>, then enter it here. (Or paste a raw sync token instead.)</div>"
             + "<form method='post'><label>Cloud URL</label>"
             + f"<input type='url' name='cloud_url' value=\"{env.get('ONDECK_CLOUD_URL','')}\" "
               "placeholder='https://your-app.onrender.com' required>"
-            + "<label>Sync Token</label>"
+            + "<label>Pairing Code</label>"
+            + "<input name='pairing_code' placeholder='From the Devices page' autocomplete='off'>"
+            + "<label>Sync Token (optional)</label>"
             + f"<input name='sync_token' value=\"{env.get('ONDECK_SYNC_TOKEN','')}\" "
-              "placeholder='Sync token' autocomplete='off' required>"
+              "placeholder='Paste a raw token instead' autocomplete='off'>"
             + "<button class='btn' type='submit'>Save</button></form></div>"
             + "<a href='/'>&#8592; Back</a>"
         )
@@ -146,10 +152,19 @@ def register(app) -> None:
 
     @app.post("/cloud-settings")
     def pi_cloud_settings_post():
+        import socket
         cloud_url = request.form.get("cloud_url", "").strip()
+        pairing_code = request.form.get("pairing_code", "").strip()
         sync_token = request.form.get("sync_token", "").strip()
-        if not cloud_url or not sync_token:
-            return redirect(url_for("pi_cloud_settings", ok="Both fields are required."))
+        if not cloud_url or (not pairing_code and not sync_token):
+            return redirect(url_for("pi_cloud_settings",
+                                    err="Enter a Cloud URL and either a pairing code or a token."))
+        # Post-boot the Pi is online, so a pairing code can be redeemed inline.
+        if pairing_code:
+            try:
+                sync_token = redeem_pairing_code(cloud_url, pairing_code, socket.gethostname())
+            except Exception as exc:
+                return redirect(url_for("pi_cloud_settings", err=str(exc)))
         write_sync_env(cloud_url, sync_token)
         return redirect(url_for("pi_cloud_settings",
-                                ok="Saved. The Pi will sync on the next cycle."))
+                                ok="Linked. The Pi will sync on the next cycle."))

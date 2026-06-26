@@ -5,11 +5,11 @@
 #  Downloads the repo (no SSH key needed) and runs the installer.
 #  On a freshly-imaged Pi (any username), run ONE of:
 #
-#    curl -fsSL https://raw.githubusercontent.com/loggerhead-turtle/OnDeck/main/pi/bootstrap.sh | sudo bash -s -- coach
+#    curl -fsSL https://raw.githubusercontent.com/loggerhead-turtle/OnDeck/main/pi/bootstrap.sh | sudo bash -s -- deck
 #    curl -fsSL https://raw.githubusercontent.com/loggerhead-turtle/OnDeck/main/pi/bootstrap.sh | sudo bash -s -- audio
 #    curl -fsSL https://raw.githubusercontent.com/loggerhead-turtle/OnDeck/main/pi/bootstrap.sh | sudo bash -s -- both
 #
-#  Role can also come from ONDECK_ROLE=coach|audio|both. Other overrides:
+#  Role can also come from ONDECK_ROLE=deck|audio|both (coach == deck). Other overrides:
 #    ONDECK_REPO_SLUG  (default loggerhead-turtle/OnDeck)
 #    ONDECK_BRANCH     (default main)
 #    ONDECK_GIT_TOKEN  (for a private repo)
@@ -18,8 +18,8 @@
 set -euo pipefail
 
 ROLE="${1:-${ONDECK_ROLE:-both}}"
-case "$ROLE" in coach|audio|both) ;; *)
-  echo "Usage: bootstrap.sh <coach|audio|both>   (or set ONDECK_ROLE)"; exit 1 ;;
+case "$ROLE" in deck|coach|audio|both) ;; *)
+  echo "Usage: bootstrap.sh <deck|audio|both>   (or set ONDECK_ROLE)"; exit 1 ;;
 esac
 
 if [[ $EUID -ne 0 ]]; then echo "Run with sudo."; exit 1; fi

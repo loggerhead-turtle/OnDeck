@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Stream Deck{% endblock %}
+{% block content %}
+
+{# Build the grouped button-assignment <select> once; reused per slot row. #}
+{% macro assign_select(cur_type, cur_ref) %}
+<select name="assign" class="flex-1 min-w-0 px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 focus:border-green-500 text-white text-sm">
+  <option value="blank:" {% if not cur_type or cur_type == 'blank' %}selected{% endif %}>— Empty —</option>
+  <optgroup label="Players (walk-up)">
+    {% for pid, p in players %}
+    <option value="player_walkup:{{ pid }}" {% if cur_type=='player_walkup' and cur_ref==pid %}selected{% endif %}>#{{ p.jersey }} {{ p.last_name }}</option>
+    {% endfor %}
+  </optgroup>
+  <optgroup label="Songs">
+    {% for sid, name in songs %}
+    <option value="song:{{ sid }}" {% if cur_type=='song' and cur_ref==sid %}selected{% endif %}>{{ name }}</option>
+    {% endfor %}
+  </optgroup>
+  <optgroup label="Celebrations">
+    {% for key, label in celebrations %}
+    <option value="celebration:{{ key }}" {% if cur_type=='celebration' and cur_ref==key %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </optgroup>
+  <optgroup label="Go to page">
+    {% for pid, pg in pages %}
+    <option value="nav:{{ pid }}" {% if cur_type=='nav' and cur_ref==pid %}selected{% endif %}>{{ pg.name }}</option>
+    {% endfor %}
+  </optgroup>
+  <optgroup label="Actions">
+    <option value="action:stop" {% if cur_type=='action' and cur_ref=='stop' %}selected{% endif %}>Stop</option>
+    <option value="action:fade" {% if cur_type=='action' and cur_ref=='fade' %}selected{% endif %}>Fade</option>
+  </optgroup>
+</select>
+{% endmacro %}
+
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">Stream Deck Editor</h1>
+</div>
+
+<!-- Page tabs -->
+<div class="flex flex-wrap gap-2 mb-6">
+  {% for pid, pg in pages %}
+  <a href="{{ url_for('ondeck_deck', page=pid) }}"
+     class="px-3 py-1.5 rounded-lg text-sm font-medium {% if pid == page_id %}bg-green-700 text-white{% else %}bg-gray-700 text-gray-300 hover:bg-gray-600{% endif %}">
+    {{ pg.name }}
+  </a>
+  {% endfor %}
+</div>
+
+<div class="grid gap-6 lg:grid-cols-2">
+  <!-- Visual grid + page tools -->
+  <div class="bg-gray-800 border border-gray-700/50 rounded-xl p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold text-white">{{ page.name }} — layout</h2>
+      <span class="text-xs text-gray-500">8 × 4 (XL)</span>
+    </div>
+
+    <div class="grid grid-cols-8 gap-1.5">
+      {% for idx in range(32) %}
+        {% if idx in fixed_labels %}
+        <div class="aspect-square rounded-md bg-gray-900 border border-gray-700/40 flex items-center justify-center text-[10px] text-gray-500 text-center px-0.5">
+          {{ fixed_labels[idx] }}
+        </div>
+        {% else %}
+          {% set s = slots.get(idx|string) %}
+          <a href="#slot-{{ idx }}"
+             class="aspect-square rounded-md border flex items-center justify-center text-[10px] text-center px-0.5 leading-tight {% if s %}border-green-600/60 text-white{% else %}border-gray-700/40 text-gray-600{% endif %}"
+             {% if s and s.color %}style="background-color:#{{ s.color|replace('#','') }}"{% else %}style="background-color:#1f2937"{% endif %}>
+            {{ (s.label or '·') if s else '+' }}
+          </a>
+        {% endif %}
+      {% endfor %}
+    </div>
+
+    <!-- Bulk fill / clear -->
+    <div class="flex flex-wrap gap-2 mt-5">
+      <form method="POST" action="{{ url_for('ondeck_deck_fill_players', page_id=page_id, order='jersey') }}">
+        <button class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-medium">Fill players (by #)</button>
+      </form>
+      <form method="POST" action="{{ url_for('ondeck_deck_fill_players', page_id=page_id, order='alpha') }}">
+        <button class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-medium">Fill players (A–Z)</button>
+      </form>
+      <form method="POST" action="{{ url_for('ondeck_deck_clear', page_id=page_id) }}"
+            onsubmit="return confirm('Clear all buttons on this page?');">
+        <button class="px-3 py-1.5 rounded-lg bg-red-800/70 hover:bg-red-700 text-red-100 text-sm font-medium">Clear page</button>
+      </form>
+    </div>
+
+    <!-- Page management -->
+    <div class="mt-6 pt-5 border-t border-gray-700/50 space-y-3">
+      <form method="POST" action="{{ url_for('ondeck_deck_pages_rename', page_id=page_id) }}" class="flex gap-2">
+        <input type="text" name="name" value="{{ page.name }}"
+               class="flex-1 px-3 py-1.5 rounded-lg bg-gray-700 border border-gray-600 focus:border-green-500 text-white text-sm">
+        <button class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-medium">Rename</button>
+      </form>
+      <div class="flex flex-wrap gap-2">
+        <form method="POST" action="{{ url_for('ondeck_deck_pages_move', page_id=page_id) }}">
+          <input type="hidden" name="dir" value="up">
+          <button class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm">◀ Move left</button>
+        </form>
+        <form method="POST" action="{{ url_for('ondeck_deck_pages_move', page_id=page_id) }}">
+          <input type="hidden" name="dir" value="down">
+          <button class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm">Move right ▶</button>
+        </form>
+        {% if page.deletable %}
+        <form method="POST" action="{{ url_for('ondeck_deck_pages_delete', page_id=page_id) }}"
+              onsubmit="return confirm('Delete this page?');">
+          <button class="px-3 py-1.5 rounded-lg bg-red-800/70 hover:bg-red-700 text-red-100 text-sm">Delete page</button>
+        </form>
+        {% endif %}
+      </div>
+      <form method="POST" action="{{ url_for('ondeck_deck_pages_add') }}" class="flex gap-2 pt-2">
+        <input type="text" name="name" placeholder="New page name"
+               class="flex-1 px-3 py-1.5 rounded-lg bg-gray-700 border border-gray-600 focus:border-green-500 text-white text-sm">
+        <button class="px-3 py-1.5 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-medium">Add page</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Per-button editors -->
+  <div class="bg-gray-800 border border-gray-700/50 rounded-xl p-6">
+    <h2 class="text-lg font-semibold text-white mb-4">Buttons</h2>
+    <p class="text-xs text-gray-500 mb-4">Each row is one content key. Pick what it does, optionally set a label and a hex color (e.g. <span class="font-mono">2e7d4f</span>). Empty fields use sensible defaults.</p>
+    <div class="space-y-2">
+      {% for idx in content_slots %}
+        {% set s = slots.get(idx|string) %}
+        <form id="slot-{{ idx }}" method="POST" action="{{ url_for('ondeck_deck_slot', page_id=page_id) }}"
+              class="flex items-center gap-2 bg-gray-900 border border-gray-700/40 rounded-lg p-2">
+          <input type="hidden" name="idx" value="{{ idx }}">
+          <span class="w-8 text-center text-xs text-gray-500 font-mono">{{ idx }}</span>
+          {{ assign_select(s.type if s else '', s.ref if s else '') }}
+          <input type="text" name="label" value="{{ s.label if s else '' }}" placeholder="Label"
+                 class="w-24 px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 focus:border-green-500 text-white text-sm">
+          <input type="text" name="color" value="{{ s.color if s else '' }}" placeholder="hex"
+                 class="w-16 px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 focus:border-green-500 text-white text-sm font-mono">
+          <button class="px-3 py-1.5 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-medium">Save</button>
+        </form>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+{% endblock %}

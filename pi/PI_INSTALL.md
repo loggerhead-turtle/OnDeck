@@ -1,12 +1,16 @@
 # OnDeck — Raspberry Pi install, Wi-Fi & account linking
 
-OnDeck runs on Raspberry Pis on a local field network. There are two roles
-(a single Pi can do both for testing):
+OnDeck runs on two Raspberry Pis on a local field network (a single Pi can do
+both roles for testing). **Both** Pis support headless Wi-Fi onboarding — if no
+Wi-Fi is configured, the Pi raises an `OnDeck-Setup` hotspot with a captive
+portal:
 
 | Pi | Role | What it does |
 |----|------|--------------|
-| **Coach Pi** | `coach` | Stream Deck XL + web portal + Wi-Fi onboarding |
-| **Audio Pi** | `audio` | Plugged into the field PA; plays the audio |
+| **Stream Deck Pi** | `deck` | Stream Deck XL + local web portal + Wi-Fi onboarding |
+| **Audio Pi** | `audio` | Plugged into the field PA; plays the audio + Wi-Fi onboarding |
+
+(`coach` is accepted as an alias of `deck` for back-compat.)
 
 ---
 
@@ -29,8 +33,8 @@ OnDeck runs on Raspberry Pis on a local field network. There are two roles
 SSH in (`ssh <youruser>@<hostname>.local`) and run **one** of:
 
 ```bash
-# Coach Pi (Stream Deck + web portal)
-curl -fsSL https://raw.githubusercontent.com/loggerhead-turtle/OnDeck/main/pi/bootstrap.sh | sudo bash -s -- coach
+# Stream Deck Pi (Stream Deck + web portal)
+curl -fsSL https://raw.githubusercontent.com/loggerhead-turtle/OnDeck/main/pi/bootstrap.sh | sudo bash -s -- deck
 
 # Audio Pi (field PA)
 curl -fsSL https://raw.githubusercontent.com/loggerhead-turtle/OnDeck/main/pi/bootstrap.sh | sudo bash -s -- audio
@@ -42,28 +46,34 @@ curl -fsSL https://raw.githubusercontent.com/loggerhead-turtle/OnDeck/main/pi/bo
 Bootstrap downloads over **HTTPS** (no SSH deploy key). For a private repo:
 
 ```bash
-curl -fsSL .../pi/bootstrap.sh | sudo ONDECK_GIT_TOKEN=ghp_xxx bash -s -- coach
+curl -fsSL .../pi/bootstrap.sh | sudo ONDECK_GIT_TOKEN=ghp_xxx bash -s -- deck
 ```
 
 Then reboot: `sudo reboot`.
 
 ---
 
-## 3. Link the device to the cloud
+## 3. Link the device to your account
 
-OnDeck links a Pi to the cloud with a **Cloud URL** and a **Sync Token**
-(`ONDECK_SYNC_TOKEN` — the value Render generated for your service; also shown in
-the portal Settings). Three ways to provide them:
+Each Pi links to your cloud account with a **pairing code** you generate in the
+portal under **Devices**. Generate one code per Pi (name it, pick the role); the
+code mints that device its own sync token, so you can see it, rename it, or
+**revoke** it independently. Three ways to enter it:
 
-- **Captive portal (default):** an unlinked Coach Pi broadcasts an
-  **`OnDeck-Setup`** Wi-Fi network. Connect a phone; a setup page opens — pick
-  your Wi-Fi, then paste the Cloud URL + Sync Token. The Pi reboots linked.
+- **Captive portal (default):** an unlinked Pi broadcasts an **`OnDeck-Setup`**
+  Wi-Fi network. Connect a phone; a setup page opens — pick your Wi-Fi, then
+  enter the **Cloud URL + Pairing Code**. The Pi reboots, joins Wi-Fi, redeems
+  the code, and comes up linked.
 - **Zero-touch:** drop an `ondeck.json` on the SD card's boot partition
-  (see `pi/ondeck.boot.example.json`) with `cloud_url` + `sync_token`. Combined
-  with Wi-Fi baked in via Imager, the Pi self-links on first boot — no portal.
-  The file is deleted after linking so the token isn't left on the card.
-- **From the portal:** once online, **Settings → Cloud** (`/cloud-settings`)
-  on the Coach Pi.
+  (see `pi/ondeck.boot.example.json`) with `cloud_url` + `pairing_code` (a raw
+  `sync_token` also works). Combined with Wi-Fi baked in via Imager, the Pi
+  self-links on first boot — no portal. The file is deleted after linking.
+- **From the portal:** once online, **Cloud Settings** (`/cloud-settings`) on
+  the Stream Deck Pi accepts a pairing code (or a raw token).
+
+The code is short-lived and single-use; if it expires, generate a new one on the
+Devices page. To unlink a Pi, **Revoke** it on the Devices page — its token
+stops working immediately.
 
 ---
 
@@ -77,7 +87,7 @@ Three ways, any time:
 2. **No working Wi-Fi → portal opens automatically.** If a linked Pi can't get
    online, it reopens the `OnDeck-Setup` network with an **Add Wi-Fi** page
    (existing networks are kept).
-3. **From the portal:** **Wi-Fi** (`/wifi`) on the Coach Pi.
+3. **From the portal:** **Wi-Fi** (`/wifi`) on the Stream Deck Pi.
 
 ### Force the setup portal (guaranteed)
 
@@ -91,13 +101,13 @@ regardless of Wi-Fi/link state, and the marker is consumed after one run.
 
 | Service | Role | Purpose |
 |---------|------|---------|
-| `ondeck-setup` | coach | Boot gate: applies boot-partition Wi-Fi, links, or opens the portal. Runs **before** `ondeck-coach`. |
-| `ondeck-coach` | coach | Stream Deck loop + web portal (`:5000`). |
+| `ondeck-setup` | all | Boot gate: applies boot-partition Wi-Fi, redeems a pending pairing code, or opens the captive portal. Runs **before** the main service on every role. |
+| `ondeck-coach` | deck | Stream Deck loop + web portal (`:5000`). |
 | `ondeck-audio` | audio | Audio Pi playback server (`:5100`). |
 | `ondeck-sync.timer` | all | Pulls config + audio from the cloud every 5 min. |
 
 ```bash
-journalctl -u ondeck-setup -f     # boot/Wi-Fi onboarding
+journalctl -u ondeck-setup -f     # boot/Wi-Fi onboarding + pairing
 journalctl -u ondeck-coach -f     # Stream Deck + portal
 journalctl -u ondeck-sync  -f     # cloud sync
 ```

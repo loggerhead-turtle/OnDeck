@@ -7,8 +7,9 @@
 #
 # Usage:
 #   ./install.sh            # install for the current user, both roles
-#   ROLE=audio ./install.sh # install only the Audio Pi service
-#   ROLE=coach ./install.sh # install only the Coach Pi service
+#   ROLE=audio ./install.sh # install only the Audio Pi service (music)
+#   ROLE=deck  ./install.sh # install only the Stream Deck Pi service
+#   ROLE=coach ./install.sh # alias of deck (back-compat)
 #
 # Re-running is safe (idempotent).
 
@@ -18,35 +19,42 @@ set -euo pipefail
 RUN_USER="${SUDO_USER:-$USER}"
 RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROLE="${ROLE:-both}"          # audio | coach | both
+ROLE="${ROLE:-both}"          # audio | deck | coach | both  (coach == deck)
 PYTHON="${PYTHON:-python3}"
+
+# Resolve the role into which services to install. "deck" and the legacy
+# "coach" both install the Stream Deck unit (Stream Deck + local web portal).
+case "$ROLE" in
+  audio)      INSTALL_AUDIO=1; INSTALL_DECK=0 ;;
+  deck|coach) INSTALL_AUDIO=0; INSTALL_DECK=1 ;;
+  both)       INSTALL_AUDIO=1; INSTALL_DECK=1 ;;
+  *) echo "Unknown ROLE '$ROLE' (use audio|deck|coach|both)"; exit 1 ;;
+esac
 
 echo "OnDeck installer"
 echo "  user:   $RUN_USER"
 echo "  home:   $RUN_HOME"
 echo "  repo:   $REPO_DIR"
-echo "  role:   $ROLE"
+echo "  role:   $ROLE  (audio=$INSTALL_AUDIO deck=$INSTALL_DECK)"
 
 # --- system dependencies -------------------------------------------------
 echo "==> Installing system packages (sudo may prompt)..."
 sudo apt-get update -qq
 PKGS=(python3 python3-venv python3-pip ffmpeg)
-if [[ "$ROLE" == "audio" || "$ROLE" == "both" ]]; then
+if [[ "$INSTALL_AUDIO" == 1 ]]; then
   # Audio playback + YouTube import + Bluetooth.
   PKGS+=(alsa-utils bluez)
 fi
-if [[ "$ROLE" == "coach" || "$ROLE" == "both" ]]; then
-  # Headless Wi-Fi onboarding: captive-portal hotspot + network tooling.
-  PKGS+=(hostapd dnsmasq iw wireless-tools wpasupplicant iptables)
-fi
+# Headless Wi-Fi onboarding (captive-portal hotspot + network tooling) runs on
+# EVERY role — both the Audio Pi and the Stream Deck Pi can be set up with no
+# pre-configured Wi-Fi.
+PKGS+=(hostapd dnsmasq iw wireless-tools wpasupplicant iptables)
 sudo apt-get install -y --no-install-recommends "${PKGS[@]}"
 
 # The setup portal manages the AP itself; keep these services from grabbing
 # wlan0 at boot (the boot gate starts/stops them on demand).
-if [[ "$ROLE" == "coach" || "$ROLE" == "both" ]]; then
-  sudo systemctl unmask hostapd 2>/dev/null || true
-  sudo systemctl disable hostapd dnsmasq 2>/dev/null || true
-fi
+sudo systemctl unmask hostapd 2>/dev/null || true
+sudo systemctl disable hostapd dnsmasq 2>/dev/null || true
 
 # --- python environment --------------------------------------------------
 echo "==> Creating virtual environment..."
@@ -88,21 +96,32 @@ EOF
   sudo systemctl restart "$name"
 }
 
-if [[ "$ROLE" == "audio" || "$ROLE" == "both" ]]; then
+if [[ "$INSTALL_AUDIO" == 1 ]]; then
   install_service "ondeck-audio" "$REPO_DIR/music_server.py" "OnDeck Audio Pi server"
 fi
-if [[ "$ROLE" == "coach" || "$ROLE" == "both" ]]; then
-  install_service "ondeck-coach" "$REPO_DIR/main.py" "OnDeck Coach Pi (Stream Deck + web portal)"
+if [[ "$INSTALL_DECK" == 1 ]]; then
+  install_service "ondeck-coach" "$REPO_DIR/main.py" "OnDeck Stream Deck Pi (Stream Deck + web portal)"
 
-  # --- headless network onboarding (boot gate + captive portal) ----------
-  # A oneshot that runs BEFORE ondeck-coach: applies boot-partition Wi-Fi,
-  # links via a dropped ondeck.json, or opens the OnDeck-Setup hotspot when the
-  # Pi has no working Wi-Fi / cloud link. Runs as root (needs hostapd/dnsmasq).
-  echo "==> Installing service: ondeck-setup (boot gate)"
-  sudo tee /etc/systemd/system/ondeck-setup.service >/dev/null <<EOF
+  # Let the web portal (service user) manage Wi-Fi via the helper without a
+  # password prompt — used by the deck portal's /wifi page.
+  echo "==> Installing sudoers rule for Wi-Fi management"
+  sudo tee /etc/sudoers.d/ondeck-wifi >/dev/null <<EOF
+$RUN_USER ALL=(root) NOPASSWD: $VENV/bin/python $REPO_DIR/pi/add_wifi.py, /sbin/wpa_cli -i wlan0 reconfigure, /usr/sbin/wpa_cli -i wlan0 reconfigure
+EOF
+  sudo chmod 0440 /etc/sudoers.d/ondeck-wifi
+fi
+
+# --- headless network onboarding (boot gate + captive portal) ------------
+# A oneshot that runs BEFORE the main service on EVERY role: applies
+# boot-partition Wi-Fi, links via a dropped ondeck.json / pending pairing code,
+# or opens the OnDeck-Setup hotspot when the Pi has no working Wi-Fi / cloud
+# link. Runs as root (needs hostapd/dnsmasq). The Before= lists both units; a
+# missing one is simply ignored.
+echo "==> Installing service: ondeck-setup (boot gate)"
+sudo tee /etc/systemd/system/ondeck-setup.service >/dev/null <<EOF
 [Unit]
 Description=OnDeck boot gate (Wi-Fi setup / cloud link)
-Before=ondeck-coach.service
+Before=ondeck-audio.service ondeck-coach.service
 After=network.target
 
 [Service]
@@ -121,17 +140,8 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOF
-  sudo systemctl daemon-reload
-  sudo systemctl enable ondeck-setup.service
-
-  # Let the web portal (service user) manage Wi-Fi via the helper without a
-  # password prompt — used by the /wifi page.
-  echo "==> Installing sudoers rule for Wi-Fi management"
-  sudo tee /etc/sudoers.d/ondeck-wifi >/dev/null <<EOF
-$RUN_USER ALL=(root) NOPASSWD: $VENV/bin/python $REPO_DIR/pi/add_wifi.py, /sbin/wpa_cli -i wlan0 reconfigure, /usr/sbin/wpa_cli -i wlan0 reconfigure
-EOF
-  sudo chmod 0440 /etc/sudoers.d/ondeck-wifi
-fi
+sudo systemctl daemon-reload
+sudo systemctl enable ondeck-setup.service
 
 # --- cloud sync timer (all roles) ----------------------------------------
 # Runs sync_agent.py every 5 minutes when internet is available.
@@ -185,9 +195,9 @@ sudo systemctl start ondeck-sync.timer
 
 echo
 echo "OnDeck installed."
-[[ "$ROLE" == "audio" || "$ROLE" == "both" ]] && \
+[[ "$INSTALL_AUDIO" == 1 ]] && \
   echo "  Audio server:  http://$(hostname -I | awk '{print $1}'):5100/health"
-[[ "$ROLE" == "coach" || "$ROLE" == "both" ]] && \
+[[ "$INSTALL_DECK" == 1 ]] && \
   echo "  Web portal:    http://$(hostname -I | awk '{print $1}'):5000"
 echo "  Sync logs:     journalctl -u ondeck-sync -f"
 echo "  Sync env:      $SYNC_ENV  (add cloud URL + token here)"

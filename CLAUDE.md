@@ -5,7 +5,7 @@ OnDeck is a baseball walk-up music system. A coach manages players and music thr
 ## Architecture
 
 ```
-Cloud (Render)          Coach Pi              Audio Pi
+Cloud (Render)          Stream Deck Pi        Audio Pi
 ┌─────────────┐         ┌──────────────┐      ┌──────────────┐
 │ web/app.py  │◄──sync──│ sync_agent.py│      │music_server.py│
 │ Flask :443  │         │ Flask :5000  │─────►│ Flask :5100   │
@@ -27,6 +27,9 @@ The cloud instance is the source of truth. The Pi polls `/sync/*` endpoints ever
 | `web/templates/_trim_editor.html` | WaveSurfer.js v7 DAW-style trim editor macro |
 | `web/templates/player_edit.html` | Player editor with MediaRecorder announcement recording |
 | `web/templates/library_edit.html` | Song editor with trim editor |
+| `web/templates/deck_editor.html` | Stream Deck button editor (8×4 grid, per-key slots) |
+| `web/templates/devices.html` | Pi device pairing + management (codes, rename, revoke) |
+| `streamdeck_controller.py` | Stream Deck XL runtime (renders from `pages[].slots` or auto-layout) |
 | `web/templates/login.html` | Standalone login page |
 | `web/templates/setup.html` | First-run account creation |
 | `web/templates/settings.html` | Settings + YouTube cookie upload |
@@ -105,9 +108,38 @@ WaveSurfer.js v7 ESM + RegionsPlugin. Implemented as a Jinja2 macro in `_trim_ed
 | `GET /sync/config` | Bearer token | Returns full config.json |
 | `GET /sync/files` | Bearer token | Returns list of `{filename, md5}` for all music files |
 | `GET /sync/files/<filename>` | Bearer token | Streams the audio file |
-| `POST /sync/ping` | Bearer token | Pi posts `{hostname, ip}`, cloud records last_seen |
+| `POST /sync/ping` | Bearer token | Pi posts `{hostname, ip}`; cloud updates the device's last_seen |
+| `POST /sync/pair` | none (code) | Pi posts `{code, hostname}`; cloud redeems a pairing code → returns a per-device `sync_token` |
 
-Pi reads `~/ondeck/sync.env` for `ONDECK_CLOUD_URL` and `ONDECK_SYNC_TOKEN`.
+Bearer token = the global `ONDECK_SYNC_TOKEN` **or** any non-revoked per-device
+token minted via pairing. Pi reads `~/ondeck/sync.env` for `ONDECK_CLOUD_URL` and
+`ONDECK_SYNC_TOKEN`.
+
+## Devices & Pairing
+
+Admins link each Pi from the portal **Devices** page (`/ondeck/devices`):
+generate a short pairing code (named, role `deck`/`audio`); the Pi redeems it via
+`/sync/pair` (captive portal, boot file, or `/cloud-settings`) and gets its own
+revocable token. `config["devices"]` holds linked Pis (name, role, token,
+last_seen); `config["pairing_codes"]` holds outstanding codes (TTL like signup
+links). Helpers live in `config_manager.py` (`create_pairing_code`,
+`redeem_pairing_code`, `device_for_token`, `touch_device`, `revoke_device`).
+
+## Stream Deck Editor
+
+The portal **Stream Deck** page (`/ondeck/deck`) lays out the physical XL keys.
+Each page stores `pages[id].slots["<idx>"] = {type, ref, label, color}` for the 21
+content keys (`type ∈ player_walkup|song|celebration|nav|action|blank`). The deck
+runtime (`streamdeck_controller.py`) renders/handles from slots when a page has
+any, else falls back to the built-in auto-layout. Everything syncs via
+`/sync/config` (no new endpoints). Fixed nav/transport/page-shortcut keys stay
+owned by the controller.
+
+## Pi Roles
+
+`install.sh` / `bootstrap.sh` take `ROLE=audio|deck|both` (`coach` == `deck`).
+**Both** roles install the `ondeck-setup` boot gate, so the Audio Pi and the
+Stream Deck Pi can each be onboarded headlessly over the `OnDeck-Setup` hotspot.
 
 ## Render Deployment
 

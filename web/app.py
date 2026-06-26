@@ -281,13 +281,30 @@ def _inject_globals():
     }
 
 
+def _bearer_token() -> str:
+    """The token from an ``Authorization: Bearer <token>`` header, or ""."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:].strip()
+    return ""
+
+
+def _valid_sync_token(token: str) -> bool:
+    """A token is valid if it's the global sync token or a live device token."""
+    if SYNC_TOKEN and token == SYNC_TOKEN:
+        return True
+    return cfg.device_for_token(token) is not None
+
+
 def _require_sync_token(f):
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
-        if SYNC_TOKEN:
-            auth = request.headers.get("Authorization", "")
-            if auth != f"Bearer {SYNC_TOKEN}":
-                return jsonify(error="unauthorized"), 401
+        # Only enforce when a global token is configured (cloud). In that mode a
+        # request is authorized by the global token OR any non-revoked
+        # per-device token minted through pairing. With no global token set
+        # (local single-Pi dev), the sync endpoints stay open as before.
+        if SYNC_TOKEN and not _valid_sync_token(_bearer_token()):
+            return jsonify(error="unauthorized"), 401
         return f(*args, **kwargs)
     return wrapper
 
@@ -1421,6 +1438,13 @@ CELEBRATIONS = [
     ("strikeout", "Strikeout"),
 ]
 
+# Fixed Stream Deck XL keys the controller owns (shown locked in the editor).
+_DECK_FIXED_LABELS = {
+    0: "▲ Prev", 8: "⌂ Home", 16: "▼ Next",
+    24: "▶ Play", 25: "■ Stop", 26: "↘ Fade",
+    27: "Page", 28: "Page", 29: "Page", 30: "Page", 31: "Page",
+}
+
 
 @app.get("/ondeck/sounds")
 def ondeck_sounds():
@@ -1454,6 +1478,132 @@ def ondeck_sounds_celebration_save(kind: str):
     cfg.set_celebration(kind, request.form.get("song_id") or None)
     flash(f"{dict(CELEBRATIONS)[kind]} stinger saved.", "success")
     return redirect(url_for("ondeck_sounds"))
+
+
+# ---------------------------------------------------------------------------
+# Stream Deck button editor — admin/editor lay out the physical deck keys
+# ---------------------------------------------------------------------------
+
+def _deck_song_choices() -> list[tuple[str, str]]:
+    """(song_id, name) for base songs (variants excluded), sorted by name."""
+    out = [
+        (sid, cfg.get_song_display_name(sid))
+        for sid, s in cfg.songs.items()
+        if not s.get("base_song_id")
+    ]
+    return sorted(out, key=lambda kv: kv[1].lower())
+
+
+@app.get("/ondeck/deck")
+def ondeck_deck():
+    _check_auth(["admin", "editor"])
+    order = cfg.get_page_order()
+    page_id = request.args.get("page") or (order[0] if order else "home")
+    if page_id not in cfg.pages:
+        page_id = order[0] if order else "home"
+    page = cfg.pages.get(page_id, {})
+    return render_template(
+        "deck_editor.html",
+        pages=[(pid, cfg.pages[pid]) for pid in order],
+        page_id=page_id,
+        page=page,
+        slots=page.get("slots", {}),
+        content_slots=cfg.DECK_CONTENT_SLOTS,
+        fixed_labels=_DECK_FIXED_LABELS,
+        players=cfg.players_by_jersey(),
+        songs=_deck_song_choices(),
+        celebrations=CELEBRATIONS,
+    )
+
+
+@app.post("/ondeck/deck/<page_id>/slot")
+def ondeck_deck_slot(page_id: str):
+    _check_auth(["admin", "editor"])
+    if page_id not in cfg.pages:
+        abort(404)
+    try:
+        idx = int(request.form.get("idx", ""))
+    except ValueError:
+        abort(400)
+    # The button assignment arrives as "type:ref" (e.g. "song:abc123",
+    # "action:fade", "blank:" to clear).
+    assign = request.form.get("assign", "blank:")
+    kind, _, ref = assign.partition(":")
+    cfg.set_page_slot(page_id, idx, {
+        "type": kind,
+        "ref": ref,
+        "label": request.form.get("label", "").strip(),
+        "color": request.form.get("color", "").strip(),
+    })
+    flash("Button saved.", "success")
+    return redirect(url_for("ondeck_deck", page=page_id))
+
+
+@app.post("/ondeck/deck/<page_id>/fill-players")
+def ondeck_deck_fill_players(page_id: str):
+    _check_auth(["admin", "editor"])
+    if page_id not in cfg.pages:
+        abort(404)
+    order = request.args.get("order", "jersey")
+    cfg.fill_player_slots(page_id, "alpha" if order == "alpha" else "jersey")
+    flash(f"Filled buttons with players ({order} order).", "success")
+    return redirect(url_for("ondeck_deck", page=page_id))
+
+
+@app.post("/ondeck/deck/<page_id>/clear")
+def ondeck_deck_clear(page_id: str):
+    _check_auth(["admin", "editor"])
+    if page_id not in cfg.pages:
+        abort(404)
+    cfg.clear_page_slots(page_id)
+    flash("Page buttons cleared.", "success")
+    return redirect(url_for("ondeck_deck", page=page_id))
+
+
+@app.post("/ondeck/deck/pages/add")
+def ondeck_deck_pages_add():
+    _check_auth(["admin", "editor"])
+    name = request.form.get("name", "").strip()
+    if not name:
+        flash("Page name is required.", "error")
+        return redirect(url_for("ondeck_deck"))
+    pid = cfg.add_page(name)
+    flash(f"Page '{name}' added.", "success")
+    return redirect(url_for("ondeck_deck", page=pid))
+
+
+@app.post("/ondeck/deck/pages/<page_id>/rename")
+def ondeck_deck_pages_rename(page_id: str):
+    _check_auth(["admin", "editor"])
+    if page_id not in cfg.pages:
+        abort(404)
+    cfg.rename_page(page_id, request.form.get("name", ""))
+    flash("Page renamed.", "success")
+    return redirect(url_for("ondeck_deck", page=page_id))
+
+
+@app.post("/ondeck/deck/pages/<page_id>/move")
+def ondeck_deck_pages_move(page_id: str):
+    _check_auth(["admin", "editor"])
+    if page_id not in cfg.pages:
+        abort(404)
+    direction = -1 if request.form.get("dir") == "up" else 1
+    cfg.move_page(page_id, direction)
+    return redirect(url_for("ondeck_deck", page=page_id))
+
+
+@app.post("/ondeck/deck/pages/<page_id>/delete")
+def ondeck_deck_pages_delete(page_id: str):
+    _check_auth(["admin", "editor"])
+    page = cfg.pages.get(page_id)
+    if not page:
+        abort(404)
+    if not page.get("deletable"):
+        flash("Built-in pages can't be deleted.", "error")
+        return redirect(url_for("ondeck_deck", page=page_id))
+    cfg.delete_page(page_id)
+    flash("Page deleted.", "success")
+    return redirect(url_for("ondeck_deck"))
 
 
 # ---------------------------------------------------------------------------
@@ -1531,6 +1681,60 @@ def ondeck_signup_links_revoke(code: str):
     cfg.revoke_signup_link(code)
     flash("Signup link revoked.", "success")
     return redirect(url_for("ondeck_signup_links"))
+
+
+# ---------------------------------------------------------------------------
+# Devices — admin: pair, name, and revoke field Raspberry Pis
+# ---------------------------------------------------------------------------
+
+@app.get("/ondeck/devices")
+def ondeck_devices():
+    _check_auth(["admin"])
+    # Surface a freshly-created code once (passed via the redirect) so the coach
+    # can read it off to the device.
+    new_code = request.args.get("code", "")
+    new_name = request.args.get("name", "")
+    return render_template(
+        "devices.html",
+        devices=cfg.list_devices(),
+        new_code=new_code,
+        new_name=new_name,
+        cloud_url=request.host_url.rstrip("/"),
+    )
+
+
+@app.post("/ondeck/devices/pair-code")
+def ondeck_devices_pair_code():
+    _check_auth(["admin"])
+    name = request.form.get("name", "").strip() or "OnDeck Pi"
+    role = request.form.get("role", "deck")
+    entry = cfg.create_pairing_code(name, role)
+    flash(f"Pairing code for '{entry['name']}': {entry['code']}", "success")
+    return redirect(url_for("ondeck_devices", code=entry["code"], name=entry["name"]))
+
+
+@app.post("/ondeck/devices/<device_id>/rename")
+def ondeck_devices_rename(device_id: str):
+    _check_auth(["admin"])
+    if device_id not in cfg.devices:
+        abort(404)
+    name = request.form.get("name", "").strip()
+    if not name:
+        flash("Device name is required.", "error")
+    else:
+        cfg.rename_device(device_id, name)
+        flash("Device renamed.", "success")
+    return redirect(url_for("ondeck_devices"))
+
+
+@app.post("/ondeck/devices/<device_id>/revoke")
+def ondeck_devices_revoke(device_id: str):
+    _check_auth(["admin"])
+    if device_id not in cfg.devices:
+        abort(404)
+    cfg.revoke_device(device_id)
+    flash("Device revoked. It can no longer sync until re-paired.", "success")
+    return redirect(url_for("ondeck_devices"))
 
 
 @app.post("/ondeck/settings/signup-link-expires")
@@ -1674,14 +1878,38 @@ def sync_download_file(filename: str):
 def sync_ping():
     body  = request.get_json(force=True) or {}
     pi_id = (body.get("pi_id") or "default")[:64]
-    with cfg._lock:
-        cfg.system.setdefault("known_pis", {})[pi_id] = {
-            "ip":        body.get("ip") or request.remote_addr,
-            "hostname":  body.get("hostname", pi_id),
-            "last_seen": body.get("timestamp", ""),
-        }
-        cfg.save(mark_dirty=False)
+    ip = body.get("ip") or request.remote_addr
+    hostname = body.get("hostname", pi_id)
+    # If the Pi authenticated with a per-device token, update that device's
+    # check-in. Fall back to the legacy known_pis map (global token / unpaired).
+    if not cfg.touch_device(_bearer_token(), ip=ip, hostname=hostname):
+        with cfg._lock:
+            cfg.system.setdefault("known_pis", {})[pi_id] = {
+                "ip":        ip,
+                "hostname":  hostname,
+                "last_seen": body.get("timestamp", ""),
+            }
+            cfg.save(mark_dirty=False)
     return jsonify(ok=True)
+
+
+@app.post("/sync/pair")
+def sync_pair():
+    """Redeem a pairing code → mint a per-device sync token.
+
+    Unauthenticated by design: the short-lived code *is* the credential. The Pi
+    captive portal (or a boot file) posts the code and gets back a token it then
+    stores in sync.env for all future /sync/* calls.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    code = (body.get("code") or "").strip()
+    hostname = (body.get("hostname") or "")[:64]
+    ip = body.get("ip") or request.remote_addr
+    result = cfg.redeem_pairing_code(code, hostname=hostname, ip=ip)
+    if not result:
+        return jsonify(ok=False, error="invalid or expired code"), 410
+    device_id, token, name = result
+    return jsonify(ok=True, sync_token=token, device_id=device_id, name=name)
 
 
 # ---------------------------------------------------------------------------

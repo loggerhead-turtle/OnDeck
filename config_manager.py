@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import tempfile
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -79,6 +81,12 @@ def _default_config() -> dict[str, Any]:
         "pages": _default_pages(),
         "teams": {},            # team_id -> {name, created_at}
         "signup_links": [],     # [{code, team_ids, created_at, expires_at}]
+        # Linked Raspberry Pis. A Pi is paired with a short code generated in the
+        # portal; redeeming the code mints a per-device sync token here so each
+        # device can be named, seen, and revoked independently of the others.
+        "devices": {},          # device_id -> {id, name, role, token, hostname,
+                                #               ip, paired_at, last_seen, revoked}
+        "pairing_codes": [],    # [{code, name, role, created_at, expires_at, redeemed_by}]
     }
 
 
@@ -105,6 +113,12 @@ def _default_pages() -> dict[str, Any]:
             "slots": {},          # slot_index -> button config (color/text/font)
         }
     return pages
+
+
+# Stream Deck XL fixed/content key indices (module level so the class body can
+# reference them — a class-scope comprehension can't see sibling class vars).
+_DECK_FIXED_SLOTS = {0, 8, 16, 24, 25, 26, 27, 28, 29, 30, 31}
+_DECK_CONTENT_SLOTS = [i for i in range(32) if i not in _DECK_FIXED_SLOTS]
 
 
 class ConfigManager:
@@ -226,6 +240,14 @@ class ConfigManager:
     @property
     def signup_links(self) -> list[Any]:
         return self._data.setdefault("signup_links", [])
+
+    @property
+    def devices(self) -> dict[str, Any]:
+        return self._data.setdefault("devices", {})
+
+    @property
+    def pairing_codes(self) -> list[Any]:
+        return self._data.setdefault("pairing_codes", [])
 
     # -- Stream Deck helpers ---------------------------------------------
     # These mirror the read-only accessors the play-call deck relied on, so
@@ -405,6 +427,16 @@ class ConfigManager:
             key=lambda kv: (kv[1].get("jersey") or 0, kv[1].get("last_name", "")),
         )
 
+    def players_by_name(self) -> list[tuple[str, dict[str, Any]]]:
+        """Players sorted alphabetically by last then first name."""
+        return sorted(
+            self.players.items(),
+            key=lambda kv: (
+                (kv[1].get("last_name", "") or "").lower(),
+                (kv[1].get("first_name", "") or "").lower(),
+            ),
+        )
+
     # -- game-day editors (lineup / page songs / celebrations) -----------
 
     def set_lineup(self, player_ids: list[str | None]) -> None:
@@ -448,6 +480,110 @@ class ConfigManager:
                 song_id if song_id and song_id in self.songs else None
             )
             self.save()
+
+    # -- Stream Deck button editor (per-page slots) ----------------------
+    # The physical deck has fixed nav/transport keys; the editor only assigns
+    # the 21 "content" keys below. A page with any slots set is rendered from
+    # those slots; a page with none falls back to its built-in auto-layout.
+
+    # Content key indices on a Stream Deck XL (8x4) — everything that isn't a
+    # fixed nav (0/8/16), transport (24/25/26) or page-shortcut (27-31) key.
+    DECK_FIXED_SLOTS = _DECK_FIXED_SLOTS
+    DECK_CONTENT_SLOTS = _DECK_CONTENT_SLOTS
+
+    def set_page_slot(self, page_id: str, idx: int, slot: dict | None) -> None:
+        """Assign or clear one content key on a page.
+
+        ``slot`` = {type, ref, label, color}. A None/blank type clears the key.
+        Fixed nav/transport keys are owned by the deck and ignored here.
+        """
+        idx = int(idx)
+        if page_id not in self.pages or idx in self.DECK_FIXED_SLOTS:
+            return
+        with self._lock:
+            slots = self.pages[page_id].setdefault("slots", {})
+            if not slot or slot.get("type") in (None, "", "blank"):
+                slots.pop(str(idx), None)
+            else:
+                slots[str(idx)] = {
+                    "type": slot.get("type", ""),
+                    "ref": slot.get("ref", ""),
+                    "label": slot.get("label", ""),
+                    "color": slot.get("color", ""),
+                }
+            self.save()
+
+    def clear_page_slots(self, page_id: str) -> None:
+        with self._lock:
+            if page_id in self.pages:
+                self.pages[page_id]["slots"] = {}
+                self.save()
+
+    def fill_player_slots(self, page_id: str, order: str = "jersey") -> None:
+        """Bulk-fill a page's content keys with player walk-up buttons."""
+        if page_id not in self.pages:
+            return
+        players = self.players_by_name() if order == "alpha" else self.players_by_jersey()
+        slots: dict[str, Any] = {}
+        for i, content_idx in enumerate(self.DECK_CONTENT_SLOTS):
+            if i >= len(players):
+                break
+            pid, p = players[i]
+            jersey = p.get("jersey", "")
+            last = (p.get("last_name", "") or "")[:8]
+            slots[str(content_idx)] = {
+                "type": "player_walkup",
+                "ref": pid,
+                "label": f"#{jersey}\n{last}",
+                "color": "",
+            }
+        with self._lock:
+            self.pages[page_id]["slots"] = slots
+            self.save()
+
+    def add_page(self, name: str) -> str:
+        """Create a custom (deletable) deck page; returns its id."""
+        pid = uuid.uuid4().hex
+        with self._lock:
+            order = max((p.get("order", 0) for p in self.pages.values()), default=0) + 1
+            self.pages[pid] = {
+                "name": name.strip() or "Page",
+                "kind": "custom",
+                "order": order,
+                "deletable": True,
+                "slots": {},
+            }
+            self.save()
+        return pid
+
+    def rename_page(self, page_id: str, name: str) -> None:
+        with self._lock:
+            if page_id in self.pages and name.strip():
+                self.pages[page_id]["name"] = name.strip()
+                self.save()
+
+    def delete_page(self, page_id: str) -> None:
+        """Delete a custom page (built-in pages are protected)."""
+        with self._lock:
+            page = self.pages.get(page_id)
+            if page and page.get("deletable"):
+                del self.pages[page_id]
+                self.save()
+
+    def move_page(self, page_id: str, direction: int) -> None:
+        """Reorder a page up (-1) or down (+1) by swapping order with a neighbor."""
+        with self._lock:
+            ordered = sorted(self.pages.items(), key=lambda kv: kv[1].get("order", 99))
+            ids = [pid for pid, _ in ordered]
+            if page_id not in ids:
+                return
+            i = ids.index(page_id)
+            j = i + direction
+            if 0 <= j < len(ids):
+                a, b = ids[i], ids[j]
+                self.pages[a]["order"], self.pages[b]["order"] = (
+                    self.pages[b].get("order", 0), self.pages[a].get("order", 0))
+                self.save()
 
     # -- teams and signup links ------------------------------------------
 
@@ -536,6 +672,114 @@ class ConfigManager:
             if team_id in p.get("team_ids", [])
         ]
         return sorted(members, key=lambda kv: (kv[1].get("jersey") or 0, kv[1].get("last_name", "")))
+
+    # -- device pairing / linking ----------------------------------------
+    # A coach links a Pi by generating a short pairing code in the portal and
+    # entering it on the Pi (captive portal or boot file). Redeeming the code
+    # mints a per-device sync token, so devices can be named and revoked one at
+    # a time without disturbing the others or the global ONDECK_SYNC_TOKEN.
+
+    def create_pairing_code(self, name: str, role: str) -> dict[str, Any]:
+        """Mint a short, time-limited pairing code for a named device."""
+        code = secrets.token_hex(3).upper()  # 6 hex chars, e.g. "A1B2C3"
+        expires_hours = self.system.get("signup_link_expires_hours", 168)
+        now = _now_ms()
+        entry = {
+            "code": code,
+            "name": (name or "OnDeck Pi").strip(),
+            "role": role if role in ("audio", "deck") else "deck",
+            "created_at": now,
+            "expires_at": now + expires_hours * 3600 * 1000,
+            "redeemed_by": None,
+        }
+        with self._lock:
+            self.pairing_codes.append(entry)
+            self.save()
+        return entry
+
+    def _find_pairing_code(self, code: str) -> dict[str, Any] | None:
+        code = (code or "").strip().upper()
+        now = _now_ms()
+        for entry in self.pairing_codes:
+            if (entry.get("code") == code
+                    and not entry.get("redeemed_by")
+                    and entry.get("expires_at", 0) > now):
+                return entry
+        return None
+
+    def redeem_pairing_code(
+        self, code: str, hostname: str = "", ip: str = ""
+    ) -> tuple[str, str, str] | None:
+        """Redeem a valid code → create a device and return (id, token, name).
+
+        Returns None if the code is unknown, expired, or already used.
+        """
+        with self._lock:
+            entry = self._find_pairing_code(code)
+            if not entry:
+                return None
+            device_id = uuid.uuid4().hex
+            token = secrets.token_hex(24)
+            now = _now_ms()
+            self.devices[device_id] = {
+                "id": device_id,
+                "name": entry["name"],
+                "role": entry["role"],
+                "token": token,
+                "hostname": hostname or "",
+                "ip": ip or "",
+                "paired_at": now,
+                "last_seen": "",
+                "revoked": False,
+            }
+            entry["redeemed_by"] = device_id
+            self.save()
+            return device_id, token, entry["name"]
+
+    def device_for_token(self, token: str) -> dict[str, Any] | None:
+        """The (non-revoked) device that owns a sync token, if any."""
+        if not token:
+            return None
+        for device in self.devices.values():
+            if device.get("token") == token and not device.get("revoked"):
+                return device
+        return None
+
+    def touch_device(self, token: str, ip: str = "", hostname: str = "") -> bool:
+        """Record a check-in from the device that owns ``token``."""
+        from datetime import datetime, timezone
+        with self._lock:
+            device = self.device_for_token(token)
+            if not device:
+                return False
+            device["last_seen"] = datetime.now(timezone.utc).isoformat()
+            if ip:
+                device["ip"] = ip
+            if hostname:
+                device["hostname"] = hostname
+            self.save(mark_dirty=False)
+            return True
+
+    def list_devices(self) -> list[dict[str, Any]]:
+        """Devices for the admin page, newest pairing first."""
+        return sorted(
+            self.devices.values(),
+            key=lambda d: d.get("paired_at", 0),
+            reverse=True,
+        )
+
+    def rename_device(self, device_id: str, name: str) -> None:
+        with self._lock:
+            if device_id in self.devices:
+                self.devices[device_id]["name"] = (name or "OnDeck Pi").strip()
+                self.save()
+
+    def revoke_device(self, device_id: str) -> None:
+        """Remove a device; its sync token stops working immediately."""
+        with self._lock:
+            if device_id in self.devices:
+                del self.devices[device_id]
+                self.save()
 
     # -- song carousel helpers ---
 

@@ -88,6 +88,88 @@ def is_configured() -> bool:
     return bool(read_sync_env().get("ONDECK_SYNC_TOKEN"))
 
 
+def pending_link_path() -> Path:
+    """Where the captive portal stashes a cloud_url + pairing code to redeem.
+
+    The portal runs while the Pi is its own access point (no internet), so it
+    cannot redeem the code itself. It writes the pending link here and reboots;
+    ``boot_mode`` redeems it once the field Wi-Fi is up.
+    """
+    return sync_env_path().parent / "pending_link.json"
+
+
+def write_pending_link(cloud_url: str, code: str) -> None:
+    import json
+    path = pending_link_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"cloud_url": cloud_url.rstrip("/"), "code": code}))
+    _chown_to_service_user(path)
+    log.info("Saved pending cloud link (pairing code) to %s", path)
+
+
+def read_pending_link() -> dict | None:
+    import json
+    path = pending_link_path()
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        if data.get("cloud_url") and data.get("code"):
+            return data
+    except Exception as exc:
+        log.warning("Bad pending link file %s: %s", path, exc)
+    return None
+
+
+def clear_pending_link() -> None:
+    path = pending_link_path()
+    try:
+        if path.exists():
+            path.unlink()
+    except OSError as exc:
+        log.warning("Could not remove %s: %s", path, exc)
+
+
+def _chown_to_service_user(path: Path) -> None:
+    """Hand a root-written file back to the service user (boot_mode runs as root)."""
+    user = os.environ.get("ONDECK_USER")
+    if user:
+        try:
+            pw = pwd.getpwnam(user)
+            os.chown(path, pw.pw_uid, pw.pw_gid)
+        except (KeyError, PermissionError) as exc:
+            log.warning("Could not chown %s to %s: %s", path, user, exc)
+
+
+def redeem_pairing_code(cloud_url: str, code: str, hostname: str = "") -> str:
+    """Trade a portal pairing code for this Pi's own sync token.
+
+    POSTs to ``{cloud_url}/sync/pair``; returns the minted token. Raises on a
+    bad/expired code or a network failure so the caller can show the error.
+    Uses only the standard library — no extra Pi dependencies.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    url = cloud_url.rstrip("/") + "/sync/pair"
+    body = json.dumps({"code": code.strip(), "hostname": hostname}).encode()
+    req = urllib.request.Request(
+        url, data=body, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError("Pairing code was rejected (invalid or expired).") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Could not reach the cloud: {exc}") from exc
+    token = data.get("sync_token")
+    if not data.get("ok") or not token:
+        raise RuntimeError("Pairing failed — check the code and try again.")
+    return token
+
+
 # ── Wi-Fi (wpa_supplicant) ─────────────────────────────────────────────────
 
 def _network_block(ssid: str, password: str) -> str:

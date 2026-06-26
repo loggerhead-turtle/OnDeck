@@ -31,7 +31,7 @@ from netconfig import (
     append_wifi,
     list_saved_networks,
     scan_networks,
-    write_sync_env,
+    write_pending_link,
     write_wifi,
     AP_IFACE,
 )
@@ -197,10 +197,10 @@ Ready in about a minute.<br><br>You can close this page.</p></div></div>
 <form method="post" action="/setup">""" + _WIFI_SELECT + """
     <label>Cloud URL</label>
     <input type="url" name="cloud_url" placeholder="https://your-app.onrender.com" required>
-    <label>Sync Token</label>
-    <input type="text" name="sync_token" placeholder="From cloud Team Settings"
+    <label>Pairing Code</label>
+    <input type="text" name="pairing_code" placeholder="From the Devices page"
            autocomplete="off" required>
-    <div class="hint">Both are shown in the cloud portal under Settings.</div>
+    <div class="hint">Generate a code in the cloud portal under Devices, then enter it here.</div>
     <button class="btn" type="submit">Connect &amp; Link</button>
 </form></div>{% endif %}""" + _SCRIPT + """</body></html>"""
 
@@ -257,11 +257,14 @@ def _run_flask(wifi_only: bool = False) -> None:
             append_wifi(ssid, password)
         else:
             cloud_url = request.form.get("cloud_url", "").strip()
-            sync_token = request.form.get("sync_token", "").strip()
-            if not cloud_url or not sync_token:
-                return _render(error="Cloud URL and Sync Token are required.")
+            pairing_code = request.form.get("pairing_code", "").strip()
+            if not cloud_url or not pairing_code:
+                return _render(error="Cloud URL and Pairing Code are required.")
+            # The portal runs as an access point with no internet, so it can't
+            # redeem the code here. Save the Wi-Fi + a pending link and reboot;
+            # boot_mode redeems the code once the field network is up.
             write_wifi(ssid, password)
-            write_sync_env(cloud_url, sync_token)
+            write_pending_link(cloud_url, pairing_code)
             log.info("Setup saved: SSID=%s device=%s", ssid, _device_name())
 
         resp = _render(success=True, wifi_ssid=ssid)

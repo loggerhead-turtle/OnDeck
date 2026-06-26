@@ -30,7 +30,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from netconfig import (
+    clear_pending_link,
     is_configured,
+    read_pending_link,
+    redeem_pairing_code,
     write_sync_env,
     write_wifi,
     AP_IFACE,
@@ -124,19 +127,24 @@ def _force_setup_requested() -> bool:
 
 
 def _read_provision() -> dict | None:
-    """Return {cloud_url, sync_token, device_name} from a boot ondeck.json, or None."""
+    """Return a boot ondeck.json link, or None.
+
+    Supports either a ready ``sync_token`` or a ``pairing_code`` to be redeemed
+    once the (baked-in) Wi-Fi is online.
+    """
     for p in PROVISION_FILES:
         try:
             if not p.exists():
                 continue
             data = json.loads(p.read_text())
-            if data.get("cloud_url") and data.get("sync_token"):
+            if data.get("cloud_url") and (data.get("sync_token") or data.get("pairing_code")):
                 return {
                     "cloud_url": data["cloud_url"],
-                    "sync_token": data["sync_token"],
+                    "sync_token": data.get("sync_token"),
+                    "pairing_code": data.get("pairing_code"),
                     "device_name": data.get("device_name", "OnDeck Pi"),
                 }
-            log.warning("%s missing cloud_url/sync_token — ignoring", p)
+            log.warning("%s missing cloud_url/sync_token/pairing_code — ignoring", p)
         except Exception as exc:
             log.error("Bad boot provision file %s: %s", p, exc)
     return None
@@ -164,6 +172,13 @@ def _run_setup_portal(wifi_only: bool = False) -> None:
     sys.exit(result.returncode or 0)
 
 
+def _hostname() -> str:
+    try:
+        return socket.gethostname()
+    except Exception:
+        return "OnDeck Pi"
+
+
 def main() -> None:
     log.info("── OnDeck boot check ──")
 
@@ -184,15 +199,50 @@ def main() -> None:
         _run_setup_portal(wifi_only=True)
         return
 
+    # 1b. The captive portal left a pending pairing code — the field Wi-Fi
+    #     should now be up, so redeem it for this device's sync token.
+    pending = read_pending_link()
+    if pending:
+        log.info("Pending cloud link found — redeeming pairing code")
+        if _wait_for_internet(timeout=60):
+            try:
+                token = redeem_pairing_code(
+                    pending["cloud_url"], pending["code"], _hostname())
+                write_sync_env(pending["cloud_url"], token)
+                clear_pending_link()
+                log.info("Pairing complete — starting main service")
+                sys.exit(0)
+            except Exception as exc:
+                log.error("Pairing failed: %s — reopening setup portal", exc)
+                clear_pending_link()
+        else:
+            log.warning("No internet for pairing — reopening setup portal")
+            clear_pending_link()
+        _run_setup_portal()
+        return
+
     # 2. Zero-touch cloud link from the boot partition.
     provision = _read_provision()
     if provision:
         log.info("Found boot-partition cloud link — linking automatically")
-        write_sync_env(provision["cloud_url"], provision["sync_token"])
-        _consume_provision()
         _wait_for_internet(timeout=60)  # let the baked-in Wi-Fi associate
-        log.info("Zero-touch link complete — starting main service")
-        sys.exit(0)
+        token = provision.get("sync_token")
+        if not token and provision.get("pairing_code"):
+            try:
+                token = redeem_pairing_code(
+                    provision["cloud_url"], provision["pairing_code"], _hostname())
+            except Exception as exc:
+                log.error("Zero-touch pairing failed: %s", exc)
+                token = None
+        if token:
+            write_sync_env(provision["cloud_url"], token)
+            _consume_provision()
+            log.info("Zero-touch link complete — starting main service")
+            sys.exit(0)
+        log.warning("Zero-touch link could not complete — opening setup portal")
+        _consume_provision()
+        _run_setup_portal()
+        return
 
     # 3. Not linked — run the full setup portal.
     _run_setup_portal()
