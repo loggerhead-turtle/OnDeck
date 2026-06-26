@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Sounds{% endblock %}
+{% block content %}
+
+<h1 class="text-2xl font-bold mb-6">Game-Day Sounds</h1>
+
+{% if not songs %}
+<div class="bg-gray-800/50 border border-gray-700/50 rounded-xl p-12 text-center">
+  <div class="text-4xl mb-3">🎵</div>
+  <div class="text-gray-300 font-medium mb-1">No songs in the library</div>
+  <div class="text-gray-500 text-sm mb-4">Upload or import songs first, then assign them here.</div>
+  <a href="/ondeck/library"
+     class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold transition-colors">
+    Go to Library
+  </a>
+</div>
+{% else %}
+
+<!-- Celebration stingers -->
+<h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Celebration Stingers</h2>
+<div class="grid gap-3 sm:grid-cols-2 mb-8">
+  {% for kind, label in celebrations %}
+  <form method="POST" action="/ondeck/sounds/celebration/{{ kind }}"
+        class="bg-gray-800 border border-gray-700/50 rounded-xl p-4 flex items-center gap-3">
+    <span class="font-semibold text-white w-28 shrink-0">{{ label }}</span>
+    <select name="song_id"
+            class="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100">
+      <option value="">— none —</option>
+      {% for sid, s in songs %}
+      <option value="{{ sid }}" {% if celebration_songs.get(kind) == sid %}selected{% endif %}>
+        {{ s.display_name }}
+      </option>
+      {% endfor %}
+    </select>
+    <button type="submit"
+            class="px-3 py-2 rounded-lg bg-gray-700 hover:bg-green-700 text-gray-200 hover:text-white text-sm font-medium transition-colors shrink-0">
+      Save
+    </button>
+  </form>
+  {% endfor %}
+</div>
+
+<!-- Song-list pages -->
+<h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Page Playlists</h2>
+<div class="space-y-3">
+  {% for page_id, label in sound_pages %}
+  {% set selected = page_songs.get(page_id, []) %}
+  <details class="bg-gray-800 border border-gray-700/50 rounded-xl overflow-hidden group" {% if selected %}open{% endif %}>
+    <summary class="flex items-center justify-between px-4 py-3 cursor-pointer select-none hover:bg-gray-750">
+      <span class="font-semibold text-white">{{ label }}</span>
+      <span class="text-xs text-gray-400">{{ selected | length }} song{{ '' if selected | length == 1 else 's' }}</span>
+    </summary>
+    <form method="POST" action="/ondeck/sounds/page/{{ page_id }}" class="px-4 pb-4 border-t border-gray-700/50">
+      <div class="grid gap-1.5 sm:grid-cols-2 py-3">
+        {% for sid, s in songs %}
+        <label class="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-900 hover:bg-gray-850 cursor-pointer text-sm">
+          <input type="checkbox" name="song_ids" value="{{ sid }}"
+                 class="accent-green-500"
+                 {% if sid in selected %}checked{% endif %}>
+          <span class="text-gray-200 truncate">{{ s.display_name }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      <button type="submit"
+              class="w-full py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold transition-colors">
+        Save {{ label }}
+      </button>
+    </form>
+  </details>
+  {% endfor %}
+</div>
+
+{% endif %}
+
+{% endblock %}

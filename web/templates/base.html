@@ -67,6 +67,8 @@
       <a href="/ondeck/dashboard" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'ondeck_dashboard' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Home</a>
       <a href="/ondeck/library"   class="nav-link px-3 py-1.5 rounded-md {% if 'library' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Library</a>
       <a href="/ondeck/players"   class="nav-link px-3 py-1.5 rounded-md {% if 'players' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Players</a>
+      <a href="/ondeck/lineup"    class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint and 'lineup' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Lineup</a>
+      <a href="/ondeck/sounds"    class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint and 'sounds' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Sounds</a>
       <a href="/ondeck/notifications" class="nav-link relative px-3 py-1.5 rounded-md {% if request.endpoint and 'notifications' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">
         Activity
         {% if unread_notifications %}

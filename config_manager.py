@@ -308,6 +308,50 @@ class ConfigManager:
             key=lambda kv: (kv[1].get("jersey") or 0, kv[1].get("last_name", "")),
         )
 
+    # -- game-day editors (lineup / page songs / celebrations) -----------
+
+    def set_lineup(self, player_ids: list[str | None]) -> None:
+        """Replace the batting order. Unknown ids and overflow are dropped; the
+        list is padded with None to ``lineup_size``."""
+        size = self._data.get("lineup_size", 9)
+        cleaned: list[str | None] = []
+        for pid in player_ids[:size]:
+            cleaned.append(pid if pid and pid in self.players else None)
+        cleaned += [None] * (size - len(cleaned))
+        with self._lock:
+            self._data["lineup"] = cleaned
+            self.save()
+
+    def set_lineup_size(self, size: int) -> None:
+        """Grow/shrink the batting order, preserving existing assignments."""
+        size = max(1, min(int(size), 20))
+        with self._lock:
+            current = self._data.get("lineup", [])
+            current = (current + [None] * size)[:size]
+            self._data["lineup_size"] = size
+            self._data["lineup"] = current
+            self.save()
+
+    def set_page_songs(self, page_id: str, song_ids: list[str]) -> None:
+        """Set the ordered song list for a song-list page (unknown ids dropped)."""
+        valid = [sid for sid in song_ids if sid in self.songs]
+        with self._lock:
+            self._data.setdefault("page_songs", {})[page_id] = valid
+            # Keep the legacy mirror in step so older readers stay correct.
+            if page_id == "mid_inning":
+                self._data["mid_inning"] = list(valid)
+            self.save()
+
+    def set_celebration(self, kind: str, song_id: str | None) -> None:
+        """Assign (or clear) a celebration stinger song."""
+        if kind not in self._data["celebrations"]:
+            return
+        with self._lock:
+            self._data["celebrations"][kind] = (
+                song_id if song_id and song_id in self.songs else None
+            )
+            self.save()
+
 
 if __name__ == "__main__":
     # Smoke test: create a config, add a player, reload it.

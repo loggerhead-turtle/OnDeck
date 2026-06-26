@@ -963,6 +963,92 @@ def ondeck_api_volume():
 
 
 # ---------------------------------------------------------------------------
+# Lineup editor (admin + editor)
+# ---------------------------------------------------------------------------
+
+@app.get("/ondeck/lineup")
+def ondeck_lineup():
+    size = cfg.data.get("lineup_size", 9)
+    order = (cfg.data.get("lineup", []) + [None] * size)[:size]
+    slots = [(i, cfg.players.get(pid)) for i, pid in enumerate(order)]
+    return render_template("lineup.html", slots=slots, size=size,
+                           players=cfg.players_by_jersey())
+
+
+@app.post("/ondeck/lineup/save")
+def ondeck_lineup_save():
+    size = cfg.data.get("lineup_size", 9)
+    order = [request.form.get(f"slot_{i}") or None for i in range(size)]
+    cfg.set_lineup(order)
+    flash("Lineup saved.", "success")
+    return redirect(url_for("ondeck_lineup"))
+
+
+@app.post("/ondeck/lineup/size")
+def ondeck_lineup_size():
+    try:
+        cfg.set_lineup_size(int(request.form.get("size", 9)))
+        flash("Lineup size updated.", "success")
+    except (ValueError, TypeError):
+        flash("Lineup size must be a number.", "error")
+    return redirect(url_for("ondeck_lineup"))
+
+
+# ---------------------------------------------------------------------------
+# Sounds editor (song-list pages + celebration stingers) — admin + editor
+# ---------------------------------------------------------------------------
+
+# The deck's song-list pages, in display order, with friendly labels.
+SOUND_PAGES = [
+    ("hype", "Hype"),
+    ("mid_inning", "Mid-Inning"),
+    ("mound_visit", "Mound Visit"),
+    ("dead_ball", "Dead Ball"),
+    ("pitcher_warmup", "Pitcher Warm-Up"),
+]
+CELEBRATIONS = [
+    ("hit", "Hit"),
+    ("extra_base", "Extra-Base Hit"),
+    ("home_run", "Home Run"),
+    ("strikeout", "Strikeout"),
+]
+
+
+@app.get("/ondeck/sounds")
+def ondeck_sounds():
+    page_songs = cfg.data.get("page_songs", {})
+    songs_sorted = sorted(cfg.songs.items(),
+                          key=lambda kv: kv[1].get("display_name", "").lower())
+    return render_template(
+        "sounds.html",
+        sound_pages=SOUND_PAGES,
+        celebrations=CELEBRATIONS,
+        page_songs=page_songs,
+        celebration_songs=cfg.celebrations,
+        songs=songs_sorted,
+    )
+
+
+@app.post("/ondeck/sounds/page/<page_id>")
+def ondeck_sounds_page_save(page_id: str):
+    if page_id not in dict(SOUND_PAGES):
+        abort(404)
+    selected = request.form.getlist("song_ids")
+    cfg.set_page_songs(page_id, selected)
+    flash(f"{dict(SOUND_PAGES)[page_id]} sounds saved.", "success")
+    return redirect(url_for("ondeck_sounds"))
+
+
+@app.post("/ondeck/sounds/celebration/<kind>")
+def ondeck_sounds_celebration_save(kind: str):
+    if kind not in dict(CELEBRATIONS):
+        abort(404)
+    cfg.set_celebration(kind, request.form.get("song_id") or None)
+    flash(f"{dict(CELEBRATIONS)[kind]} stinger saved.", "success")
+    return redirect(url_for("ondeck_sounds"))
+
+
+# ---------------------------------------------------------------------------
 # Settings (admin only — enforced in _check_auth)
 # ---------------------------------------------------------------------------
 
