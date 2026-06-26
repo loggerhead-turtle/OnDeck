@@ -32,52 +32,96 @@
 
       <div class="mb-4">
         <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select Song</label>
-        <select name="walkup_song_id"
-                class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
-          <option value="">— none —</option>
-          {% for sid, song in songs.items() | sort(attribute='1.display_name') %}
-            <option value="{{ sid }}" {% if walkup_song and walkup_song.filename == song.filename %}selected{% endif %}>
-              {{ song.display_name }}
-            </option>
-          {% endfor %}
-        </select>
+        <div class="flex gap-2">
+          <select id="walkup_add_select"
+                  class="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
+            <option value="">— Select song to add —</option>
+            {% for sid, song in songs.items() | sort(attribute='1.display_name') %}
+              <option value="{{ sid }}">{{ song.display_name }}</option>
+            {% endfor %}
+          </select>
+          <button type="button" onclick="addToCarousel('walkup')"
+                  class="px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white font-medium text-sm transition-colors">
+            + Add
+          </button>
+        </div>
       </div>
 
-      {% if walkup_song %}
-      {{ trim_editor(
-          editor_id   = 'walkup',
-          audio_url   = url_for('ondeck_serve_audio', filename=walkup_song.filename),
-          start_ms    = walkup_song.start_ms or 0,
-          end_ms      = walkup_song.end_ms,
-          start_field = 'walkup_start_ms',
-          end_field   = 'walkup_end_ms',
-          label       = 'Set start and end of your walk-up'
-      ) }}
+      <!-- Active song display and trim editor -->
+      {% set active_walkup_id = player.get('walkup_song_id') %}
+      {% if active_walkup_id and active_walkup_id in songs %}
+        {% set active_song = songs[active_walkup_id] %}
+        <div class="mb-4 p-4 rounded-lg bg-green-900/20 border border-green-700/50">
+          <p class="text-xs text-gray-400 mb-2 font-medium">ACTIVE SONG</p>
+          <p class="text-white font-semibold mb-1">{{ active_song.display_name }}</p>
+          <button type="button" onclick="removeFromCarousel('walkup', '{{ active_walkup_id }}')"
+                  class="text-xs text-red-400 hover:text-red-300">
+            ✕ Remove
+          </button>
+        </div>
 
-      {% if player.announcement_file %}
-      <!-- Music cue: where the song drops during the announcer's intro -->
-      <div class="mt-5 pt-5 border-t border-gray-700/50">
-        <h3 class="text-xs text-gray-400 font-medium uppercase tracking-wider mb-2">Music Cue</h3>
-        <p class="text-xs text-gray-500 mb-3">
-          Drag the indigo bar to choose when your song drops while the announcer says your name.
-        </p>
         {{ trim_editor(
-            editor_id = 'anncue',
-            audio_url = url_for('ondeck_serve_audio', filename=player.announcement_file),
-            show_trim = False,
-            show_cue  = True,
-            cue_ms    = player.music_cue_ms or 0,
-            cue_field = 'music_cue_ms',
-            label     = 'Your announcement'
+            editor_id   = 'walkup',
+            audio_url   = url_for('ondeck_serve_audio', filename=active_song.filename),
+            start_ms    = active_song.start_ms or 0,
+            end_ms      = active_song.end_ms,
+            start_field = 'walkup_start_ms',
+            end_field   = 'walkup_end_ms',
+            label       = 'Set start and end of your walk-up'
         ) }}
-      </div>
-      {% endif %}
+
+        {% if player.announcement_file %}
+        <!-- Music cue: where the song drops during the announcer's intro -->
+        <div class="mt-5 pt-5 border-t border-gray-700/50">
+          <h3 class="text-xs text-gray-400 font-medium uppercase tracking-wider mb-2">Music Cue</h3>
+          <p class="text-xs text-gray-500 mb-3">
+            Drag the indigo bar to choose when your song drops while the announcer says your name.
+          </p>
+          {{ trim_editor(
+              editor_id = 'anncue',
+              audio_url = url_for('ondeck_serve_audio', filename=player.announcement_file),
+              show_trim = False,
+              show_cue  = True,
+              cue_ms    = player.music_cue_ms or 0,
+              cue_field = 'music_cue_ms',
+              label     = 'Your announcement'
+          ) }}
+        </div>
+        {% endif %}
       {% else %}
-      <input type="hidden" name="walkup_start_ms" value="0">
-      <input type="hidden" name="walkup_end_ms" value="">
-      <div class="text-sm text-gray-600 text-center py-6">
-        Select a song above to show the trim editor.
-      </div>
+        <input type="hidden" name="walkup_start_ms" value="0">
+        <input type="hidden" name="walkup_end_ms" value="">
+        <div class="text-sm text-gray-600 text-center py-6">
+          Add a song above to get started.
+        </div>
+      {% endif %}
+
+      <!-- Carousel of other songs -->
+      {% set walkup_songs = player.get('walkup_songs', []) %}
+      {% if walkup_songs %}
+        <div class="mt-4 pt-4 border-t border-gray-700/50">
+          <p class="text-xs text-gray-400 font-medium uppercase tracking-wider mb-3">Click to activate</p>
+          <div class="space-y-2">
+            {% for song_id in walkup_songs %}
+              {% if song_id != active_walkup_id and song_id in songs %}
+                {% set song = songs[song_id] %}
+                <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900 border border-gray-700/50 hover:bg-gray-850 transition-colors">
+                  <span class="text-white text-sm">{{ song.display_name }}</span>
+                  <div class="flex gap-2">
+                    <button type="button" onclick="activateCarouselSong('walkup', '{{ song_id }}')"
+                            class="text-xs px-3 py-1 rounded bg-green-700 hover:bg-green-600 text-white transition-colors">
+                      Activate
+                    </button>
+                    <button type="button" onclick="removeFromCarousel('walkup', '{{ song_id }}')"
+                            class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-red-800 text-gray-400 hover:text-red-200 transition-colors">
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
       {% endif %}
     </div>
 
@@ -88,33 +132,77 @@
 
       <div class="mb-4">
         <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select Song</label>
-        <select name="warmup_song_id"
-                class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
-          <option value="">— none —</option>
-          {% for sid, song in songs.items() | sort(attribute='1.display_name') %}
-            <option value="{{ sid }}" {% if warmup_song and warmup_song.filename == song.filename %}selected{% endif %}>
-              {{ song.display_name }}
-            </option>
-          {% endfor %}
-        </select>
+        <div class="flex gap-2">
+          <select id="warmup_add_select"
+                  class="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
+            <option value="">— Select song to add —</option>
+            {% for sid, song in songs.items() | sort(attribute='1.display_name') %}
+              <option value="{{ sid }}">{{ song.display_name }}</option>
+            {% endfor %}
+          </select>
+          <button type="button" onclick="addToCarousel('warmup')"
+                  class="px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white font-medium text-sm transition-colors">
+            + Add
+          </button>
+        </div>
       </div>
 
-      {% if warmup_song %}
-      {{ trim_editor(
-          editor_id   = 'warmup',
-          audio_url   = url_for('ondeck_serve_audio', filename=warmup_song.filename),
-          start_ms    = warmup_song.start_ms or 0,
-          end_ms      = warmup_song.end_ms,
-          start_field = 'warmup_start_ms',
-          end_field   = 'warmup_end_ms',
-          label       = 'Set intro and outro'
-      ) }}
+      <!-- Active song display and trim editor -->
+      {% set active_warmup_id = player.get('pitching_warmup_song_id') %}
+      {% if active_warmup_id and active_warmup_id in songs %}
+        {% set active_song = songs[active_warmup_id] %}
+        <div class="mb-4 p-4 rounded-lg bg-green-900/20 border border-green-700/50">
+          <p class="text-xs text-gray-400 mb-2 font-medium">ACTIVE SONG</p>
+          <p class="text-white font-semibold mb-1">{{ active_song.display_name }}</p>
+          <button type="button" onclick="removeFromCarousel('warmup', '{{ active_warmup_id }}')"
+                  class="text-xs text-red-400 hover:text-red-300">
+            ✕ Remove
+          </button>
+        </div>
+
+        {{ trim_editor(
+            editor_id   = 'warmup',
+            audio_url   = url_for('ondeck_serve_audio', filename=active_song.filename),
+            start_ms    = active_song.start_ms or 0,
+            end_ms      = active_song.end_ms,
+            start_field = 'warmup_start_ms',
+            end_field   = 'warmup_end_ms',
+            label       = 'Set intro and outro'
+        ) }}
       {% else %}
-      <input type="hidden" name="warmup_start_ms" value="0">
-      <input type="hidden" name="warmup_end_ms" value="">
-      <div class="text-sm text-gray-600 text-center py-6">
-        Select a song above to show the trim editor.
-      </div>
+        <input type="hidden" name="warmup_start_ms" value="0">
+        <input type="hidden" name="warmup_end_ms" value="">
+        <div class="text-sm text-gray-600 text-center py-6">
+          Add a song above to get started.
+        </div>
+      {% endif %}
+
+      <!-- Carousel of other songs -->
+      {% set warmup_songs = player.get('warmup_songs', []) %}
+      {% if warmup_songs %}
+        <div class="mt-4 pt-4 border-t border-gray-700/50">
+          <p class="text-xs text-gray-400 font-medium uppercase tracking-wider mb-3">Click to activate</p>
+          <div class="space-y-2">
+            {% for song_id in warmup_songs %}
+              {% if song_id != active_warmup_id and song_id in songs %}
+                {% set song = songs[song_id] %}
+                <div class="flex items-center justify-between p-3 rounded-lg bg-gray-900 border border-gray-700/50 hover:bg-gray-850 transition-colors">
+                  <span class="text-white text-sm">{{ song.display_name }}</span>
+                  <div class="flex gap-2">
+                    <button type="button" onclick="activateCarouselSong('warmup', '{{ song_id }}')"
+                            class="text-xs px-3 py-1 rounded bg-green-700 hover:bg-green-600 text-white transition-colors">
+                      Activate
+                    </button>
+                    <button type="button" onclick="removeFromCarousel('warmup', '{{ song_id }}')"
+                            class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-red-800 text-gray-400 hover:text-red-200 transition-colors">
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
       {% endif %}
     </div>
 
@@ -165,5 +253,69 @@
   </form>
 
 </div>
+
+<script>
+async function addToCarousel(songType) {
+  const selectId = songType + '_add_select';
+  const select = document.getElementById(selectId);
+  const songId = select.value;
+
+  if (!songId) {
+    alert('Please select a song');
+    return;
+  }
+
+  try {
+    const response = await fetch(`/ondeck/carousel/add/${songType}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `song_id=${encodeURIComponent(songId)}`
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    // Reload page to show updated carousel
+    window.location.reload();
+  } catch (err) {
+    alert(`Error adding song: ${err.message}`);
+  }
+}
+
+async function removeFromCarousel(songType, songId) {
+  if (!confirm('Remove this song?')) return;
+
+  try {
+    const response = await fetch(`/ondeck/carousel/remove/${songType}/${songId}`, {
+      method: 'POST'
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    window.location.reload();
+  } catch (err) {
+    alert(`Error removing song: ${err.message}`);
+  }
+}
+
+async function activateCarouselSong(songType, songId) {
+  try {
+    const response = await fetch(`/ondeck/carousel/activate/${songType}/${songId}`, {
+      method: 'POST'
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    window.location.reload();
+  } catch (err) {
+    alert(`Error activating song: ${err.message}`);
+  }
+}
+</script>
 
 {% endblock %}
