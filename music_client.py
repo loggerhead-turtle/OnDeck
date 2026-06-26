@@ -88,8 +88,13 @@ class MusicClient:
         return self.queue(clip) and self.play()
 
     def play_walkup(self, player_id: str) -> bool:
-        """Announce a player and drop their walk-up song on cue."""
+        """Announce a player and drop their walk-up song on cue (queue + play)."""
         return self.play_clip(self.config.build_walkup_clip(player_id))
+
+    def cue_walkup(self, player_id: str) -> bool:
+        """Queue a player's walk-up without playing it (the lineup cue step)."""
+        clip = self.config.build_walkup_clip(player_id)
+        return self.queue(clip) if clip else False
 
     def play_song(self, song_id: str) -> bool:
         """Play a plain library song (hype, mid-inning, stingers, …)."""

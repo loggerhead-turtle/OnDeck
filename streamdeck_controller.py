@@ -5,9 +5,13 @@
 layout play-call uses, retargeted from LED signs to baseball walk-up music.
 
   Left column   0 / 8 / 16     Prev / Home / Next      (always visible)
-  Bottom-left   24 / 25        Stop / Fade             (always visible)
-  Bottom row    26-31          page shortcuts          (first 6 pages)
+  Bottom-left   24 / 25 / 26   Play / Stop / Fade      (always visible)
+  Bottom row    27-31          page shortcuts          (first 5 pages)
   Content area  1-7,9-15,17-23 21 slots, per-page content
+
+Walk-up flow: on the Lineup page a tile *cues* (queues) the batter's walk-up;
+Play runs it; when the song ends the lineup auto-advances and re-cues the next
+hitter, ready for the next Play. Other pages play immediately on press.
 
 Every content button turns into an Audio Pi cue (a player walk-up, a library
 song, or a celebration stinger). The deck holds no audio itself — it calls
@@ -34,12 +38,14 @@ log = logging.getLogger("streamdeck")
 BTN_PREV = 0     # top-left
 BTN_HOME = 8     # mid-left
 BTN_NEXT = 16    # bottom-left of the nav column
-BTN_STOP = 24    # bottom row, first slot
-BTN_FADE = 25    # bottom row, second slot
-# Page shortcut buttons 26-31 (up to 6 pages shown along the bottom).
-BOTTOM_PAGE_BTNS = list(range(26, 32))
+BTN_PLAY = 24    # bottom row — run the cued walk-up
+BTN_STOP = 25    # bottom row — stop instantly
+BTN_FADE = 26    # bottom row — fade out
+# Page shortcut buttons 27-31 (up to 5 pages shown along the bottom).
+BOTTOM_PAGE_BTNS = list(range(27, 32))
 
-FIXED_BTNS = {BTN_PREV, BTN_HOME, BTN_NEXT, BTN_STOP, BTN_FADE} | set(BOTTOM_PAGE_BTNS)
+FIXED_BTNS = ({BTN_PREV, BTN_HOME, BTN_NEXT, BTN_PLAY, BTN_STOP, BTN_FADE}
+              | set(BOTTOM_PAGE_BTNS))
 
 # Content slots: every button that isn't fixed → [1-7, 9-15, 17-23] (21 slots).
 CONTENT_SLOTS = [i for i in range(32) if i not in FIXED_BTNS]
@@ -125,6 +131,9 @@ class StreamDeckController:
             self.go_to_page("home")
         elif idx == BTN_NEXT:
             self._nav(1)
+        elif idx == BTN_PLAY:
+            self.lineup.play()
+            self._flash(BTN_PLAY)
         elif idx == BTN_STOP:
             self.music.stop()
             self._flash(BTN_STOP)
@@ -167,6 +176,7 @@ class StreamDeckController:
                 self.go_to_page(order[slot])
 
         elif kind == "lineup":
+            # Cue (queue) this batter; the coach presses Play to run it.
             filled = [i for i, pid in enumerate(self.config.lineup) if pid]
             if slot < len(filled):
                 self.lineup.set_current(filled[slot])
@@ -177,21 +187,24 @@ class StreamDeckController:
             players = self.config.players_by_jersey()
             if slot < len(players):
                 pid, _ = players[slot]
+                self.lineup.note_external_playback()
                 if self.music.play_walkup(pid):
                     self._flash(btn_idx)
 
         elif kind == "celebrations":
             if slot < len(CELEBRATIONS):
                 key, _ = CELEBRATIONS[slot]
+                self.lineup.note_external_playback()
                 if self.music.play_celebration(key):
                     self._flash(btn_idx)
 
         else:
             # Song-list pages: hype / mid_inning / mound_visit / dead_ball /
-            # pitcher_warmup. One button per assigned song.
+            # pitcher_warmup. One button per assigned song, played immediately.
             songs = self.config.get_songs_for_page(self.current_page_id)
             if slot < len(songs):
                 sid, _ = songs[slot]
+                self.lineup.note_external_playback()
                 if self.music.play_song(sid):
                     self._flash(btn_idx)
 
@@ -213,6 +226,7 @@ class StreamDeckController:
         self._btn(BTN_NEXT, "▼\nNext", (40, 40, 40))
 
     def _render_bottom_row(self) -> None:
+        self._btn(BTN_PLAY, "▶\nPlay", (30, 110, 40))
         self._btn(BTN_STOP, "■\nStop", (90, 30, 30))
         self._btn(BTN_FADE, "↘\nFade", (30, 60, 90))
         order = self.config.get_page_order()
