@@ -28,10 +28,21 @@
     <!-- Walk-Up Song -->
     <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
       <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Walk-Up Song</h2>
-      <p class="text-xs text-gray-500 mb-3">Song to play when you step up to bat.</p>
+      <p class="text-xs text-gray-500 mb-4">Song to play when you step up to bat. You can have multiple songs that rotate between at-bats.</p>
 
+      <!-- Upload section -->
+      <div class="mb-4 p-4 rounded-lg bg-gray-900/50 border border-gray-600/30">
+        <label class="block text-xs text-gray-400 mb-2 font-medium">Upload New Songs</label>
+        <input type="file" id="walkup_upload" multiple accept="audio/*" class="block w-full text-sm text-gray-400 mb-2">
+        <button type="button" onclick="uploadSongs('walkup')"
+                class="w-full px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-medium text-sm transition-colors">
+          ⬆ Upload
+        </button>
+      </div>
+
+      <!-- Select from library section -->
       <div class="mb-4">
-        <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select Song</label>
+        <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select From Library</label>
         <div class="flex gap-2">
           <select id="walkup_add_select"
                   class="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
@@ -52,8 +63,8 @@
       {% if active_walkup_id and active_walkup_id in songs %}
         {% set active_song = songs[active_walkup_id] %}
         <div class="mb-4 p-4 rounded-lg bg-green-900/20 border border-green-700/50">
-          <p class="text-xs text-gray-400 mb-2 font-medium">ACTIVE SONG</p>
-          <p class="text-white font-semibold mb-1">{{ active_song.display_name }}</p>
+          <p class="text-xs text-gray-400 mb-2 font-medium">ACTIVE WALK-UP SONGS</p>
+          <p class="text-white font-semibold mb-3">{{ active_song.display_name }}</p>
           <button type="button" onclick="removeFromCarousel('walkup', '{{ active_walkup_id }}')"
                   class="text-xs text-red-400 hover:text-red-300">
             ✕ Remove
@@ -92,7 +103,7 @@
         <input type="hidden" name="walkup_start_ms" value="0">
         <input type="hidden" name="walkup_end_ms" value="">
         <div class="text-sm text-gray-600 text-center py-6">
-          Add a song above to get started.
+          Upload or select a song to get started.
         </div>
       {% endif %}
 
@@ -128,10 +139,21 @@
     <!-- Pitching Warm-Up Song -->
     <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
       <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Pitching Warm-Up Song</h2>
-      <p class="text-xs text-gray-500 mb-3">Song to play while warming up to pitch.</p>
+      <p class="text-xs text-gray-500 mb-4">Song to play while warming up to pitch. You can have multiple songs that rotate between appearances.</p>
 
+      <!-- Upload section -->
+      <div class="mb-4 p-4 rounded-lg bg-gray-900/50 border border-gray-600/30">
+        <label class="block text-xs text-gray-400 mb-2 font-medium">Upload New Songs</label>
+        <input type="file" id="warmup_upload" multiple accept="audio/*" class="block w-full text-sm text-gray-400 mb-2">
+        <button type="button" onclick="uploadSongs('warmup')"
+                class="w-full px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-medium text-sm transition-colors">
+          ⬆ Upload
+        </button>
+      </div>
+
+      <!-- Select from library section -->
       <div class="mb-4">
-        <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select Song</label>
+        <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select From Library</label>
         <div class="flex gap-2">
           <select id="warmup_add_select"
                   class="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
@@ -152,8 +174,8 @@
       {% if active_warmup_id and active_warmup_id in songs %}
         {% set active_song = songs[active_warmup_id] %}
         <div class="mb-4 p-4 rounded-lg bg-green-900/20 border border-green-700/50">
-          <p class="text-xs text-gray-400 mb-2 font-medium">ACTIVE SONG</p>
-          <p class="text-white font-semibold mb-1">{{ active_song.display_name }}</p>
+          <p class="text-xs text-gray-400 mb-2 font-medium">ACTIVE WARM-UP SONGS</p>
+          <p class="text-white font-semibold mb-3">{{ active_song.display_name }}</p>
           <button type="button" onclick="removeFromCarousel('warmup', '{{ active_warmup_id }}')"
                   class="text-xs text-red-400 hover:text-red-300">
             ✕ Remove
@@ -173,7 +195,7 @@
         <input type="hidden" name="warmup_start_ms" value="0">
         <input type="hidden" name="warmup_end_ms" value="">
         <div class="text-sm text-gray-600 text-center py-6">
-          Add a song above to get started.
+          Upload or select a song to get started.
         </div>
       {% endif %}
 
@@ -209,8 +231,19 @@
     <!-- Mid-Inning Song -->
     <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
       <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Mid-Inning Song</h2>
-      <p class="text-xs text-gray-500 mb-3">Song you'd like played during mid-inning breaks.</p>
+      <p class="text-xs text-gray-500 mb-4">Song you'd like played during mid-inning breaks.</p>
 
+      <!-- Upload section -->
+      <div class="mb-4 p-4 rounded-lg bg-gray-900/50 border border-gray-600/30">
+        <label class="block text-xs text-gray-400 mb-2 font-medium">Upload New Song</label>
+        <input type="file" id="midgame_upload" accept="audio/*" class="block w-full text-sm text-gray-400 mb-2">
+        <button type="button" onclick="uploadSongs('midgame')"
+                class="w-full px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 text-white font-medium text-sm transition-colors">
+          ⬆ Upload
+        </button>
+      </div>
+
+      <!-- Select from library section -->
       <div class="mb-4">
         <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select Song</label>
         <select name="midgame_song_id"
@@ -238,7 +271,7 @@
       <input type="hidden" name="midgame_start_ms" value="0">
       <input type="hidden" name="midgame_end_ms" value="">
       <div class="text-sm text-gray-600 text-center py-6">
-        Select a song above to show the trim editor.
+        Upload or select a song to show the trim editor.
       </div>
       {% endif %}
     </div>
@@ -254,7 +287,124 @@
 
 </div>
 
+<!-- Modal for naming uploaded songs -->
+<div id="nameModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+  <div class="bg-gray-800 rounded-xl border border-gray-700 p-6 max-w-sm w-full mx-4">
+    <h3 class="text-lg font-bold text-white mb-4">Name Your Song</h3>
+    <input type="text" id="songName" placeholder="Song name" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white mb-4 focus:outline-none focus:border-green-500">
+    <div class="flex gap-2">
+      <button onclick="confirmSongName()" class="flex-1 px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white font-medium transition-colors">
+        Save
+      </button>
+      <button onclick="cancelUpload()" class="flex-1 px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 font-medium transition-colors">
+        Cancel
+      </button>
+    </div>
+  </div>
+</div>
+
 <script>
+let pendingUploadFile = null;
+let pendingUploadType = null;
+
+function generateDisplayName(filename) {
+  return filename
+    .replace(/\.[^/.]+$/, '')
+    .replace(/[-_]/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+async function uploadSongs(songType) {
+  const inputId = songType + '_upload';
+  const input = document.getElementById(inputId);
+  const files = input.files;
+
+  if (!files || files.length === 0) {
+    alert('Please select at least one file');
+    return;
+  }
+
+  for (let file of files) {
+    await uploadSingleSong(file, songType);
+  }
+
+  input.value = '';
+}
+
+async function uploadSingleSong(file, songType) {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('song_type', songType);
+
+  const displayName = generateDisplayName(file.name);
+
+  pendingUploadFile = { file, songType, displayName, formData };
+  pendingUploadType = songType;
+
+  document.getElementById('songName').value = displayName;
+  document.getElementById('nameModal').classList.remove('hidden');
+}
+
+async function confirmSongName() {
+  const customName = document.getElementById('songName').value.trim();
+  if (!customName) {
+    alert('Please enter a song name');
+    return;
+  }
+
+  const { file, songType, formData } = pendingUploadFile;
+  formData.append('display_name', customName);
+
+  try {
+    const response = await fetch('/ondeck/player-upload', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `HTTP ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    if (result.new_song) {
+      const songId = result.song_id;
+
+      if (songType !== 'midgame') {
+        await fetch(`/ondeck/carousel/add/${songType}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `song_id=${encodeURIComponent(songId)}`
+        });
+
+        await fetch(`/ondeck/carousel/activate/${songType}/${songId}`, {
+          method: 'POST'
+        });
+      } else {
+        const select = document.querySelector('select[name="midgame_song_id"]');
+        if (select) {
+          select.value = songId;
+        }
+      }
+
+      window.location.reload();
+    } else {
+      alert('Song added!');
+      window.location.reload();
+    }
+  } catch (err) {
+    alert(`Error uploading song: ${err.message}`);
+    cancelUpload();
+  }
+}
+
+function cancelUpload() {
+  document.getElementById('nameModal').classList.add('hidden');
+  pendingUploadFile = null;
+  pendingUploadType = null;
+}
+
 async function addToCarousel(songType) {
   const selectId = songType + '_add_select';
   const select = document.getElementById(selectId);
@@ -276,7 +426,6 @@ async function addToCarousel(songType) {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    // Reload page to show updated carousel
     window.location.reload();
   } catch (err) {
     alert(`Error adding song: ${err.message}`);

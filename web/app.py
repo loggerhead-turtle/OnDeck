@@ -234,9 +234,12 @@ def _check_auth(allowed_roles=None):
     if role == "player":
         player_ok = {
             "ondeck_my_profile", "ondeck_my_profile_upload", "ondeck_my_profile_save",
+            "ondeck_player_upload",
+            "ondeck_carousel_add", "ondeck_carousel_remove", "ondeck_carousel_activate",
             "ondeck_serve_audio",
             "ondeck_my_profile_change_password", "ondeck_my_profile_change_password_post",
-            "ondeck_logout", "ondeck_team_roster",
+            "ondeck_team_roster",
+            "ondeck_logout",
         }
         if request.endpoint not in player_ok:
             return redirect(url_for("ondeck_my_profile"))
@@ -1088,6 +1091,50 @@ def ondeck_my_profile_save():
         cfg.save()
     flash("Saved!", "success")
     return redirect(url_for("ondeck_my_profile"))
+
+
+@app.post("/ondeck/player-upload")
+def ondeck_player_upload():
+    """AJAX: Handle player music uploads for walk-up, warm-up, and mid-inning songs."""
+    pid = session.get("player_id")
+    player = cfg.players.get(pid)
+    if not player:
+        return {"error": "Unauthorized"}, 403
+
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return {"error": "No file selected"}, 400
+
+    song_type = request.form.get("song_type", "walkup")
+    display_name = request.form.get("display_name", "")
+
+    if not display_name:
+        return {"error": "No display name provided"}, 400
+
+    filename = Path(f.filename).name
+    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    f.save(str(MUSIC_DIR / filename))
+
+    # Check if this filename already exists in config
+    existing = {s["filename"]: sid for sid, s in cfg.songs.items()}
+    if filename in existing:
+        song_id = existing[filename]
+        new_song = False
+    else:
+        song_id = cfg.add_song(filename, display_name)
+        new_song = True
+
+    # Update the song display name (might differ from filename)
+    with cfg._lock:
+        cfg.songs[song_id]["display_name"] = display_name
+        cfg.save()
+
+    return {
+        "success": True,
+        "song_id": song_id,
+        "new_song": new_song,
+        "filename": filename
+    }
 
 
 @app.post("/ondeck/carousel/add/<song_type>")
