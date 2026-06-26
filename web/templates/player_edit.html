@@ -301,7 +301,7 @@ async function uploadRecording() {
 
 // ---- PA preview ----------------------------------------------------------
 {% if player.announcement_file and player.walkup_song_id %}
-async function previewCombined() {
+function previewCombined() {
   const clip = {
     file:     '{{ songs[player.walkup_song_id].filename if player.walkup_song_id and songs.get(player.walkup_song_id) else "" }}',
     start_ms: parseInt(document.getElementById('song-h-start')?.value) || 0,
@@ -309,12 +309,7 @@ async function previewCombined() {
     announcement: '{{ player.announcement_file }}',
     cue_ms:   parseInt(document.getElementById('ann-h-cue')?.value) || 0,
   }
-  await fetch('/api/preview', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(clip),
-  })
-  setTimeout(pollStatus, 400)
+  OnDeck.preview(clip)   // full announcement→music on the Pi, or song-only in Demo
 }
 {% endif %}
 

@@ -54,17 +54,11 @@
 </form>
 
 <script>
-  async function previewSong() {
+  function previewSong() {
     const startMs = parseInt(document.getElementById('song-h-start').value) || 0
     const endVal  = document.getElementById('song-h-end').value
     const endMs   = endVal ? parseInt(endVal) : null
-
-    await fetch('/api/preview', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: '{{ song.filename }}', start_ms: startMs, end_ms: endMs }),
-    })
-    setTimeout(pollStatus, 400)
+    OnDeck.preview({ file: '{{ song.filename }}', start_ms: startMs, end_ms: endMs })
   }
 </script>
 {% endblock %}

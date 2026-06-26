@@ -141,6 +141,190 @@
   </div>
   {% endif %}{# cloud_mode #}
 
+  <!-- Demo / Debug floating tools (available in both local and cloud mode) -->
+  <div id="ondeck-tools" class="fixed bottom-20 right-3 z-50 flex flex-col items-end gap-2 print:hidden">
+    <div id="debug-panel" class="hidden w-80 max-w-[88vw] bg-gray-900 border border-gray-700 rounded-lg shadow-2xl text-xs">
+      <div class="flex items-center justify-between px-3 py-2 border-b border-gray-800">
+        <span class="font-semibold text-gray-200">🐞 Debug</span>
+        <div class="flex gap-3">
+          <button type="button" onclick="OnDeck.copyLog()" class="text-gray-400 hover:text-white">Copy</button>
+          <button type="button" onclick="OnDeck.clearLog()" class="text-gray-400 hover:text-white">Clear</button>
+        </div>
+      </div>
+      <div id="debug-state" class="px-3 py-2 text-gray-400 font-mono whitespace-pre-wrap border-b border-gray-800"></div>
+      <pre id="debug-log" class="px-3 py-2 h-44 overflow-auto text-gray-300 font-mono whitespace-pre-wrap leading-relaxed m-0"></pre>
+    </div>
+    <div class="flex gap-2">
+      <button type="button" id="demo-toggle" onclick="OnDeck.toggleDemo()"
+              class="px-3 py-1.5 rounded-full text-xs font-semibold border bg-gray-800 border-gray-600 text-gray-300">🎧 Demo: off</button>
+      <button type="button" id="debug-toggle" onclick="OnDeck.toggleDebug()"
+              class="px-3 py-1.5 rounded-full text-xs font-semibold border bg-gray-800 border-gray-600 text-gray-300">🐞 Debug</button>
+    </div>
+  </div>
+
+  <script>
+    // Shared playback + demo-mode + debug helper, used by every page's Play
+    // buttons. In demo mode the clip plays in *this* browser (handy on a phone
+    // or in cloud mode with no Audio Pi); otherwise it's sent to the Pi.
+    window.ONDECK_CLOUD = {{ 'true' if cloud_mode else 'false' }};
+    window.OnDeck = (function () {
+      const LS = window.localStorage;
+      const state = {
+        demo:  LS.getItem('ondeck_demo')  === '1',
+        debug: LS.getItem('ondeck_debug') === '1',
+      };
+      let audio = null;     // singleton element for in-browser (demo) playback
+      let endWatch = null;  // timeupdate listener that stops at end_ms
+      let lastPi = '—';
+
+      function log(msg, data) {
+        const ts = new Date().toLocaleTimeString();
+        let line = '[' + ts + '] ' + msg;
+        if (data !== undefined) line += ' ' + (typeof data === 'string' ? data : JSON.stringify(data));
+        if (window.console) console.log('[OnDeck]', msg, data === undefined ? '' : data);
+        const el = document.getElementById('debug-log');
+        if (el) { el.textContent += line + '\n'; el.scrollTop = el.scrollHeight; }
+      }
+
+      function renderState() {
+        const el = document.getElementById('debug-state');
+        if (!el) return;
+        const lines = [
+          'mode: ' + (window.ONDECK_CLOUD ? 'cloud' : 'local') + '   demo: ' + (state.demo ? 'ON' : 'off'),
+          'pi: ' + lastPi,
+        ];
+        if (audio) {
+          lines.push('audio: ' + (audio.paused ? 'paused' : 'playing') +
+                     ' t=' + audio.currentTime.toFixed(2) +
+                     ' ready=' + audio.readyState + ' net=' + audio.networkState +
+                     (audio.error ? ' err=' + audio.error.code : ''));
+          lines.push('src: ' + (audio.currentSrc ? decodeURIComponent(audio.currentSrc.split('/').pop()) : '—'));
+        }
+        el.textContent = lines.join('\n');
+      }
+
+      function ensureAudio() {
+        if (!audio) {
+          audio = new Audio();
+          audio.preload = 'metadata';
+          audio.setAttribute('playsinline', '');
+          ['playing', 'pause', 'ended', 'stalled', 'waiting', 'error', 'loadedmetadata'].forEach(function (ev) {
+            audio.addEventListener(ev, function () {
+              log('audio:' + ev, ev === 'error' && audio.error ? 'code ' + audio.error.code : undefined);
+              renderState();
+            });
+          });
+          audio.addEventListener('timeupdate', renderState);
+        }
+        return audio;
+      }
+
+      function nowPlaying(text) {
+        const np = document.getElementById('now-playing-text');
+        if (np) np.textContent = text;
+      }
+
+      function playInBrowser(clip) {
+        const a = ensureAudio();
+        if (endWatch) { a.removeEventListener('timeupdate', endWatch); endWatch = null; }
+        const start = (clip.start_ms || 0) / 1000;
+        const end   = clip.end_ms != null ? clip.end_ms / 1000 : null;
+        if (a.getAttribute('data-file') !== clip.file) {
+          a.src = '/audio/' + encodeURIComponent(clip.file);
+          a.setAttribute('data-file', clip.file);
+        }
+        log('demo play', { file: clip.file, start: start, end: end });
+        const seek = function () { try { a.currentTime = start; } catch (e) {} };
+        if (a.readyState >= 1) seek(); else a.addEventListener('loadedmetadata', seek, { once: true });
+        // Call play() synchronously (we're inside the click) for mobile autoplay.
+        a.play().then(function () { log('demo play() ok'); }).catch(function (e) { log('demo play() rejected', String(e)); });
+        if (end != null) {
+          endWatch = function () {
+            if (a.currentTime >= end) { a.pause(); a.removeEventListener('timeupdate', endWatch); endWatch = null; log('demo reached end'); }
+          };
+          a.addEventListener('timeupdate', endWatch);
+        }
+        if (clip.announcement) log('demo note: announcement/cue skipped in browser (song only)');
+        nowPlaying('▶ ' + clip.file + ' (demo)');
+      }
+
+      async function preview(clip) {
+        if (!clip || !clip.file) { log('preview: nothing to play'); return; }
+        log('preview', { demo: state.demo, file: clip.file, start_ms: clip.start_ms, end_ms: clip.end_ms });
+        if (state.demo) { playInBrowser(clip); return; }
+        try {
+          const r = await fetch('/api/preview', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(clip),
+          });
+          lastPi = r.status + (r.ok ? ' ok' : ' FAIL');
+          log('preview -> Pi', lastPi);
+          if (!r.ok) log('Pi rejected the preview — turn on 🎧 Demo to play in this browser');
+        } catch (e) {
+          lastPi = 'unreachable';
+          log('preview -> Pi error', String(e));
+          log('Audio Pi unreachable — turn on 🎧 Demo to play in this browser');
+        }
+        renderState();
+        if (window.pollStatus) setTimeout(window.pollStatus, 400);
+      }
+
+      async function stopAll() {
+        if (audio) audio.pause();
+        if (endWatch && audio) { audio.removeEventListener('timeupdate', endWatch); endWatch = null; }
+        nowPlaying('Nothing playing');
+        if (!state.demo) { try { await fetch('/api/stop', { method: 'POST' }); } catch (e) {} }
+        log('stop');
+        renderState();
+      }
+
+      function isDemoPlaying() { return !!(audio && !audio.paused); }
+      function setLastPi(v) { lastPi = v; renderState(); }
+
+      function syncUI() {
+        const dt = document.getElementById('demo-toggle');
+        const db = document.getElementById('debug-toggle');
+        const panel = document.getElementById('debug-panel');
+        if (dt) {
+          dt.textContent = '🎧 Demo: ' + (state.demo ? 'on' : 'off');
+          dt.className = 'px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ' +
+            (state.demo ? 'bg-green-700 border-green-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-300');
+        }
+        if (db) {
+          db.className = 'px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ' +
+            (state.debug ? 'bg-indigo-700 border-indigo-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-300');
+        }
+        if (panel) panel.classList.toggle('hidden', !state.debug);
+        renderState();
+      }
+
+      function toggleDemo() {
+        state.demo = !state.demo;
+        LS.setItem('ondeck_demo', state.demo ? '1' : '0');
+        if (!state.demo && audio) audio.pause();
+        log('demo mode ' + (state.demo ? 'ON' : 'off'));
+        syncUI();
+      }
+      function toggleDebug() {
+        state.debug = !state.debug;
+        LS.setItem('ondeck_debug', state.debug ? '1' : '0');
+        syncUI();
+      }
+      function clearLog() { const el = document.getElementById('debug-log'); if (el) el.textContent = ''; }
+      function copyLog() {
+        const el = document.getElementById('debug-log');
+        if (el && navigator.clipboard) navigator.clipboard.writeText(el.textContent).then(function () { log('log copied'); });
+      }
+
+      document.addEventListener('DOMContentLoaded', function () { syncUI(); log('OnDeck ready', { demo: state.demo, debug: state.debug }); });
+
+      return {
+        preview: preview, stopAll: stopAll, isDemoPlaying: isDemoPlaying, setLastPi: setLastPi,
+        toggleDemo: toggleDemo, toggleDebug: toggleDebug, clearLog: clearLog, copyLog: copyLog, log: log,
+        get demo() { return state.demo; },
+      };
+    })();
+  </script>
+
   <script>
     {% if not cloud_mode %}
     // Poll Audio Pi status every 3 seconds.
@@ -154,6 +338,9 @@
         const np  = document.getElementById('now-playing-text')
         dot.className = 'w-2 h-2 rounded-full ' + (d.error ? 'bg-red-500' : 'bg-green-500')
         lbl.textContent = d.error ? 'Audio Pi offline' : 'Audio Pi'
+        if (window.OnDeck) OnDeck.setLastPi(d.error ? ('offline: ' + d.error) : (d.state || 'idle'))
+        // Don't let Pi status overwrite the label while demo audio is playing.
+        if (window.OnDeck && OnDeck.isDemoPlaying()) return
         if (!d.error) {
           document.getElementById('vol-slider').value = d.volume
           document.getElementById('vol-label').textContent = d.volume
@@ -169,7 +356,8 @@
     }
 
     async function apiStop() {
-      await fetch('/api/stop', { method: 'POST' })
+      // Stops demo (browser) playback and, when not in demo mode, the Pi.
+      if (window.OnDeck) await OnDeck.stopAll()
       setTimeout(pollStatus, 300)
     }
 
