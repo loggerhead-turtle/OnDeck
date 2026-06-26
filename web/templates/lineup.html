@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Lineup{% endblock %}
+{% block content %}
+
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">Batting Order</h1>
+  <form method="POST" action="/lineup/size" class="flex items-center gap-2">
+    <label class="text-sm text-gray-400">Slots</label>
+    <input type="number" name="size" min="1" max="20" value="{{ size }}"
+           class="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-center">
+    <button type="submit"
+            class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-medium transition-colors">
+      Set
+    </button>
+  </form>
+</div>
+
+{% if players %}
+<form method="POST" action="/lineup/save">
+  <div class="space-y-2 max-w-2xl">
+    {% for i, p in slots %}
+    <div class="flex items-center gap-3 bg-gray-800 border border-gray-700/50 rounded-xl px-4 py-3">
+      <span class="text-lg font-black text-green-400 w-8 text-center shrink-0">{{ i + 1 }}</span>
+      <select name="slot_{{ i }}"
+              class="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100">
+        <option value="">— empty —</option>
+        {% for pid, pl in players %}
+        <option value="{{ pid }}" {% if p and pl.jersey == p.jersey and pl.last_name == p.last_name %}selected{% endif %}>
+          #{{ pl.jersey }} {{ pl.first_name }} {{ pl.last_name }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="mt-6 max-w-2xl">
+    <button type="submit"
+            class="w-full py-2.5 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold transition-colors">
+      Save Lineup
+    </button>
+    <p class="text-xs text-gray-500 mt-2 text-center">
+      The Stream Deck Lineup page mirrors this order. Press a batter to cue, then Play.
+    </p>
+  </div>
+</form>
+
+{% else %}
+<div class="bg-gray-800/50 border border-gray-700/50 rounded-xl p-12 text-center">
+  <div class="text-4xl mb-3">⚾</div>
+  <div class="text-gray-300 font-medium mb-1">No players yet</div>
+  <div class="text-gray-500 text-sm mb-4">Add players before building a lineup.</div>
+  <a href="/players/new"
+     class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold transition-colors">
+    + Add Player
+  </a>
+</div>
+{% endif %}
+
+{% endblock %}

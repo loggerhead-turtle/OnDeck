@@ -21,8 +21,9 @@ required during the game.
 - **Smooth audio** — precise trim points (hundredths of a second), one-second
   fade-out, instant stop, and an announcement→music crossfade.
 - **Web portal** — upload songs, record announcements straight from your phone's
-  browser, import audio from a YouTube link, and trim everything in a
-  waveform editor with live playback.
+  browser, import audio from a YouTube link, trim everything in a waveform
+  editor with live playback, build the batting order, and assign songs to each
+  game-day page and celebration stinger.
 - **Offline-first** — runs entirely on a local Wi-Fi network at the field, and
   syncs back to the cloud when internet is available.
 

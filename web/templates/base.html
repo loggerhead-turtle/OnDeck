@@ -62,6 +62,8 @@
       <a href="/"         class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'index' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Home</a>
       <a href="/library"  class="nav-link px-3 py-1.5 rounded-md {% if 'library' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Library</a>
       <a href="/players"  class="nav-link px-3 py-1.5 rounded-md {% if 'player' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Players</a>
+      <a href="/lineup"   class="nav-link px-3 py-1.5 rounded-md {% if 'lineup' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Lineup</a>
+      <a href="/sounds"   class="nav-link px-3 py-1.5 rounded-md {% if 'sounds' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Sounds</a>
       <a href="/settings" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'settings' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Settings</a>
     </nav>
 
