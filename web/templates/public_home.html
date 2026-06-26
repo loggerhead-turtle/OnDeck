@@ -10,14 +10,10 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
   <style>
     body { font-family: 'Inter', system-ui, sans-serif; }
-
-    /* Scroll offset so sticky nav doesn't cover section headings */
     section { scroll-margin-top: 4.5rem; }
-
     .hero-bg {
       background: linear-gradient(150deg, #f8fafc 0%, #eef2ff 55%, #f0fdf4 100%);
     }
-
     .product-card:hover .arrow {
       transform: translateX(4px);
     }
@@ -25,7 +21,7 @@
 </head>
 <body class="bg-slate-50 text-slate-900 antialiased">
 
-  <!-- ── Sticky nav ── -->
+  <!-- Sticky nav -->
   <nav class="fixed top-0 inset-x-0 z-50 bg-white/90 backdrop-blur-sm border-b border-slate-200">
     <div class="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
       <a href="#" class="text-xl font-extrabold tracking-tight text-slate-900 select-none">EG</a>
@@ -33,19 +29,19 @@
         <a href="#about"    class="hover:text-slate-900 transition-colors">About</a>
         <a href="#products" class="hover:text-slate-900 transition-colors">Products</a>
         <a href="#cv"       class="hover:text-slate-900 transition-colors">CV</a>
+        <a href="/login"    class="hover:text-slate-900 transition-colors">Coach Login</a>
       </div>
     </div>
   </nav>
 
-  <!-- ── Hero ── -->
+  <!-- Hero -->
   <section id="home" class="hero-bg pt-28 pb-24 px-6">
     <div class="max-w-5xl mx-auto flex flex-col md:flex-row items-center gap-12">
 
-      <!-- Profile photo — replace profile.jpg with your own photo -->
       <div class="shrink-0">
         <div id="photo-wrap"
-             class="w-44 h-44 md:w-52 md:h-52 rounded-full overflow-hidden ring-4 ring-white shadow-2xl bg-indigo-600 flex items-center justify-center">
-          <img src="profile.jpg" alt="OnDeck"
+             class="w-44 h-44 md:w-52 md:h-52 rounded-full overflow-hidden ring-4 ring-white shadow-2xl bg-indigo-600 flex items-center justify-center relative">
+          <img src="/static/profile.jpg" alt="OnDeck"
                class="w-full h-full object-cover"
                onload="document.getElementById('photo-initials').style.display='none'"
                onerror="this.style.display='none'">
@@ -53,13 +49,11 @@
         </div>
       </div>
 
-      <!-- Name & tagline -->
       <div class="text-center md:text-left">
         <p class="text-indigo-600 font-semibold text-xs uppercase tracking-widest mb-3">Personal site</p>
         <h1 class="text-4xl md:text-5xl lg:text-6xl font-extrabold text-slate-900 leading-tight mb-5">
           OnDeck
         </h1>
-        <!-- UPDATE: replace with your tagline / one-liner -->
         <p class="text-lg md:text-xl text-slate-500 leading-relaxed max-w-lg">
           Builder, coach, and creator. I make tools that solve real problems.
         </p>
@@ -67,13 +61,12 @@
     </div>
   </section>
 
-  <!-- ── About ── -->
+  <!-- About -->
   <section id="about" class="py-24 px-6 bg-white">
     <div class="max-w-5xl mx-auto">
       <h2 class="text-2xl font-bold text-slate-900 mb-10">About Me</h2>
       <div class="grid md:grid-cols-3 gap-12 items-start">
 
-        <!-- Bio text — UPDATE with your real bio -->
         <div class="md:col-span-2 space-y-5 text-slate-600 leading-relaxed">
           <p>
             Replace this paragraph with your actual bio. Tell visitors who you are,
@@ -89,30 +82,20 @@
           </p>
         </div>
 
-        <!-- Contact / social sidebar -->
         <div class="space-y-4">
           <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-widest">Get in touch</h3>
-          <!-- UPDATE: replace with your actual email / links -->
           <a href="mailto:you@example.com"
              class="flex items-center gap-3 text-sm text-slate-600 hover:text-indigo-600 transition-colors">
             <span class="text-lg">✉</span>
             <span>you@example.com</span>
           </a>
-          <!-- Add more social links here as needed -->
-          <!-- Example:
-          <a href="https://linkedin.com/in/yourprofile" target="_blank" rel="noopener"
-             class="flex items-center gap-3 text-sm text-slate-600 hover:text-indigo-600 transition-colors">
-            <span class="text-lg">in</span>
-            <span>LinkedIn</span>
-          </a>
-          -->
         </div>
 
       </div>
     </div>
   </section>
 
-  <!-- ── Products ── -->
+  <!-- Products -->
   <section id="products" class="py-24 px-6 bg-slate-50">
     <div class="max-w-5xl mx-auto">
       <h2 class="text-2xl font-bold text-slate-900 mb-2">Products</h2>
@@ -121,7 +104,7 @@
       <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
 
         <!-- OnDeck -->
-        <a href="/OnDeck"
+        <a href="/dashboard"
            class="product-card group bg-white rounded-2xl border border-slate-200 p-7
                   shadow-sm hover:shadow-lg hover:border-indigo-200 transition-all duration-200">
           <div class="text-4xl mb-5 select-none">⚾</div>
@@ -138,24 +121,20 @@
           </span>
         </a>
 
-        <!-- Add more product cards here — copy the block above -->
-
       </div>
     </div>
   </section>
 
-  <!-- ── CV ── -->
+  <!-- CV -->
   <section id="cv" class="py-24 px-6 bg-white border-t border-slate-100">
     <div class="max-w-5xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-8">
       <div>
         <h2 class="text-2xl font-bold text-slate-900 mb-2">Curriculum Vitae</h2>
-        <!-- UPDATE: change the description if you like -->
         <p class="text-slate-500 max-w-md">
           Download my CV for a full overview of my background, experience, and credentials.
         </p>
       </div>
-      <!-- Place your CV as cv.pdf in firebase-public/ -->
-      <a href="cv.pdf" download
+      <a href="/static/cv.pdf" download
          class="shrink-0 inline-flex items-center gap-2 px-6 py-3 rounded-xl
                 bg-slate-900 hover:bg-indigo-600 text-white font-semibold text-sm
                 transition-colors shadow-sm">
@@ -164,7 +143,7 @@
     </div>
   </section>
 
-  <!-- ── Footer ── -->
+  <!-- Footer -->
   <footer class="py-8 px-6 bg-slate-50 border-t border-slate-200">
     <div class="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3
                 text-xs text-slate-400">

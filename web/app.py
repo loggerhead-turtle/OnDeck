@@ -110,6 +110,9 @@ def _check_auth():
         if p and p.get("force_reset") and request.endpoint not in _reset_ok:
             return redirect(url_for("my_profile_change_password"))
         return
+    # Public homepage is always accessible.
+    if request.endpoint == "public_home":
+        return
     # No session — redirect based on destination.
     if request.endpoint in ("my_profile", "my_profile_upload", "my_profile_save"):
         return redirect(url_for("player_login"))
@@ -174,7 +177,7 @@ def _proxy(method: str, path: str, **kwargs):
 @app.get("/login")
 def login():
     if session.get("logged_in"):
-        return redirect(url_for("index"))
+        return redirect(url_for("dashboard"))
     return render_template("login.html")
 
 
@@ -189,7 +192,7 @@ def login_post():
         session.permanent = remember
         session["logged_in"] = True
         session["username"] = username
-        next_url = request.args.get("next") or url_for("index")
+        next_url = request.args.get("next") or url_for("dashboard")
         if not next_url.startswith("/"):   # prevent open redirect
             next_url = url_for("index")
         return redirect(next_url)
@@ -239,7 +242,7 @@ def setup_post():
     session["logged_in"] = True
     session["username"] = username
     flash("Account created. Welcome to OnDeck!", "success")
-    return redirect(url_for("index"))
+    return redirect(url_for("dashboard"))
 
 
 @app.get("/player-login")
@@ -284,11 +287,22 @@ def serve_audio(filename: str):
 
 
 # ---------------------------------------------------------------------------
-# Dashboard
+# Public homepage
 # ---------------------------------------------------------------------------
 
 @app.get("/")
-def index():
+def public_home():
+    if session.get("logged_in"):
+        return redirect(url_for("dashboard"))
+    return render_template("public_home.html")
+
+
+# ---------------------------------------------------------------------------
+# Dashboard
+# ---------------------------------------------------------------------------
+
+@app.get("/dashboard")
+def dashboard():
     status, _ = _proxy("GET", "/status")
     players = cfg.players_by_jersey()
     return render_template("index.html", status=status, system=cfg.system,

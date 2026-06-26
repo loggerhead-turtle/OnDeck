@@ -53,7 +53,7 @@
 
   <!-- Top nav -->
   <header class="bg-gray-900 border-b border-gray-800 flex items-center px-4 h-14 shrink-0">
-    <a href="/" class="flex items-center gap-2 mr-8 shrink-0">
+    <a href="/dashboard" class="flex items-center gap-2 mr-8 shrink-0">
       <span class="text-2xl leading-none">⚾</span>
       <span class="font-bold text-lg tracking-tight text-white">OnDeck</span>
     </a>
@@ -64,7 +64,7 @@
     </nav>
     {% else %}
     <nav class="flex gap-1 text-sm font-medium">
-      <a href="/"         class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'index' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Home</a>
+      <a href="/dashboard" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'dashboard' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Home</a>
       <a href="/library"  class="nav-link px-3 py-1.5 rounded-md {% if 'library' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Library</a>
       <a href="/players"  class="nav-link px-3 py-1.5 rounded-md {% if 'player' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Players</a>
       <a href="/settings" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'settings' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Settings</a>
