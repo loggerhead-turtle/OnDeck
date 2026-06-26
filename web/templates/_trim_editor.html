@@ -197,6 +197,7 @@ class TrimEditor {
     this._ready   = false
     this._playing = false
     this._dur     = 0
+    this._updateCallbacks = []
     this._init()
   }
 
@@ -255,6 +256,10 @@ class TrimEditor {
         this._region.on('update-end', () => {
           this._updateHandles()
           this._notifyUpdate()
+        })
+        // Attach any pending callbacks that were registered before the region existed
+        this._updateCallbacks.forEach(cb => {
+          this._region.on('update-end', cb)
         })
       }
 
@@ -555,9 +560,12 @@ class TrimEditor {
   }
 
   // Public API: Register a callback for region updates
+  // If the region doesn't exist yet, store the callback and attach it once the region is ready
   onRegionUpdate(callback) {
     if (this._region) {
       this._region.on('update-end', callback)
+    } else {
+      this._updateCallbacks.push(callback)
     }
   }
 }
