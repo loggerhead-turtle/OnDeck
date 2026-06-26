@@ -36,7 +36,9 @@
                 <div class="text-gray-400 mb-2">
                   🎵 Walk-up: <span class="text-gray-200">{{ walkup_song['display_name'] }}</span>
                 </div>
-                <audio controls class="w-full h-8" style="max-width: 300px;">
+                <audio controls class="w-full h-8 team-audio" style="max-width: 300px;"
+                       data-start="{{ walkup_song.get('start_ms', 0) }}"
+                       data-end="{{ walkup_song.get('end_ms', '') }}">
                   <source src="{{ url_for('ondeck_serve_audio', filename=walkup_song['filename']) }}" type="audio/mpeg">
                   Your browser does not support the audio element.
                 </audio>
@@ -49,7 +51,9 @@
                 <div class="text-gray-400 mb-2">
                   ⚾ Warm-up: <span class="text-gray-200">{{ warmup_song['display_name'] }}</span>
                 </div>
-                <audio controls class="w-full h-8" style="max-width: 300px;">
+                <audio controls class="w-full h-8 team-audio" style="max-width: 300px;"
+                       data-start="{{ warmup_song.get('start_ms', 0) }}"
+                       data-end="{{ warmup_song.get('end_ms', '') }}">
                   <source src="{{ url_for('ondeck_serve_audio', filename=warmup_song['filename']) }}" type="audio/mpeg">
                   Your browser does not support the audio element.
                 </audio>
@@ -62,7 +66,9 @@
                 <div class="text-gray-400 mb-2">
                   🎪 Mid-Inning: <span class="text-gray-200">{{ midgame_song['display_name'] }}</span>
                 </div>
-                <audio controls class="w-full h-8" style="max-width: 300px;">
+                <audio controls class="w-full h-8 team-audio" style="max-width: 300px;"
+                       data-start="{{ midgame_song.get('start_ms', 0) }}"
+                       data-end="{{ midgame_song.get('end_ms', '') }}">
                   <source src="{{ url_for('ondeck_serve_audio', filename=midgame_song['filename']) }}" type="audio/mpeg">
                   Your browser does not support the audio element.
                 </audio>
@@ -84,5 +90,38 @@
 </div>
 
 {% endif %}
+
+<script>
+// Apply trim start/end times to audio playback
+document.querySelectorAll('.team-audio').forEach(audio => {
+  const startMs = parseInt(audio.dataset.start || '0', 10);
+  const endMs = audio.dataset.end ? parseInt(audio.dataset.end, 10) : null;
+
+  const startSec = startMs / 1000;
+  const endSec = endMs ? endMs / 1000 : null;
+
+  // When the file loads, seek to the start position
+  audio.addEventListener('loadedmetadata', () => {
+    if (isFinite(startSec) && startSec > 0) {
+      audio.currentTime = startSec;
+    }
+  });
+
+  // When the user presses play, ensure we start from the trim start
+  audio.addEventListener('play', () => {
+    if (isFinite(startSec) && Math.abs(audio.currentTime - startSec) > 0.5) {
+      audio.currentTime = startSec;
+    }
+  });
+
+  // During playback, stop at the end trim point
+  audio.addEventListener('timeupdate', () => {
+    if (endSec && isFinite(endSec) && audio.currentTime >= endSec) {
+      audio.pause();
+      audio.currentTime = startSec;
+    }
+  });
+});
+</script>
 
 {% endblock %}
