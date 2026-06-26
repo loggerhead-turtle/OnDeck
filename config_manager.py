@@ -50,6 +50,10 @@ def _default_config() -> dict[str, Any]:
         },
         "players": {},          # player_id -> player dict
         "songs": {},            # song_id -> song dict
+        # Activity log of player-made changes for the coach to review. Newest
+        # first; capped in app.py. Each entry: {id, ts, player_id, jersey,
+        # player_name, action, detail, seen}.
+        "notifications": [],
         "lineup": [None] * 9,   # batting order, indexes 0..size-1 used
         "lineup_size": 9,
         "celebrations": {
