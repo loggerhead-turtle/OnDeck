@@ -35,7 +35,18 @@ if [[ "$ROLE" == "audio" || "$ROLE" == "both" ]]; then
   # Audio playback + YouTube import + Bluetooth.
   PKGS+=(alsa-utils bluez)
 fi
+if [[ "$ROLE" == "coach" || "$ROLE" == "both" ]]; then
+  # Headless Wi-Fi onboarding: captive-portal hotspot + network tooling.
+  PKGS+=(hostapd dnsmasq iw wireless-tools wpasupplicant iptables)
+fi
 sudo apt-get install -y --no-install-recommends "${PKGS[@]}"
+
+# The setup portal manages the AP itself; keep these services from grabbing
+# wlan0 at boot (the boot gate starts/stops them on demand).
+if [[ "$ROLE" == "coach" || "$ROLE" == "both" ]]; then
+  sudo systemctl unmask hostapd 2>/dev/null || true
+  sudo systemctl disable hostapd dnsmasq 2>/dev/null || true
+fi
 
 # --- python environment --------------------------------------------------
 echo "==> Creating virtual environment..."
@@ -82,6 +93,44 @@ if [[ "$ROLE" == "audio" || "$ROLE" == "both" ]]; then
 fi
 if [[ "$ROLE" == "coach" || "$ROLE" == "both" ]]; then
   install_service "ondeck-coach" "$REPO_DIR/main.py" "OnDeck Coach Pi (Stream Deck + web portal)"
+
+  # --- headless network onboarding (boot gate + captive portal) ----------
+  # A oneshot that runs BEFORE ondeck-coach: applies boot-partition Wi-Fi,
+  # links via a dropped ondeck.json, or opens the OnDeck-Setup hotspot when the
+  # Pi has no working Wi-Fi / cloud link. Runs as root (needs hostapd/dnsmasq).
+  echo "==> Installing service: ondeck-setup (boot gate)"
+  sudo tee /etc/systemd/system/ondeck-setup.service >/dev/null <<EOF
+[Unit]
+Description=OnDeck boot gate (Wi-Fi setup / cloud link)
+Before=ondeck-coach.service
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+WorkingDirectory=$REPO_DIR
+Environment=ONDECK_HOME=$ONDECK_HOME
+Environment=ONDECK_USER=$RUN_USER
+ExecStart=$VENV/bin/python $REPO_DIR/pi/boot_mode.py
+# The portal blocks until the coach finishes setup, which can take minutes.
+TimeoutStartSec=infinity
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  sudo systemctl daemon-reload
+  sudo systemctl enable ondeck-setup.service
+
+  # Let the web portal (service user) manage Wi-Fi via the helper without a
+  # password prompt — used by the /wifi page.
+  echo "==> Installing sudoers rule for Wi-Fi management"
+  sudo tee /etc/sudoers.d/ondeck-wifi >/dev/null <<EOF
+$RUN_USER ALL=(root) NOPASSWD: $VENV/bin/python $REPO_DIR/pi/add_wifi.py, /sbin/wpa_cli -i wlan0 reconfigure, /usr/sbin/wpa_cli -i wlan0 reconfigure
+EOF
+  sudo chmod 0440 /etc/sudoers.d/ondeck-wifi
 fi
 
 # --- cloud sync timer (all roles) ----------------------------------------

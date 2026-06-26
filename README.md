@@ -12,8 +12,9 @@ required during the game.
   song. Press the player's button, the announcer plays, and the music fades in
   at the exact moment you choose.
 - **Lineup management** — assign players to batting-order slots on the Stream
-  Deck. In live mode each press cues the next batter; the song auto-advances the
-  lineup when it ends.
+  Deck. Press a batter's tile to cue their walk-up, press Play to run it; when
+  the song ends the lineup auto-advances and re-cues the next hitter, ready for
+  the next Play.
 - **Game-day sounds** — hype music, mid-inning music, mound-visit music,
   dead-ball music, celebration stingers (hit / extra-base / home run /
   strikeout), and pitcher warm-up songs, each on its own page.
