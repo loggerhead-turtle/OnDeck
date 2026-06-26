@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Create Your Account{% endblock %}
+{% block content %}
+
+<div class="max-w-md mx-auto mt-8">
+  <div class="bg-gray-800 border border-gray-700 rounded-xl p-6">
+    <h1 class="text-2xl font-bold mb-6 text-center">Join the Team</h1>
+
+    {% if get_flashed_messages(category_filter=['error']) %}
+      {% for msg in get_flashed_messages(category_filter=['error']) %}
+      <div class="bg-red-900/30 border border-red-700/50 rounded-lg p-3 mb-4 text-red-200 text-sm">
+        {{ msg }}
+      </div>
+      {% endfor %}
+    {% endif %}
+
+    <form method="POST" class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">Teams</label>
+        <div class="bg-gray-900 border border-gray-700 rounded-lg p-3 text-gray-300 text-sm">
+          {% for team_id, team in teams.items() %}
+            <div class="flex items-center">
+              <input type="checkbox" id="team_{{ team_id }}" name="team_ids" value="{{ team_id }}" checked disabled
+                     class="w-4 h-4 accent-green-500 cursor-not-allowed">
+              <label for="team_{{ team_id }}" class="ml-2 text-gray-200">{{ team['name'] }}</label>
+            </div>
+          {% endfor %}
+        </div>
+        <p class="text-xs text-gray-500 mt-2">You've been invited to {{ teams|length }} team(s).</p>
+      </div>
+
+      <div>
+        <label for="username" class="block text-sm font-medium text-gray-300 mb-1">Username</label>
+        <input type="text" id="username" name="username" required
+               class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-green-500">
+      </div>
+
+      <div>
+        <label for="password" class="block text-sm font-medium text-gray-300 mb-1">Password</label>
+        <input type="password" id="password" name="password" required
+               class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-green-500">
+        <p class="text-xs text-gray-500 mt-1">At least 8 characters.</p>
+      </div>
+
+      <div>
+        <label for="confirm" class="block text-sm font-medium text-gray-300 mb-1">Confirm Password</label>
+        <input type="password" id="confirm" name="confirm" required
+               class="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-green-500">
+      </div>
+
+      <button type="submit" class="w-full py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white font-semibold transition-colors">
+        Create Account
+      </button>
+    </form>
+
+    <p class="text-center text-gray-400 text-sm mt-4">
+      Already have an account?
+      <a href="{{ url_for('ondeck_login') }}" class="text-green-400 hover:text-green-300">Log in</a>
+    </p>
+  </div>
+</div>
+
+{% endblock %}

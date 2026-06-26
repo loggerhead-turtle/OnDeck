@@ -78,6 +78,16 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 cfg = ConfigManager()
 
 
+# Custom Jinja filters
+@app.template_filter("datetime")
+def format_datetime(ms: int) -> str:
+    """Format milliseconds since epoch as a human-readable datetime."""
+    if not ms:
+        return "unknown"
+    dt = datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+    return dt.strftime("%b %d, %Y %I:%M %p")
+
+
 # ---------------------------------------------------------------------------
 # Multi-user auth helpers
 # ---------------------------------------------------------------------------
@@ -382,6 +392,59 @@ def ondeck_setup_post():
 
 
 # ---------------------------------------------------------------------------
+# Player signup with access code (public, team-based)
+# ---------------------------------------------------------------------------
+
+@app.get("/signup/<code>")
+def player_signup(code: str):
+    link = cfg.get_signup_link(code)
+    if not link:
+        flash("Invalid or expired signup link.", "error")
+        return redirect(url_for("ondeck_login"))
+
+    return render_template("player_signup.html", code=code, team_ids=link["team_ids"],
+                          teams={tid: cfg.teams[tid] for tid in link["team_ids"]})
+
+
+@app.post("/signup/<code>")
+def player_signup_post(code: str):
+    link = cfg.get_signup_link(code)
+    if not link:
+        flash("Invalid or expired signup link.", "error")
+        return redirect(url_for("ondeck_login"))
+
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    confirm  = request.form.get("confirm", "")
+
+    if not username:
+        flash("Username is required.", "error")
+        return redirect(url_for("player_signup", code=code))
+    if len(password) < 8:
+        flash("Password must be at least 8 characters.", "error")
+        return redirect(url_for("player_signup", code=code))
+    if password != confirm:
+        flash("Passwords do not match.", "error")
+        return redirect(url_for("player_signup", code=code))
+
+    users = _load_users()
+    if any(u["username"].lower() == username.lower() for u in users):
+        flash(f"Username '{username}' already exists.", "error")
+        return redirect(url_for("player_signup", code=code))
+
+    new_user = {"id": str(uuid.uuid4()), "username": username,
+                "password_hash": generate_password_hash(password), "role": "player"}
+    _save_users(users + [new_user])
+
+    session.permanent = True
+    session["user_id"] = new_user["id"]
+    session["role"] = "player"
+    session["username"] = username
+    flash("Account created. Welcome to the team!", "success")
+    return redirect(url_for("ondeck_dashboard"))
+
+
+# ---------------------------------------------------------------------------
 # Admin panel  /admin  — user management (admin role only)
 # ---------------------------------------------------------------------------
 
@@ -613,8 +676,10 @@ def ondeck_players():
 
 @app.get("/ondeck/players/new")
 def ondeck_players_new():
+    teams = [(tid, t) for tid, t in cfg.teams.items()]
+    teams.sort(key=lambda kv: kv[1].get("name", ""))
     return render_template("player_edit.html",
-                           pid=None, player=None, songs=cfg.songs)
+                           pid=None, player=None, songs=cfg.songs, teams=teams)
 
 
 @app.post("/ondeck/players")
@@ -630,7 +695,8 @@ def ondeck_players_create():
         flash("First and last name are required.", "error")
         return redirect(url_for("ondeck_players_new"))
 
-    pid = cfg.add_player(jersey, first, last)
+    team_ids = request.form.getlist("team_ids")
+    pid = cfg.add_player(jersey, first, last, team_ids=team_ids)
     flash(f"Added #{jersey} {first} {last}.", "success")
     return redirect(url_for("ondeck_players_edit", pid=pid))
 
@@ -640,8 +706,10 @@ def ondeck_players_edit(pid: str):
     player = cfg.players.get(pid)
     if not player:
         abort(404)
+    teams = [(tid, t) for tid, t in cfg.teams.items()]
+    teams.sort(key=lambda kv: kv[1].get("name", ""))
     return render_template("player_edit.html",
-                           pid=pid, player=player, songs=cfg.songs,
+                           pid=pid, player=player, songs=cfg.songs, teams=teams,
                            default_announcement=_default_announcement(player))
 
 
@@ -663,6 +731,10 @@ def ondeck_players_save(pid: str):
         player["announcement_start_ms"] = _form_ms("ann_start_ms", 0)
         player["announcement_end_ms"]   = _form_ms_or_none("ann_end_ms")
         player["music_cue_ms"]          = _form_ms("music_cue_ms", 0)
+
+        # Update team assignments
+        team_ids = request.form.getlist("team_ids")
+        player["team_ids"] = [tid for tid in team_ids if tid in cfg.teams]
 
         sid = player.get("walkup_song_id")
         if sid and sid in cfg.songs:
@@ -1046,6 +1118,131 @@ def ondeck_sounds_celebration_save(kind: str):
     cfg.set_celebration(kind, request.form.get("song_id") or None)
     flash(f"{dict(CELEBRATIONS)[kind]} stinger saved.", "success")
     return redirect(url_for("ondeck_sounds"))
+
+
+# ---------------------------------------------------------------------------
+# Team Management — admin + editor (signup links, team assignments)
+# ---------------------------------------------------------------------------
+
+@app.get("/ondeck/teams")
+def ondeck_teams():
+    _check_auth(["admin", "editor"])
+    teams = cfg.teams
+    teams_list = [(tid, t) for tid, t in teams.items()]
+    teams_list.sort(key=lambda kv: kv[1].get("name", ""))
+    return render_template("team_management.html", teams=teams_list)
+
+
+@app.post("/ondeck/teams/add")
+def ondeck_teams_add():
+    _check_auth(["admin", "editor"])
+    name = request.form.get("name", "").strip()
+    if not name:
+        flash("Team name is required.", "error")
+    else:
+        tid = cfg.add_team(name)
+        flash(f"Team '{name}' created.", "success")
+    return redirect(url_for("ondeck_teams"))
+
+
+@app.post("/ondeck/teams/<tid>/update")
+def ondeck_teams_update(tid: str):
+    _check_auth(["admin", "editor"])
+    if tid not in cfg.teams:
+        abort(404)
+    name = request.form.get("name", "").strip()
+    if not name:
+        flash("Team name is required.", "error")
+    else:
+        cfg.update_team(tid, name)
+        flash("Team updated.", "success")
+    return redirect(url_for("ondeck_teams"))
+
+
+@app.post("/ondeck/teams/<tid>/delete")
+def ondeck_teams_delete(tid: str):
+    _check_auth(["admin"])
+    if tid not in cfg.teams:
+        abort(404)
+    cfg.delete_team(tid)
+    flash("Team deleted.", "success")
+    return redirect(url_for("ondeck_teams"))
+
+
+@app.get("/ondeck/signup-links")
+def ondeck_signup_links():
+    _check_auth(["admin"])
+    active_links = cfg.get_active_signup_links()
+    teams = cfg.teams
+    return render_template("signup_links.html", links=active_links, teams=teams)
+
+
+@app.post("/ondeck/signup-links/create")
+def ondeck_signup_links_create():
+    _check_auth(["admin"])
+    team_ids = request.form.getlist("team_ids")
+    if not team_ids:
+        flash("Select at least one team.", "error")
+    else:
+        code, link = cfg.create_signup_link(team_ids)
+        flash(f"Signup link created. Share this code: {code}", "success")
+    return redirect(url_for("ondeck_signup_links"))
+
+
+@app.post("/ondeck/signup-links/<code>/revoke")
+def ondeck_signup_links_revoke(code: str):
+    _check_auth(["admin"])
+    cfg.revoke_signup_link(code)
+    flash("Signup link revoked.", "success")
+    return redirect(url_for("ondeck_signup_links"))
+
+
+@app.post("/ondeck/settings/signup-link-expires")
+def ondeck_settings_signup_expires():
+    _check_auth(["admin"])
+    try:
+        hours = int(request.form.get("signup_link_expires_hours", 168))
+        hours = max(1, min(hours, 52560))  # 1 hour to 6 years
+        cfg.system["signup_link_expires_hours"] = hours
+        cfg.save()
+        flash(f"Signup link expiration set to {hours} hours.", "success")
+    except (ValueError, TypeError):
+        flash("Invalid value for expiration hours.", "error")
+    return redirect(url_for("ondeck_settings"))
+
+
+# ---------------------------------------------------------------------------
+# Team Roster — player page to see teammates and walk-up songs
+# ---------------------------------------------------------------------------
+
+@app.get("/ondeck/team-roster")
+def ondeck_team_roster():
+    _check_auth(["player", "editor", "admin"])
+    user_id = session.get("user_id")
+
+    # Get the current user's teams (if they're a player)
+    user_teams = []
+    if session.get("role") == "player":
+        # Find the player associated with this user (if any)
+        # For now, we'll show all teams if they're not a player in the system
+        user_teams = []
+
+    # For admins/editors, show all teams; for players, show their assigned teams
+    if session.get("role") in ("admin", "editor"):
+        teams_to_show = [(tid, cfg.teams[tid]) for tid in cfg.teams.keys()]
+    else:
+        teams_to_show = []
+
+    teams_data = []
+    for team_id, team in teams_to_show:
+        members = cfg.get_team_members(team_id)
+        teams_data.append({
+            "id": team_id,
+            "name": team.get("name", ""),
+            "members": members,
+        })
+
+    return render_template("team_roster.html", teams=teams_data)
 
 
 # ---------------------------------------------------------------------------

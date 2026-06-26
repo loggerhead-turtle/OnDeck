@@ -47,6 +47,8 @@ def _default_config() -> dict[str, Any]:
             # Cloud sync bookkeeping.
             "last_synced_at": None,
             "dirty": False,
+            # Signup link settings.
+            "signup_link_expires_hours": 168,  # 1 week
         },
         "players": {},          # player_id -> player dict
         "songs": {},            # song_id -> song dict
@@ -75,6 +77,8 @@ def _default_config() -> dict[str, Any]:
             "pitcher_warmup": [],
         },
         "pages": _default_pages(),
+        "teams": {},            # team_id -> {name, created_at}
+        "signup_links": [],     # [{code, team_ids, created_at, expires_at}]
     }
 
 
@@ -172,6 +176,9 @@ class ConfigManager:
         legacy_mid = self._data.get("mid_inning") or []
         if legacy_mid and not page_songs.get("mid_inning"):
             page_songs["mid_inning"] = list(legacy_mid)
+        # Ensure all players have team_ids field (added later).
+        for player in self._data.get("players", {}).values():
+            player.setdefault("team_ids", [])
 
     # -- convenient accessors --------------------------------------------
 
@@ -202,6 +209,14 @@ class ConfigManager:
     @property
     def celebrations(self) -> dict[str, Any]:
         return self._data["celebrations"]
+
+    @property
+    def teams(self) -> dict[str, Any]:
+        return self._data.setdefault("teams", {})
+
+    @property
+    def signup_links(self) -> list[Any]:
+        return self._data.setdefault("signup_links", [])
 
     # -- Stream Deck helpers ---------------------------------------------
     # These mirror the read-only accessors the play-call deck relied on, so
@@ -272,7 +287,7 @@ class ConfigManager:
 
     # -- mutations --------------------------------------------------------
 
-    def add_player(self, jersey: int, first_name: str, last_name: str) -> str:
+    def add_player(self, jersey: int, first_name: str, last_name: str, team_ids: list[str] | None = None) -> str:
         pid = uuid.uuid4().hex
         with self._lock:
             self.players[pid] = {
@@ -285,6 +300,7 @@ class ConfigManager:
                 "announcement_end_ms": None,
                 "walkup_song_id": None,
                 "music_cue_ms": 0,
+                "team_ids": team_ids or [],
             }
             self.save()
         return pid
@@ -351,6 +367,100 @@ class ConfigManager:
                 song_id if song_id and song_id in self.songs else None
             )
             self.save()
+
+    # -- teams and signup links ------------------------------------------
+
+    def add_team(self, name: str) -> str:
+        """Create a new team."""
+        tid = uuid.uuid4().hex
+        with self._lock:
+            self.teams[tid] = {"name": name, "created_at": _now_ms()}
+            self.save()
+        return tid
+
+    def update_team(self, team_id: str, name: str) -> None:
+        """Rename a team."""
+        with self._lock:
+            if team_id in self.teams:
+                self.teams[team_id]["name"] = name
+                self.save()
+
+    def delete_team(self, team_id: str) -> None:
+        """Delete a team and remove it from all players."""
+        with self._lock:
+            if team_id in self.teams:
+                del self.teams[team_id]
+                for player in self.players.values():
+                    if team_id in player.get("team_ids", []):
+                        player["team_ids"].remove(team_id)
+                self.save()
+
+    def set_player_teams(self, player_id: str, team_ids: list[str]) -> None:
+        """Assign a player to one or more teams."""
+        valid_ids = [tid for tid in team_ids if tid in self.teams]
+        with self._lock:
+            if player_id in self.players:
+                self.players[player_id]["team_ids"] = valid_ids
+                self.save()
+
+    def create_signup_link(self, team_ids: list[str]) -> tuple[str, dict[str, Any]]:
+        """Create a time-limited signup link for one or more teams.
+
+        Returns (code, link_data) where code is the shareable access code.
+        """
+        import time
+        code = uuid.uuid4().hex[:12]
+        expires_hours = self.system.get("signup_link_expires_hours", 168)
+        expires_at = int(time.time() * 1000) + (expires_hours * 3600 * 1000)
+        valid_ids = [tid for tid in team_ids if tid in self.teams]
+
+        link = {
+            "code": code,
+            "team_ids": valid_ids,
+            "created_at": int(time.time() * 1000),
+            "expires_at": expires_at,
+        }
+        with self._lock:
+            self.signup_links.append(link)
+            self.save()
+        return code, link
+
+    def get_signup_link(self, code: str) -> dict[str, Any] | None:
+        """Get signup link by code if valid and not expired."""
+        import time
+        now = int(time.time() * 1000)
+        with self._lock:
+            for link in self.signup_links:
+                if link["code"] == code and link["expires_at"] > now:
+                    return link
+        return None
+
+    def revoke_signup_link(self, code: str) -> None:
+        """Delete a signup link."""
+        with self._lock:
+            self.signup_links[:] = [l for l in self.signup_links if l["code"] != code]
+            self.save()
+
+    def get_active_signup_links(self) -> list[dict[str, Any]]:
+        """Get all non-expired signup links."""
+        import time
+        now = int(time.time() * 1000)
+        with self._lock:
+            return [l for l in self.signup_links if l["expires_at"] > now]
+
+    def get_team_members(self, team_id: str) -> list[tuple[str, dict[str, Any]]]:
+        """Get all players on a team, sorted by jersey."""
+        members = [
+            (pid, p) for pid, p in self.players.items()
+            if team_id in p.get("team_ids", [])
+        ]
+        return sorted(members, key=lambda kv: (kv[1].get("jersey") or 0, kv[1].get("last_name", "")))
+
+
+def _now_ms() -> int:
+    """Current time in milliseconds since epoch."""
+    import time
+    return int(time.time() * 1000)
 
 
 if __name__ == "__main__":
