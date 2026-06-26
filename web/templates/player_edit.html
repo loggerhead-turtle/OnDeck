@@ -67,12 +67,11 @@
       </div>
 
       {% if elevenlabs_ready %}
-      <form method="POST" action="/players/{{ pid }}/generate-announcement">
-        <button type="submit"
-                class="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm font-semibold transition-colors">
-          ✦ AI Voice
-        </button>
-      </form>
+      {# Submits the separate #ai-voice-form below — NOT nested in #player-form. #}
+      <button type="submit" form="ai-voice-form"
+              class="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm font-semibold transition-colors">
+        ✦ AI Voice
+      </button>
       {% endif %}
 
       {% if player.announcement_file %}
@@ -175,11 +174,13 @@
       Share these credentials with {{ player.first_name }} so they can manage their own profile at
       <span class="text-gray-400 font-mono">/player-login</span>.
     </p>
-    <form method="POST" action="/players/{{ pid }}/set-credentials">
+    {# Fields/button associate with #creds-form below via form= so this block
+       is NOT a nested <form> inside #player-form. #}
+    <div>
       <div class="grid sm:grid-cols-2 gap-4 mb-4">
         <div>
           <label class="block text-xs text-gray-400 mb-1.5 font-medium">Username</label>
-          <input type="text" name="player_username"
+          <input type="text" name="player_username" form="creds-form"
                  value="{{ player.player_username or '' }}"
                  placeholder="e.g. jsmith"
                  autocomplete="off"
@@ -187,7 +188,7 @@
         </div>
         <div>
           <label class="block text-xs text-gray-400 mb-1.5 font-medium">Password</label>
-          <input type="text" name="player_password"
+          <input type="text" name="player_password" form="creds-form"
                  placeholder="{{ 'leave blank to keep existing' if player.player_password_hash else 'set a password (min 6 chars)' }}"
                  autocomplete="new-password"
                  class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30">
@@ -198,11 +199,11 @@
           {% endif %}
         </div>
       </div>
-      <button type="submit"
+      <button type="submit" form="creds-form"
               class="px-5 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white font-semibold text-sm transition-colors">
         Update Login
       </button>
-    </form>
+    </div>
   </div>
   {% endif %}
 
@@ -213,17 +214,25 @@
       Save
     </button>
     {% if pid %}
-    <form method="POST" action="/players/{{ pid }}/delete"
-          onsubmit="return confirm('Delete this player?')">
-      <button type="submit"
-              class="px-4 py-2 rounded-lg border border-gray-700 hover:border-red-700 bg-gray-800 hover:bg-red-900/30 text-gray-400 hover:text-red-300 text-sm transition-colors">
-        Delete Player
-      </button>
-    </form>
+    <button type="submit" form="delete-form"
+            class="px-4 py-2 rounded-lg border border-gray-700 hover:border-red-700 bg-gray-800 hover:bg-red-900/30 text-gray-400 hover:text-red-300 text-sm transition-colors">
+      Delete Player
+    </button>
     {% endif %}
   </div>
 
 </form>
+
+{# Secondary forms kept OUTSIDE #player-form so they don't nest and corrupt it.
+   Their buttons/inputs above reference these via the HTML5 form= attribute. #}
+{% if pid %}
+{% if elevenlabs_ready %}
+<form id="ai-voice-form" method="POST" action="/players/{{ pid }}/generate-announcement"></form>
+{% endif %}
+<form id="creds-form" method="POST" action="/players/{{ pid }}/set-credentials"></form>
+<form id="delete-form" method="POST" action="/players/{{ pid }}/delete"
+      onsubmit="return confirm('Delete this player?')"></form>
+{% endif %}
 
 {% if pid %}
 <script>
