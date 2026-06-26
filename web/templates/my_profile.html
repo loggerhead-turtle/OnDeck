@@ -70,10 +70,31 @@
           label       = 'Set start and end of your walk-up'
       ) }}
 
+      {% if player.announcement_file %}
+      <!-- Music cue: where the song drops during the announcer's intro. The
+           announcer clip is read-only here (players can't re-record it). -->
+      <div class="mt-5">
+        <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Music Cue</h2>
+        <p class="text-xs text-gray-500 mb-3">
+          Drag the indigo bar to choose when your song drops while the announcer
+          says your name.
+        </p>
+        {{ trim_editor(
+            editor_id = 'anncue',
+            audio_url = url_for('ondeck_serve_audio', filename=player.announcement_file),
+            show_trim = False,
+            show_cue  = True,
+            cue_ms    = player.music_cue_ms or 0,
+            cue_field = 'music_cue_ms',
+            label     = 'Your announcement'
+        ) }}
+      </div>
+      {% endif %}
+
       <div class="mt-5">
         <button type="submit"
                 class="w-full py-3 rounded-lg bg-green-700 hover:bg-green-600 text-white font-bold text-sm transition-colors">
-          Save Trim Points
+          Save{{ ' Trim & Cue' if player.announcement_file else ' Trim Points' }}
         </button>
       </div>
     </form>

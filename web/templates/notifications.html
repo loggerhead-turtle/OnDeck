@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Activity{% endblock %}
+{% block content %}
+
+<div class="max-w-2xl mx-auto">
+
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-2xl font-bold">Activity</h1>
+      <p class="text-sm text-gray-500 mt-1">Walk-up changes made by players — review at your leisure.</p>
+    </div>
+    {% if notes %}
+    <form method="POST" action="{{ url_for('ondeck_notifications_clear') }}"
+          onsubmit="return confirm('Clear the whole activity history?')">
+      <button type="submit"
+              class="px-3 py-1.5 rounded-lg border border-gray-700 hover:border-red-700 bg-gray-800 hover:bg-red-900/30 text-gray-400 hover:text-red-300 text-xs transition-colors">
+        Clear history
+      </button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% if not notes %}
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-8 text-center">
+    <p class="text-sm text-gray-500">No player activity yet. When a player adds, replaces, or re-times their walk-up, it'll show up here.</p>
+  </div>
+  {% else %}
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 divide-y divide-gray-700/50 overflow-hidden">
+    {% for n in notes %}
+    <div class="flex items-start gap-3 p-4 {% if n.id in new_ids %}bg-indigo-950/30{% endif %}">
+      <div class="mt-0.5">
+        {% if n.id in new_ids %}
+        <span class="inline-block w-2 h-2 rounded-full bg-indigo-400" title="New since your last visit"></span>
+        {% else %}
+        <span class="inline-block w-2 h-2 rounded-full bg-gray-700"></span>
+        {% endif %}
+      </div>
+      <div class="flex-1 min-w-0">
+        <p class="text-sm text-gray-200">
+          <span class="font-semibold text-white">#{{ n.jersey if n.jersey is not none else '—' }} {{ n.player_name or 'Player' }}</span>
+          <span class="text-gray-400">{{ n.action }}</span>
+          {% if n.detail %}<span class="text-gray-500">— {{ n.detail }}</span>{% endif %}
+        </p>
+        <p class="text-xs text-gray-600 mt-0.5">
+          <time datetime="{{ n.ts }}" class="js-localtime">{{ n.ts[:16].replace('T', ' ') }} UTC</time>
+        </p>
+      </div>
+      {% if n.player_id and n.player_id in players %}
+      <a href="{{ url_for('ondeck_players_edit', pid=n.player_id) }}"
+         class="shrink-0 text-xs text-indigo-400 hover:text-indigo-300 hover:underline mt-0.5">Review →</a>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+</div>
+
+<script>
+  // Localize the UTC timestamps to the coach's timezone for readability.
+  document.querySelectorAll('time.js-localtime').forEach(function (el) {
+    var d = new Date(el.getAttribute('datetime'))
+    if (!isNaN(d)) {
+      el.textContent = d.toLocaleString([], {
+        month: 'short', day: 'numeric',
+        hour: 'numeric', minute: '2-digit'
+      })
+    }
+  })
+</script>
+{% endblock %}

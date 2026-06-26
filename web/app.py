@@ -12,7 +12,7 @@ import hashlib
 import json
 import sys
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -125,6 +125,36 @@ def _find_user(username: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Notifications — coach-facing activity log of player-made changes
+# ---------------------------------------------------------------------------
+
+NOTIFICATIONS_CAP = 200  # keep the newest N; older entries roll off
+
+
+def _add_notification(pid: str, player: dict, action: str, detail: str = "") -> None:
+    """Record a player-made change for the coach to review (newest first).
+
+    Called while holding cfg._lock by the player self-service routes.
+    """
+    notes = cfg.data.setdefault("notifications", [])
+    notes.insert(0, {
+        "id": uuid.uuid4().hex,
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "player_id": pid,
+        "jersey": player.get("jersey"),
+        "player_name": f"{player.get('first_name', '')} {player.get('last_name', '')}".strip(),
+        "action": action,
+        "detail": detail,
+        "seen": False,
+    })
+    del notes[NOTIFICATIONS_CAP:]
+
+
+def _unread_notification_count() -> int:
+    return sum(1 for n in cfg.data.get("notifications", []) if not n.get("seen"))
+
+
+# ---------------------------------------------------------------------------
 # Access control
 # ---------------------------------------------------------------------------
 
@@ -203,6 +233,7 @@ def _inject_globals():
         "current_role": role,
         "current_player": current_player,
         "elevenlabs_ready": _elevenlabs_ready(),
+        "unread_notifications": _unread_notification_count() if role in ("admin", "editor") else 0,
     }
 
 
@@ -832,7 +863,12 @@ def ondeck_my_profile_upload():
         name, Path(name).stem.replace("_", " ").replace("-", " ")
     )
     with cfg._lock:
+        replacing = bool(player.get("walkup_song_id"))
         player["walkup_song_id"] = song_id
+        _add_notification(pid, player,
+                          "replaced their walk-up song" if replacing
+                          else "added a walk-up song",
+                          detail=Path(name).stem.replace("_", " ").replace("-", " "))
         cfg.save()
     flash("Song uploaded!", "success")
     return redirect(url_for("ondeck_my_profile"))
@@ -849,9 +885,41 @@ def ondeck_my_profile_save():
         if sid and sid in cfg.songs:
             cfg.songs[sid]["start_ms"] = _form_ms("start_ms", 0)
             cfg.songs[sid]["end_ms"]   = _form_ms_or_none("end_ms")
+        # Players can set the music cue only when they have an announcement.
+        if player.get("announcement_file") and "music_cue_ms" in request.form:
+            player["music_cue_ms"] = _form_ms("music_cue_ms", 0)
+        _add_notification(pid, player, "edited their walk-up timing")
         cfg.save()
     flash("Saved!", "success")
     return redirect(url_for("ondeck_my_profile"))
+
+
+# ---------------------------------------------------------------------------
+# Notifications page (coach reviews player activity; admin/editor only)
+# ---------------------------------------------------------------------------
+
+@app.get("/ondeck/notifications")
+def ondeck_notifications():
+    notes = cfg.data.get("notifications", [])
+    # Highlight what's new this visit, then mark everything reviewed so the
+    # nav badge clears — no explicit confirm step needed.
+    new_ids = {n["id"] for n in notes if not n.get("seen")}
+    if new_ids:
+        with cfg._lock:
+            for n in cfg.data.get("notifications", []):
+                n["seen"] = True
+            cfg.save(mark_dirty=False)
+    return render_template("notifications.html", notes=notes, new_ids=new_ids,
+                           players=cfg.players)
+
+
+@app.post("/ondeck/notifications/clear")
+def ondeck_notifications_clear():
+    with cfg._lock:
+        cfg.data["notifications"] = []
+        cfg.save(mark_dirty=False)
+    flash("Cleared activity history.", "success")
+    return redirect(url_for("ondeck_notifications"))
 
 
 # ---------------------------------------------------------------------------
