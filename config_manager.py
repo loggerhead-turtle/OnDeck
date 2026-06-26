@@ -52,7 +52,18 @@ def _default_config() -> dict[str, Any]:
             "home_run": None,
             "strikeout": None,
         },
-        "mid_inning": [],       # list of song_ids
+        "mid_inning": [],       # list of song_ids (legacy; mirrored in page_songs)
+        # Songs assigned to each game-day page, keyed by page id. The Stream
+        # Deck renders one button per song in order; the web portal manages the
+        # lists. Player/lineup/celebration pages are special-cased and ignore
+        # this map.
+        "page_songs": {
+            "hype": [],
+            "mid_inning": [],
+            "mound_visit": [],
+            "dead_ball": [],
+            "pitcher_warmup": [],
+        },
         "pages": _default_pages(),
     }
 
@@ -138,6 +149,14 @@ class ConfigManager:
         pages = self._data.setdefault("pages", {})
         for pid, page in _default_pages().items():
             pages.setdefault(pid, page)
+        # Backfill any missing per-page song lists (added after the first ship).
+        page_songs = self._data.setdefault("page_songs", {})
+        for pid, lst in defaults["page_songs"].items():
+            page_songs.setdefault(pid, list(lst))
+        # Migrate the legacy top-level mid_inning list into page_songs once.
+        legacy_mid = self._data.get("mid_inning") or []
+        if legacy_mid and not page_songs.get("mid_inning"):
+            page_songs["mid_inning"] = list(legacy_mid)
 
     # -- convenient accessors --------------------------------------------
 
@@ -160,6 +179,81 @@ class ConfigManager:
     @property
     def pages(self) -> dict[str, Any]:
         return self._data["pages"]
+
+    @property
+    def lineup(self) -> list[Any]:
+        return self._data["lineup"]
+
+    @property
+    def celebrations(self) -> dict[str, Any]:
+        return self._data["celebrations"]
+
+    # -- Stream Deck helpers ---------------------------------------------
+    # These mirror the read-only accessors the play-call deck relied on, so
+    # the controller can stay config-driven and dumb about storage details.
+
+    def get_page_order(self) -> list[str]:
+        """Page ids in display order (the deck's nav + bottom-row order)."""
+        return [
+            pid
+            for pid, _ in sorted(
+                self.pages.items(), key=lambda kv: kv[1].get("order", 99)
+            )
+        ]
+
+    def get_songs_for_page(self, page_id: str) -> list[tuple[str, dict[str, Any]]]:
+        """(song_id, song) pairs assigned to a song-list page, in order.
+
+        Missing or stale song ids are skipped so a deleted song never leaves a
+        dead button on the deck.
+        """
+        ids = self._data.get("page_songs", {}).get(page_id, []) or []
+        out: list[tuple[str, dict[str, Any]]] = []
+        for sid in ids:
+            song = self.songs.get(sid)
+            if song:
+                out.append((sid, song))
+        return out
+
+    def get_celebration_song(self, kind: str) -> str | None:
+        """song_id for a celebration stinger (hit/extra_base/home_run/strikeout)."""
+        return self.celebrations.get(kind)
+
+    def build_walkup_clip(self, player_id: str) -> dict[str, Any] | None:
+        """Compose the Audio Pi /queue payload for a player's walk-up.
+
+        Returns None if the player has no walk-up song. The announcement (if
+        recorded) plays first and the trimmed song fades in at ``music_cue_ms``
+        — exactly the shape ``music_server.Player._build_command`` expects.
+        """
+        player = self.players.get(player_id)
+        if not player:
+            return None
+        sid = player.get("walkup_song_id")
+        song = self.songs.get(sid) if sid else None
+        if not song:
+            return None
+        clip: dict[str, Any] = {
+            "file": song["filename"],
+            "start_ms": song.get("start_ms", 0),
+            "end_ms": song.get("end_ms"),
+        }
+        ann = player.get("announcement_file")
+        if ann:
+            clip["announcement"] = ann
+            clip["cue_ms"] = player.get("music_cue_ms", 0)
+        return clip
+
+    def build_song_clip(self, song_id: str) -> dict[str, Any] | None:
+        """Audio Pi /queue payload for a plain song (no announcement)."""
+        song = self.songs.get(song_id)
+        if not song:
+            return None
+        return {
+            "file": song["filename"],
+            "start_ms": song.get("start_ms", 0),
+            "end_ms": song.get("end_ms"),
+        }
 
     # -- mutations --------------------------------------------------------
 

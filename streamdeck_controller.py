@@ -1,0 +1,374 @@
+#!/usr/bin/env python3
+"""Stream Deck XL controller for OnDeck walk-up music.
+
+32 buttons (4 rows x 8 cols), dynamic pages driven entirely by config — the same
+layout play-call uses, retargeted from LED signs to baseball walk-up music.
+
+  Left column   0 / 8 / 16     Prev / Home / Next      (always visible)
+  Bottom-left   24 / 25        Stop / Fade             (always visible)
+  Bottom row    26-31          page shortcuts          (first 6 pages)
+  Content area  1-7,9-15,17-23 21 slots, per-page content
+
+Every content button turns into an Audio Pi cue (a player walk-up, a library
+song, or a celebration stinger). The deck holds no audio itself — it calls
+``MusicClient``, which talks to the Audio Pi over the local network.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+
+from PIL import Image, ImageDraw, ImageFont
+from StreamDeck.DeviceManager import DeviceManager
+from StreamDeck.ImageHelpers import PILHelper
+
+from config_manager import ConfigManager
+from lineup_manager import LineupManager
+from music_client import MusicClient
+
+log = logging.getLogger("streamdeck")
+
+# ── Fixed button indices ─────────────────────────────────
+BTN_PREV = 0     # top-left
+BTN_HOME = 8     # mid-left
+BTN_NEXT = 16    # bottom-left of the nav column
+BTN_STOP = 24    # bottom row, first slot
+BTN_FADE = 25    # bottom row, second slot
+# Page shortcut buttons 26-31 (up to 6 pages shown along the bottom).
+BOTTOM_PAGE_BTNS = list(range(26, 32))
+
+FIXED_BTNS = {BTN_PREV, BTN_HOME, BTN_NEXT, BTN_STOP, BTN_FADE} | set(BOTTOM_PAGE_BTNS)
+
+# Content slots: every button that isn't fixed → [1-7, 9-15, 17-23] (21 slots).
+CONTENT_SLOTS = [i for i in range(32) if i not in FIXED_BTNS]
+
+ACTIVE_COLOR = (255, 220, 0)   # bright yellow — "this is live / selected"
+EMPTY_COLOR = (18, 18, 18)     # unused slot
+
+# Per-page background tint, keyed by the page's stable id.
+PAGE_BG = {
+    "home":           (30, 30, 30),
+    "lineup":         (20, 60, 90),
+    "players":        (20, 80, 40),
+    "hype":           (90, 50, 20),
+    "mid_inning":     (60, 60, 20),
+    "mound_visit":    (80, 30, 80),
+    "dead_ball":      (50, 50, 50),
+    "celebrations":   (100, 20, 40),
+    "pitcher_warmup": (20, 80, 80),
+}
+DEFAULT_BG = (40, 40, 40)
+
+# Celebration stingers, in the fixed order they appear on the page.
+CELEBRATIONS = [
+    ("hit", "Hit"),
+    ("extra_base", "XBH"),
+    ("home_run", "HR"),
+    ("strikeout", "K"),
+]
+
+FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+
+class StreamDeckController:
+    def __init__(self, config: ConfigManager, lineup: LineupManager,
+                 music: MusicClient) -> None:
+        self.config = config
+        self.lineup = lineup
+        self.music = music
+        self.current_page_id = "home"
+
+        # Repaint the deck whenever the lineup auto-advances.
+        self.lineup.on_change = self.refresh
+
+        self.deck = self._open_deck()
+        if self.deck:
+            self.deck.set_key_callback(self._on_key)
+            self._render_all()
+
+    # ── Public ───────────────────────────────────────────
+
+    def run(self) -> None:
+        if not self.deck:
+            log.info("No Stream Deck — idle loop")
+            while True:
+                time.sleep(1)
+        else:
+            with self.deck:
+                while True:
+                    time.sleep(0.1)
+
+    def close(self) -> None:
+        if self.deck:
+            self.deck.reset()
+            self.deck.close()
+
+    def refresh(self) -> None:
+        """Repaint the deck (called by the web portal or lineup auto-advance)."""
+        self._render_all()
+
+    def go_to_page(self, page_id: str) -> None:
+        if page_id in self.config.pages:
+            self.current_page_id = page_id
+            self._render_all()
+
+    # ── Key handler ──────────────────────────────────────
+
+    def _on_key(self, deck, idx, pressed) -> None:
+        if not pressed:
+            return
+        if idx == BTN_PREV:
+            self._nav(-1)
+        elif idx == BTN_HOME:
+            self.go_to_page("home")
+        elif idx == BTN_NEXT:
+            self._nav(1)
+        elif idx == BTN_STOP:
+            self.music.stop()
+            self._flash(BTN_STOP)
+        elif idx == BTN_FADE:
+            self.music.fade()
+            self._flash(BTN_FADE)
+        elif idx in BOTTOM_PAGE_BTNS:
+            self._handle_bottom_page_btn(idx)
+        elif idx in CONTENT_SLOTS:
+            self._handle_content(idx)
+
+    # ── Navigation ───────────────────────────────────────
+
+    def _nav(self, direction: int) -> None:
+        order = self.config.get_page_order()
+        if not order:
+            return
+        try:
+            i = order.index(self.current_page_id)
+        except ValueError:
+            i = 0
+        self.go_to_page(order[(i + direction) % len(order)])
+
+    def _handle_bottom_page_btn(self, btn_idx: int) -> None:
+        order = self.config.get_page_order()
+        slot = btn_idx - BOTTOM_PAGE_BTNS[0]
+        if slot < len(order):
+            self.go_to_page(order[slot])
+
+    # ── Content handler ──────────────────────────────────
+
+    def _handle_content(self, btn_idx: int) -> None:
+        kind = self.config.pages.get(self.current_page_id, {}).get(
+            "kind", self.current_page_id)
+        slot = CONTENT_SLOTS.index(btn_idx)
+
+        if kind == "home":
+            order = self.config.get_page_order()
+            if slot < len(order):
+                self.go_to_page(order[slot])
+
+        elif kind == "lineup":
+            filled = [i for i, pid in enumerate(self.config.lineup) if pid]
+            if slot < len(filled):
+                self.lineup.set_current(filled[slot])
+                if self.lineup.cue_current():
+                    self._flash(btn_idx)
+
+        elif kind == "players":
+            players = self.config.players_by_jersey()
+            if slot < len(players):
+                pid, _ = players[slot]
+                if self.music.play_walkup(pid):
+                    self._flash(btn_idx)
+
+        elif kind == "celebrations":
+            if slot < len(CELEBRATIONS):
+                key, _ = CELEBRATIONS[slot]
+                if self.music.play_celebration(key):
+                    self._flash(btn_idx)
+
+        else:
+            # Song-list pages: hype / mid_inning / mound_visit / dead_ball /
+            # pitcher_warmup. One button per assigned song.
+            songs = self.config.get_songs_for_page(self.current_page_id)
+            if slot < len(songs):
+                sid, _ = songs[slot]
+                if self.music.play_song(sid):
+                    self._flash(btn_idx)
+
+    # ── Rendering ────────────────────────────────────────
+
+    def _render_all(self) -> None:
+        if not self.deck:
+            return
+        # Pick up any edits the web portal wrote to config.json since the last
+        # paint — the portal runs its own ConfigManager against the same file.
+        self.config.load()
+        self._render_left_column()
+        self._render_content_area()
+        self._render_bottom_row()
+
+    def _render_left_column(self) -> None:
+        self._btn(BTN_PREV, "▲\nPrev", (40, 40, 40))
+        self._btn(BTN_HOME, "⌂\nHome", (60, 60, 20))
+        self._btn(BTN_NEXT, "▼\nNext", (40, 40, 40))
+
+    def _render_bottom_row(self) -> None:
+        self._btn(BTN_STOP, "■\nStop", (90, 30, 30))
+        self._btn(BTN_FADE, "↘\nFade", (30, 60, 90))
+        order = self.config.get_page_order()
+        pages = self.config.pages
+        for i, btn_idx in enumerate(BOTTOM_PAGE_BTNS):
+            if i < len(order):
+                pid = order[i]
+                pname = pages[pid].get("name", pid)
+                active = (pid == self.current_page_id)
+                col = ACTIVE_COLOR if active else PAGE_BG.get(pid, DEFAULT_BG)
+                fg = (0, 0, 0) if active else (200, 200, 200)
+                self._btn(btn_idx, pname[:8], col, fg)
+            else:
+                self._btn(btn_idx, "", (15, 15, 15))
+
+    def _render_content_area(self) -> None:
+        kind = self.config.pages.get(self.current_page_id, {}).get(
+            "kind", self.current_page_id)
+        if kind == "home":
+            self._render_home_page()
+        elif kind == "lineup":
+            self._render_lineup_page()
+        elif kind == "players":
+            self._render_players_page()
+        elif kind == "celebrations":
+            self._render_celebrations_page()
+        else:
+            self._render_song_page()
+
+    def _render_home_page(self) -> None:
+        """One nav button per page, in order; the active page glows yellow."""
+        order = self.config.get_page_order()
+        pages = self.config.pages
+        for i, btn_idx in enumerate(CONTENT_SLOTS):
+            if i < len(order):
+                pid = order[i]
+                pname = pages.get(pid, {}).get("name", pid)
+                active = (pid == self.current_page_id)
+                col = ACTIVE_COLOR if active else PAGE_BG.get(pid, DEFAULT_BG)
+                fg = (0, 0, 0) if active else (200, 200, 200)
+                self._btn(btn_idx, pname[:10], col, fg)
+            else:
+                self._btn(btn_idx, "", EMPTY_COLOR)
+
+    def _render_lineup_page(self) -> None:
+        """Batting order — one button per filled slot, current batter glows."""
+        lineup = self.config.lineup
+        filled = [i for i, pid in enumerate(lineup) if pid]
+        cur = self.lineup.current_index
+        for i, btn_idx in enumerate(CONTENT_SLOTS):
+            if i < len(filled):
+                slot_idx = filled[i]
+                player = self.config.players.get(lineup[slot_idx], {})
+                jersey = player.get("jersey", "")
+                last = (player.get("last_name", "") or "")[:8]
+                active = (slot_idx == cur)
+                bg = ACTIVE_COLOR if active else PAGE_BG["lineup"]
+                fg = (0, 0, 0) if active else (255, 255, 255)
+                self._btn(btn_idx, f"{i + 1}. #{jersey}\n{last}", bg, fg)
+            else:
+                self._btn(btn_idx, "", EMPTY_COLOR)
+
+    def _render_players_page(self) -> None:
+        """Every player, by jersey number — a press plays their walk-up."""
+        players = self.config.players_by_jersey()
+        for i, btn_idx in enumerate(CONTENT_SLOTS):
+            if i < len(players):
+                _pid, p = players[i]
+                jersey = p.get("jersey", "")
+                last = (p.get("last_name", "") or "")[:8]
+                has_walkup = bool(p.get("walkup_song_id"))
+                bg = PAGE_BG["players"] if has_walkup else (35, 35, 35)
+                self._btn(btn_idx, f"#{jersey}\n{last}", bg)
+            else:
+                self._btn(btn_idx, "", EMPTY_COLOR)
+
+    def _render_celebrations_page(self) -> None:
+        """Four stingers — dim if no song is assigned yet."""
+        for i, btn_idx in enumerate(CONTENT_SLOTS):
+            if i < len(CELEBRATIONS):
+                key, label = CELEBRATIONS[i]
+                configured = bool(self.config.get_celebration_song(key))
+                bg = PAGE_BG["celebrations"] if configured else (35, 20, 25)
+                self._btn(btn_idx, label, bg)
+            else:
+                self._btn(btn_idx, "", EMPTY_COLOR)
+
+    def _render_song_page(self) -> None:
+        """A song-list page — one labelled button per assigned song."""
+        songs = self.config.get_songs_for_page(self.current_page_id)
+        bg = PAGE_BG.get(self.current_page_id, DEFAULT_BG)
+        for i, btn_idx in enumerate(CONTENT_SLOTS):
+            if i < len(songs):
+                _sid, song = songs[i]
+                name = (song.get("display_name", "") or "")[:14]
+                self._btn(btn_idx, name, bg)
+            else:
+                self._btn(btn_idx, "", EMPTY_COLOR)
+
+    # ── Button drawing ───────────────────────────────────
+
+    def _btn(self, idx: int, label: str, bg: tuple,
+             fg: tuple = (255, 255, 255)) -> None:
+        if not self.deck:
+            return
+        try:
+            sz = self.deck.key_image_format()["size"]
+            img = Image.new("RGB", sz, bg)
+            drw = ImageDraw.Draw(img)
+            if label:
+                try:
+                    font = ImageFont.truetype(FONT_PATH, 13)
+                except Exception:
+                    font = ImageFont.load_default()
+                lines = label.split("\n")
+                total = len(lines) * 16
+                y0 = (sz[1] - total) // 2
+                for li, line in enumerate(lines):
+                    bb = drw.textbbox((0, 0), line, font=font)
+                    x = (sz[0] - (bb[2] - bb[0])) // 2
+                    drw.text((x, y0 + li * 16), line, font=font, fill=fg)
+            self.deck.set_key_image(
+                idx, PILHelper.to_native_key_format(self.deck, img))
+        except Exception as exc:
+            log.error("Button render error (idx %s): %s", idx, exc)
+
+    def _flash(self, idx: int) -> None:
+        """Briefly show a checkmark to confirm a press, then repaint."""
+        def _do():
+            self._btn(idx, "✓", (255, 255, 255), (0, 0, 0))
+            time.sleep(0.35)
+            self._render_all()
+        threading.Thread(target=_do, daemon=True).start()
+
+    # ── Helpers ──────────────────────────────────────────
+
+    def _hex2rgb(self, h: str) -> tuple:
+        h = h.lstrip("#")
+        try:
+            return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+        except Exception:
+            return (50, 50, 50)
+
+    def _open_deck(self):
+        try:
+            decks = DeviceManager().enumerate()
+            if not decks:
+                log.warning("No Stream Deck found — running without hardware")
+                return None
+            deck = decks[0]
+            deck.open()
+            deck.reset()
+            deck.set_brightness(80)
+            log.info("Stream Deck: %s (%s keys)",
+                     deck.deck_type(), deck.key_count())
+            return deck
+        except Exception as exc:
+            log.error("Stream Deck open failed: %s", exc)
+            return None

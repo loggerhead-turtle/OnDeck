@@ -66,7 +66,14 @@ services. See [`install.sh`](install.sh) for details.
 
 ## Status
 
-Early development. See the build order in the project plan.
+In development. The Audio Pi server, web portal, cloud sync, and the Coach Pi
+Stream Deck controller are all in place:
+
+- `main.py` — Coach Pi entry point (Stream Deck loop + web portal)
+- `streamdeck_controller.py` — Stream Deck XL pages for lineup, players,
+  game-day sounds, and celebrations
+- `lineup_manager.py` — batting order with auto-advance when a walk-up ends
+- `music_client.py` — Coach Pi → Audio Pi playback control over HTTP
 
 ## License
 
