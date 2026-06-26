@@ -4,7 +4,7 @@
 
 <div class="flex items-center justify-between mb-6">
   <h1 class="text-2xl font-bold">Players</h1>
-  <a href="/players/new"
+  <a href="/ondeck/players/new"
      class="px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold transition-colors">
     + Add Player
   </a>
@@ -43,11 +43,11 @@
 
       <!-- Actions -->
       <div class="flex gap-2 pt-1 border-t border-gray-700/50">
-        <a href="/players/{{ pid }}/edit"
+        <a href="/ondeck/players/{{ pid }}/edit"
            class="flex-1 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-xs font-medium text-center transition-colors">
           Edit
         </a>
-        <form method="POST" action="/players/{{ pid }}/delete"
+        <form method="POST" action="/ondeck/players/{{ pid }}/delete"
               onsubmit="return confirm('Delete #{{ p.jersey }} {{ p.first_name }} {{ p.last_name }}?')">
           <button type="submit"
                   class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-red-900 hover:border-red-700 text-gray-400 hover:text-red-300 text-xs font-medium transition-colors">
@@ -76,14 +76,10 @@
       {% endif %}
     {% endfor %}
   }
-  async function quickPlay(pid) {
+  function quickPlay(pid) {
     const clip = playerData[pid]
     if (!clip) return
-    await fetch('/api/preview', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(clip),
-    })
+    OnDeck.preview(clip)   // plays on the Pi, or in this browser when Demo is on
   }
 </script>
 
@@ -92,7 +88,7 @@
   <div class="text-4xl mb-3">👤</div>
   <div class="text-gray-300 font-medium mb-1">No players yet</div>
   <div class="text-gray-500 text-sm mb-4">Build your roster to assign walk-up songs.</div>
-  <a href="/players/new"
+  <a href="/ondeck/players/new"
      class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold transition-colors">
     + Add First Player
   </a>

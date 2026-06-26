@@ -6,7 +6,7 @@
   <h1 class="text-2xl font-bold">Settings</h1>
 </div>
 
-<form method="POST" action="/settings/save">
+<form method="POST" action="/ondeck/settings/save">
   <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5 space-y-5">
     <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Audio Pi</h2>
 
@@ -47,11 +47,122 @@
     </div>
   </div>
 
+  <!-- AI announcer voice (ElevenLabs) -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5 space-y-5">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Announcer Voice (ElevenLabs)</h2>
+      {% if elevenlabs_ready %}
+        <span class="text-xs bg-green-900/50 text-green-400 border border-green-700/40 rounded-full px-2.5 py-0.5">Connected</span>
+      {% else %}
+        <span class="text-xs bg-yellow-900/50 text-yellow-400 border border-yellow-700/40 rounded-full px-2.5 py-0.5">Not configured</span>
+      {% endif %}
+    </div>
+    <p class="text-xs text-gray-500">
+      Generate player announcements with an AI voice from
+      <a href="https://elevenlabs.io" target="_blank" class="text-green-400 hover:underline">ElevenLabs</a>
+      (ElevenCreative → Text to Speech) instead of recording them by hand.
+    </p>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1.5 font-medium">API Key</label>
+      <input type="password" name="elevenlabs_api_key" autocomplete="off"
+             placeholder="{{ 'key saved — leave blank to keep it' if elevenlabs_key_set else 'xi-…' }}"
+             class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30">
+      <div class="flex items-center justify-between mt-1">
+        <p class="text-xs text-gray-500">From your ElevenLabs profile → API Keys. Stored on this server.</p>
+        {% if elevenlabs_key_set %}
+        <label class="text-xs text-gray-500 flex items-center gap-1.5">
+          <input type="checkbox" name="clear_elevenlabs_key" class="accent-red-500"> Remove saved key
+        </label>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="grid sm:grid-cols-2 gap-4">
+      <div>
+        <label class="block text-xs text-gray-400 mb-1.5 font-medium">Voice ID</label>
+        <input type="text" id="voice-id" name="elevenlabs_voice_id"
+               value="{{ system.elevenlabs_voice_id or '' }}"
+               placeholder="e.g. 21m00Tcm4TlvDq8ikWAM"
+               class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1.5 font-medium">Model</label>
+        <select name="elevenlabs_model"
+                class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
+          {% set model = system.elevenlabs_model or 'eleven_multilingual_v2' %}
+          <option value="eleven_multilingual_v2" {{ 'selected' if model == 'eleven_multilingual_v2' }}>Multilingual v2 — natural (default)</option>
+          <option value="eleven_turbo_v2_5" {{ 'selected' if model == 'eleven_turbo_v2_5' }}>Turbo v2.5 — fast</option>
+          <option value="eleven_flash_v2_5" {{ 'selected' if model == 'eleven_flash_v2_5' }}>Flash v2.5 — fastest</option>
+          <option value="eleven_v3" {{ 'selected' if model == 'eleven_v3' }}>v3 — most expressive</option>
+        </select>
+      </div>
+    </div>
+
+    <div>
+      <button type="button" onclick="loadVoices()"
+              class="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm font-medium transition-colors">
+        Verify key &amp; list voices
+      </button>
+      <span id="voices-result" class="text-sm ml-3"></span>
+      <select id="voice-picker" onchange="document.getElementById('voice-id').value = this.value"
+              class="hidden mt-3 w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500"></select>
+    </div>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1.5 font-medium">Announcement Template</label>
+      <input type="text" name="announcement_template"
+             value="{{ system.announcement_template or '' }}"
+             class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30">
+      <p class="text-xs text-gray-500 mt-1">
+        Pre-fills the text box on each player. Placeholders:
+        <code class="text-gray-400">{jersey}</code>,
+        <code class="text-gray-400">{first_name}</code>,
+        <code class="text-gray-400">{last_name}</code>.
+      </p>
+    </div>
+  </div>
+
   <button type="submit"
           class="px-6 py-2.5 rounded-lg bg-green-700 hover:bg-green-600 text-white font-semibold text-sm transition-colors">
     Save Settings
   </button>
 </form>
+
+{% if cloud_mode %}
+<form method="POST" action="/ondeck/settings/youtube-cookies" class="mt-6">
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 space-y-4">
+    <div class="flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">YouTube Cookies</h2>
+      {% if has_yt_cookies %}
+        <span class="text-xs bg-green-900/50 text-green-400 border border-green-700/40 rounded-full px-2.5 py-0.5">Cookies set</span>
+      {% else %}
+        <span class="text-xs bg-yellow-900/50 text-yellow-400 border border-yellow-700/40 rounded-full px-2.5 py-0.5">Not set — imports blocked</span>
+      {% endif %}
+    </div>
+
+    <p class="text-sm text-gray-400">
+      YouTube blocks downloads from cloud server IPs. Paste your cookies below to authenticate imports.
+      Use the
+      <a href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc"
+         target="_blank" class="text-indigo-400 hover:text-indigo-300 underline">Get cookies.txt LOCALLY</a>
+      Chrome extension: visit <strong class="text-gray-300">youtube.com</strong> while logged in, click the extension, export, then paste the file contents here.
+    </p>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1.5 font-medium">Netscape cookie file contents</label>
+      <textarea name="cookies" rows="6" placeholder="# Netscape HTTP Cookie File&#10;.youtube.com	TRUE	/	TRUE	…"
+                class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30 resize-y"></textarea>
+      <p class="text-xs text-gray-500 mt-1">Leave blank and save to clear saved cookies.</p>
+    </div>
+
+    <button type="submit"
+            class="px-5 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white font-semibold text-sm transition-colors">
+      Save Cookies
+    </button>
+  </div>
+</form>
+{% endif %}
 
 <script>
   async function testConnection() {
@@ -59,7 +170,7 @@
     el.textContent = 'Testing…'
     el.className = 'text-sm ml-3 text-gray-400'
     try {
-      const r = await fetch('/api/status')
+      const r = await fetch('/ondeck/api/status')
       const d = await r.json()
       if (d.error) throw new Error(d.error)
       el.textContent = `✔ Connected — state: ${d.state}, volume: ${d.volume}`
@@ -67,6 +178,36 @@
     } catch (err) {
       el.textContent = `✕ ${err.message}`
       el.className = 'text-sm ml-3 text-red-400'
+    }
+  }
+
+  async function loadVoices() {
+    const out    = document.getElementById('voices-result')
+    const picker = document.getElementById('voice-picker')
+    out.textContent = 'Checking…'
+    out.className = 'text-sm ml-3 text-gray-400'
+    try {
+      // Send the just-typed key (if any) so it can be verified before saving.
+      const typed = document.querySelector('[name=elevenlabs_api_key]').value.trim()
+      const r = await fetch('/ondeck/api/elevenlabs/voices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(typed ? { key: typed } : {}),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Failed')
+      const current = document.getElementById('voice-id').value
+      picker.innerHTML = '<option value="">— pick a voice —</option>' +
+        d.voices.map(v =>
+          `<option value="${v.voice_id}" ${v.voice_id === current ? 'selected' : ''}>` +
+          `${v.name} (${v.voice_id})</option>`).join('')
+      picker.classList.remove('hidden')
+      out.textContent = `✔ ${d.voices.length} voice(s) found`
+      out.className = 'text-sm ml-3 text-green-400'
+    } catch (err) {
+      picker.classList.add('hidden')
+      out.textContent = `✕ ${err.message}`
+      out.className = 'text-sm ml-3 text-red-400'
     }
   }
 </script>

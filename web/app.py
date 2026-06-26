@@ -1,8 +1,8 @@
 """OnDeck web portal.
 
-Runs on the Coach Pi (:5000) in local mode, or on Render in cloud mode
-(set ONDECK_MODE=cloud).  Cloud mode is the primary management UI; the Pi
-pulls config and audio files from the cloud via the /sync/* endpoints.
+Routes are grouped under /ondeck/* (app) and /admin (user management).
+The public personal homepage lives at /.
+Sync endpoints (/sync/*) are unchanged so the Pi agent keeps working.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import functools
 import hashlib
 import json
 import sys
+import uuid
 from datetime import timedelta
 from pathlib import Path
 
@@ -39,10 +40,36 @@ from config_manager import ConfigManager, MUSIC_DIR, ONDECK_HOME
 # Mode detection
 # ---------------------------------------------------------------------------
 
-CLOUD_MODE  = os.environ.get("ONDECK_MODE", "").lower() == "cloud"
-SYNC_TOKEN  = os.environ.get("ONDECK_SYNC_TOKEN", "")
+CLOUD_MODE          = os.environ.get("ONDECK_MODE", "").lower() == "cloud"
+SYNC_TOKEN          = os.environ.get("ONDECK_SYNC_TOKEN", "")
+# ElevenLabs key/voice are normally configured in Settings → Announcer Voice;
+# these env vars act as fallbacks when the config fields are left blank.
+ELEVENLABS_API_KEY  = os.environ.get("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "")
 
-AUTH_FILE = ONDECK_HOME / "auth.json"
+AUTH_FILE      = ONDECK_HOME / "auth.json"
+COOKIES_FILE   = ONDECK_HOME / "youtube_cookies.txt"
+HOMEPAGE_FILE  = ONDECK_HOME / "homepage.json"
+
+_HOMEPAGE_DEFAULTS: dict = {
+    "tagline":     "Builder, coach, and creator. I make tools that solve real problems.",
+    "bio_1":       "",
+    "bio_2":       "",
+    "bio_3":       "",
+    "ondeck_desc": "Baseball walk-up music system. Manage player walk-up songs, generate stadium announcements, and trigger live playback from the dugout via Stream Deck.",
+}
+
+def _load_homepage() -> dict:
+    if HOMEPAGE_FILE.exists():
+        try:
+            data = json.loads(HOMEPAGE_FILE.read_text())
+            return {**_HOMEPAGE_DEFAULTS, **data}
+        except Exception:
+            pass
+    return dict(_HOMEPAGE_DEFAULTS)
+
+def _save_homepage(data: dict) -> None:
+    HOMEPAGE_FILE.write_text(json.dumps(data, indent=2))
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("ONDECK_SECRET", "ondeck-dev-secret-change-me")
@@ -52,57 +79,134 @@ cfg = ConfigManager()
 
 
 # ---------------------------------------------------------------------------
-# Auth helpers
+# Multi-user auth helpers
 # ---------------------------------------------------------------------------
 
-def _load_auth() -> dict | None:
-    """Return {username, password_hash}, or None if not yet configured."""
-    # Env var takes precedence (useful for CI / scripted Render deploys).
+def _load_users() -> list[dict]:
+    """Return list of {id, username, password_hash, role} for admin/editor accounts.
+
+    Transparently migrates the old single-user auth.json format on first read.
+    """
     env_hash = os.environ.get("ONDECK_PASSWORD_HASH", "")
     if env_hash:
-        return {
-            "username": os.environ.get("ONDECK_USERNAME", "admin"),
-            "password_hash": env_hash,
-        }
-    if AUTH_FILE.exists():
-        try:
-            data = json.loads(AUTH_FILE.read_text())
-            if data.get("password_hash"):
-                return data
-        except Exception:
-            pass
+        return [{"id": "env-admin",
+                 "username": os.environ.get("ONDECK_USERNAME", "admin"),
+                 "password_hash": env_hash,
+                 "role": "admin"}]
+    if not AUTH_FILE.exists():
+        return []
+    try:
+        data = json.loads(AUTH_FILE.read_text())
+        if "users" in data:
+            return data["users"]
+        # Old single-user format — migrate to new format automatically.
+        if data.get("password_hash"):
+            users = [{"id": str(uuid.uuid4()),
+                      "username": data.get("username", "admin"),
+                      "password_hash": data["password_hash"],
+                      "role": "admin"}]
+            _save_users(users)
+            return users
+    except Exception:
+        pass
+    return []
+
+
+def _save_users(users: list[dict]) -> None:
+    ONDECK_HOME.mkdir(parents=True, exist_ok=True)
+    AUTH_FILE.write_text(json.dumps({"users": users}, indent=2))
+
+
+def _find_user(username: str) -> dict | None:
+    for u in _load_users():
+        if u["username"].lower() == username.lower():
+            return u
     return None
 
+
+# ---------------------------------------------------------------------------
+# Access control
+# ---------------------------------------------------------------------------
 
 @app.before_request
 def _check_auth():
     # Sync API: authenticated by Bearer token, not session.
     if request.path.startswith("/sync/"):
         return
-    # Auth routes and static files are always accessible.
-    if request.endpoint in ("login", "login_post", "logout", "setup", "setup_post", "static"):
+    # Always accessible.
+    always_ok = {
+        "public_home", "static",
+        "ondeck_login", "ondeck_login_post", "ondeck_logout",
+        "ondeck_setup", "ondeck_setup_post",
+    }
+    if request.endpoint in always_ok:
         return
-    # No password configured yet — force first-time setup.
-    if _load_auth() is None:
-        if request.endpoint != "setup":
-            return redirect(url_for("setup"))
+    # No users configured yet — force first-time setup.
+    if not _load_users():
+        return redirect(url_for("ondeck_setup"))
+
+    role = session.get("role")
+
+    if role == "admin":
         return
-    # All other routes require a logged-in session.
-    if not session.get("logged_in"):
-        dest = request.full_path if request.path != "/" else None
-        return redirect(url_for("login", next=dest))
+
+    if role == "editor":
+        admin_only = {
+            "admin_panel", "admin_add_user", "admin_delete_user", "admin_change_role",
+            "admin_homepage", "admin_homepage_save",
+            "ondeck_settings", "ondeck_settings_save", "ondeck_settings_youtube_cookies",
+        }
+        if request.endpoint in admin_only:
+            flash("Admin access required.", "error")
+            return redirect(url_for("ondeck_dashboard"))
+        return
+
+    if role == "player":
+        player_ok = {
+            "ondeck_my_profile", "ondeck_my_profile_upload", "ondeck_my_profile_save",
+            "ondeck_serve_audio",
+            "ondeck_my_profile_change_password", "ondeck_my_profile_change_password_post",
+            "ondeck_logout",
+        }
+        if request.endpoint not in player_ok:
+            return redirect(url_for("ondeck_my_profile"))
+        p = cfg.players.get(session.get("player_id"))
+        reset_ok = {
+            "ondeck_my_profile_change_password", "ondeck_my_profile_change_password_post",
+            "ondeck_logout",
+        }
+        if p and p.get("force_reset") and request.endpoint not in reset_ok:
+            return redirect(url_for("ondeck_my_profile_change_password"))
+        return
+
+    # Not logged in.
+    player_routes = {"ondeck_my_profile", "ondeck_my_profile_upload", "ondeck_my_profile_save"}
+    if request.endpoint in player_routes:
+        return redirect(url_for("ondeck_login"))
+    next_url = request.full_path if request.path not in ("/", "/ondeck") else None
+    if next_url:
+        return redirect(url_for("ondeck_login", next=next_url))
+    return redirect(url_for("ondeck_login"))
 
 
 @app.context_processor
 def _inject_globals():
+    role = session.get("role")
+    current_player = None
+    if role == "player":
+        p = cfg.players.get(session.get("player_id"))
+        if p:
+            current_player = p
     return {
         "cloud_mode": CLOUD_MODE,
-        "current_user": session.get("username"),
+        "current_user": session.get("username") if role in ("admin", "editor") else None,
+        "current_role": role,
+        "current_player": current_player,
+        "elevenlabs_ready": _elevenlabs_ready(),
     }
 
 
 def _require_sync_token(f):
-    """Decorator: require Bearer token when ONDECK_SYNC_TOKEN is set."""
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         if SYNC_TOKEN:
@@ -125,7 +229,6 @@ def _audio_pi_url(path: str) -> str:
 
 
 def _proxy(method: str, path: str, **kwargs):
-    """Forward a request to the Audio Pi. Returns (dict, status_code)."""
     try:
         r = rq.request(method, _audio_pi_url(path), timeout=15, **kwargs)
         return r.json(), r.status_code
@@ -136,54 +239,90 @@ def _proxy(method: str, path: str, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# Auth routes
+# Public homepage
 # ---------------------------------------------------------------------------
 
-@app.get("/login")
-def login():
-    if session.get("logged_in"):
-        return redirect(url_for("index"))
+@app.get("/")
+def public_home():
+    if session.get("role") in ("admin", "editor"):
+        return redirect(url_for("ondeck_dashboard"))
+    return render_template("public_home.html", hp=_load_homepage())
+
+
+# ---------------------------------------------------------------------------
+# OnDeck entry point  /ondeck  →  dashboard or login
+# ---------------------------------------------------------------------------
+
+@app.get("/ondeck")
+def ondeck_home():
+    if session.get("role") in ("admin", "editor"):
+        return redirect(url_for("ondeck_dashboard"))
+    return redirect(url_for("ondeck_login"))
+
+
+# ---------------------------------------------------------------------------
+# Auth  (/ondeck/login, /ondeck/logout, /ondeck/setup)
+# ---------------------------------------------------------------------------
+
+@app.get("/ondeck/login")
+def ondeck_login():
+    if session.get("role") in ("admin", "editor"):
+        return redirect(url_for("ondeck_dashboard"))
+    if session.get("role") == "player":
+        return redirect(url_for("ondeck_my_profile"))
     return render_template("login.html")
 
 
-@app.post("/login")
-def login_post():
-    auth = _load_auth()
+@app.post("/ondeck/login")
+def ondeck_login_post():
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "")
     remember = request.form.get("remember") == "on"
 
-    if auth and username == auth["username"] and check_password_hash(auth["password_hash"], password):
+    # Try admin/editor users first.
+    user = _find_user(username)
+    if user and check_password_hash(user["password_hash"], password):
         session.permanent = remember
-        session["logged_in"] = True
-        session["username"] = username
-        next_url = request.args.get("next") or url_for("index")
-        if not next_url.startswith("/"):   # prevent open redirect
-            next_url = url_for("index")
+        session["user_id"] = user["id"]
+        session["role"] = user["role"]
+        session["username"] = user["username"]
+        next_url = request.args.get("next") or url_for("ondeck_dashboard")
+        if not next_url.startswith("/"):
+            next_url = url_for("ondeck_dashboard")
         return redirect(next_url)
 
+    # Try player credentials.
+    for pid, player in cfg.players.items():
+        pu = (player.get("player_username") or "").lower()
+        if pu == username.lower() and player.get("player_password_hash"):
+            if check_password_hash(player["player_password_hash"], password):
+                session.permanent = True
+                session["role"] = "player"
+                session["player_id"] = pid
+                return redirect(url_for("ondeck_my_profile"))
+
     flash("Incorrect username or password.", "error")
-    return redirect(url_for("login"))
+    return redirect(url_for("ondeck_login"))
 
 
-@app.get("/logout")
-def logout():
+@app.get("/ondeck/logout")
+def ondeck_logout():
     session.clear()
     flash("Signed out.", "success")
-    return redirect(url_for("login"))
+    return redirect(url_for("ondeck_login"))
 
 
-@app.get("/setup")
-def setup():
-    if _load_auth() is not None:
-        return redirect(url_for("index"))
+@app.get("/ondeck/setup")
+def ondeck_setup():
+    if _load_users():
+        return redirect(url_for("ondeck_dashboard"))
     return render_template("setup.html")
 
 
-@app.post("/setup")
-def setup_post():
-    if _load_auth() is not None:
-        return redirect(url_for("index"))
+@app.post("/ondeck/setup")
+def ondeck_setup_post():
+    if _load_users():
+        return redirect(url_for("ondeck_dashboard"))
 
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "")
@@ -191,31 +330,126 @@ def setup_post():
 
     if not username:
         flash("Username is required.", "error")
-        return redirect(url_for("setup"))
+        return redirect(url_for("ondeck_setup"))
     if len(password) < 8:
         flash("Password must be at least 8 characters.", "error")
-        return redirect(url_for("setup"))
+        return redirect(url_for("ondeck_setup"))
     if password != confirm:
         flash("Passwords do not match.", "error")
-        return redirect(url_for("setup"))
+        return redirect(url_for("ondeck_setup"))
 
-    pw_hash = generate_password_hash(password)
-    ONDECK_HOME.mkdir(parents=True, exist_ok=True)
-    AUTH_FILE.write_text(json.dumps({"username": username, "password_hash": pw_hash}, indent=2))
+    new_user = {"id": str(uuid.uuid4()), "username": username,
+                "password_hash": generate_password_hash(password), "role": "admin"}
+    _save_users([new_user])
 
     session.permanent = True
-    session["logged_in"] = True
+    session["user_id"] = new_user["id"]
+    session["role"] = "admin"
     session["username"] = username
     flash("Account created. Welcome to OnDeck!", "success")
-    return redirect(url_for("index"))
+    return redirect(url_for("ondeck_dashboard"))
 
 
 # ---------------------------------------------------------------------------
-# Audio file serving (WaveSurfer loads audio from here)
+# Admin panel  /admin  — user management (admin role only)
 # ---------------------------------------------------------------------------
 
-@app.get("/audio/<path:filename>")
-def serve_audio(filename: str):
+@app.get("/admin")
+def admin_panel():
+    users = _load_users()
+    return render_template("admin.html", users=users)
+
+
+@app.post("/admin/users/add")
+def admin_add_user():
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    role     = request.form.get("role", "editor")
+
+    if not username or len(password) < 8:
+        flash("Username required and password must be at least 8 characters.", "error")
+        return redirect(url_for("admin_panel"))
+    if role not in ("admin", "editor"):
+        role = "editor"
+    users = _load_users()
+    if any(u["username"].lower() == username.lower() for u in users):
+        flash(f"Username '{username}' already exists.", "error")
+        return redirect(url_for("admin_panel"))
+    users.append({"id": str(uuid.uuid4()), "username": username,
+                  "password_hash": generate_password_hash(password), "role": role})
+    _save_users(users)
+    flash(f"Added {role} '{username}'.", "success")
+    return redirect(url_for("admin_panel"))
+
+
+@app.post("/admin/users/<uid>/delete")
+def admin_delete_user(uid: str):
+    users = _load_users()
+    target = next((u for u in users if u["id"] == uid), None)
+    if not target:
+        flash("User not found.", "error")
+        return redirect(url_for("admin_panel"))
+    if target["id"] == session.get("user_id"):
+        flash("You can't delete your own account.", "error")
+        return redirect(url_for("admin_panel"))
+    admins = [u for u in users if u["role"] == "admin"]
+    if target["role"] == "admin" and len(admins) <= 1:
+        flash("Can't delete the last admin account.", "error")
+        return redirect(url_for("admin_panel"))
+    _save_users([u for u in users if u["id"] != uid])
+    flash(f"Deleted '{target['username']}'.", "success")
+    return redirect(url_for("admin_panel"))
+
+
+@app.post("/admin/users/<uid>/role")
+def admin_change_role(uid: str):
+    new_role = request.form.get("role", "editor")
+    if new_role not in ("admin", "editor"):
+        new_role = "editor"
+    users = _load_users()
+    target = next((u for u in users if u["id"] == uid), None)
+    if not target:
+        flash("User not found.", "error")
+        return redirect(url_for("admin_panel"))
+    admins = [u for u in users if u["role"] == "admin"]
+    if target["role"] == "admin" and new_role != "admin" and len(admins) <= 1:
+        flash("Can't demote the last admin.", "error")
+        return redirect(url_for("admin_panel"))
+    target["role"] = new_role
+    _save_users(users)
+    flash(f"Updated '{target['username']}' to {new_role}.", "success")
+    return redirect(url_for("admin_panel"))
+
+
+# ---------------------------------------------------------------------------
+# Homepage editor  /admin/homepage  (admin only)
+# ---------------------------------------------------------------------------
+
+@app.get("/admin/homepage")
+def admin_homepage():
+    return render_template("admin_homepage.html", hp=_load_homepage())
+
+
+@app.post("/admin/homepage/save")
+def admin_homepage_save():
+    hp = {
+        "tagline":     request.form.get("tagline", "").strip(),
+        "bio_1":       request.form.get("bio_1", "").strip(),
+        "bio_2":       request.form.get("bio_2", "").strip(),
+        "bio_3":       request.form.get("bio_3", "").strip(),
+        "ondeck_desc": request.form.get("ondeck_desc", "").strip(),
+    }
+    _save_homepage(hp)
+    flash("Homepage updated.", "success")
+    return redirect(url_for("admin_homepage"))
+
+
+# ---------------------------------------------------------------------------
+# Audio file serving
+# ---------------------------------------------------------------------------
+
+@app.get("/ondeck/audio/<path:filename>")
+def ondeck_serve_audio(filename: str):
     safe = Path(filename).name
     path = MUSIC_DIR / safe
     if not path.exists():
@@ -227,8 +461,8 @@ def serve_audio(filename: str):
 # Dashboard
 # ---------------------------------------------------------------------------
 
-@app.get("/")
-def index():
+@app.get("/ondeck/dashboard")
+def ondeck_dashboard():
     status, _ = _proxy("GET", "/status")
     players = cfg.players_by_jersey()
     return render_template("index.html", status=status, system=cfg.system,
@@ -239,17 +473,17 @@ def index():
 # Music library
 # ---------------------------------------------------------------------------
 
-@app.get("/library")
-def library():
+@app.get("/ondeck/library")
+def ondeck_library():
     return render_template("library.html", songs=cfg.songs)
 
 
-@app.post("/library/upload")
-def library_upload():
+@app.post("/ondeck/library/upload")
+def ondeck_library_upload():
     f = request.files.get("file")
     if not f or not f.filename:
         flash("No file selected.", "error")
-        return redirect(url_for("library"))
+        return redirect(url_for("ondeck_library"))
 
     name = Path(f.filename).name
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -267,66 +501,65 @@ def library_upload():
         pass
 
     flash(f'Uploaded "{name}".', "success")
-    return redirect(url_for("library"))
+    return redirect(url_for("ondeck_library"))
 
 
-@app.post("/library/import")
-def library_import():
+@app.post("/ondeck/library/import")
+def ondeck_library_import():
     url = request.form.get("url", "").strip()
     if not url:
         flash("No URL provided.", "error")
-        return redirect(url_for("library"))
+        return redirect(url_for("ondeck_library"))
 
     if CLOUD_MODE:
-        # Run yt-dlp directly on the cloud instance (no Audio Pi).
         filename, error = _yt_dlp_import(url)
         if error:
             flash(f"Import failed: {error}", "error")
-            return redirect(url_for("library"))
+            return redirect(url_for("ondeck_library"))
     else:
         data, status = _proxy("POST", "/import", json={"url": url})
         if status != 200:
             flash(f"Import failed: {data.get('error', 'unknown')}", "error")
-            return redirect(url_for("library"))
+            return redirect(url_for("ondeck_library"))
         filename = data.get("filename")
 
     if filename:
         existing = {s["filename"] for s in cfg.songs.values()}
         if filename not in existing:
             cfg.add_song(filename, Path(filename).stem.replace("_", " "))
-        flash(f"Imported \"{filename}\".", "success")
+        flash(f'Imported "{filename}".', "success")
     else:
         flash("Import completed.", "success")
-    return redirect(url_for("library"))
+    return redirect(url_for("ondeck_library"))
 
 
-@app.get("/library/<sid>/edit")
-def library_edit(sid: str):
+@app.get("/ondeck/library/<sid>/edit")
+def ondeck_library_edit(sid: str):
     song = cfg.songs.get(sid)
     if not song:
         abort(404)
     return render_template("library_edit.html", sid=sid, song=song)
 
 
-@app.post("/library/<sid>/save")
-def library_save(sid: str):
+@app.post("/ondeck/library/<sid>/save")
+def ondeck_library_save(sid: str):
     with cfg._lock:
         song = cfg.songs.get(sid)
         if not song:
             abort(404)
-        song["display_name"] = request.form.get("display_name", song["display_name"]).strip() or song["display_name"]
+        song["display_name"] = (request.form.get("display_name", song["display_name"]).strip()
+                                or song["display_name"])
         song["start_ms"] = _form_ms("start_ms", 0)
         song["end_ms"] = _form_ms_or_none("end_ms")
         cfg.save()
     flash("Saved.", "success")
-    return redirect(url_for("library_edit", sid=sid))
+    return redirect(url_for("ondeck_library_edit", sid=sid))
 
 
-@app.post("/library/<sid>/delete")
-def library_delete(sid: str):
+@app.post("/ondeck/library/<sid>/delete")
+def ondeck_library_delete(sid: str):
     with cfg._lock:
         song = cfg.songs.pop(sid, None)
-        # Remove from any player that references this song.
         for p in cfg.players.values():
             if p.get("walkup_song_id") == sid:
                 p["walkup_song_id"] = None
@@ -334,95 +567,95 @@ def library_delete(sid: str):
     if song:
         (MUSIC_DIR / song["filename"]).unlink(missing_ok=True)
         flash(f"Deleted '{song['display_name']}'.", "success")
-    return redirect(url_for("library"))
+    return redirect(url_for("ondeck_library"))
 
 
 # ---------------------------------------------------------------------------
 # Players
 # ---------------------------------------------------------------------------
 
-@app.get("/players")
-def players():
+@app.get("/ondeck/players")
+def ondeck_players():
     return render_template("players.html",
                            players=cfg.players_by_jersey(), songs=cfg.songs)
 
 
-@app.get("/players/new")
-def players_new():
+@app.get("/ondeck/players/new")
+def ondeck_players_new():
     return render_template("player_edit.html",
                            pid=None, player=None, songs=cfg.songs)
 
 
-@app.post("/players")
-def players_create():
+@app.post("/ondeck/players")
+def ondeck_players_create():
     first = request.form.get("first_name", "").strip()
-    last = request.form.get("last_name", "").strip()
+    last  = request.form.get("last_name", "").strip()
     try:
         jersey = int(request.form.get("jersey", ""))
     except ValueError:
         flash("Jersey must be a number.", "error")
-        return redirect(url_for("players_new"))
+        return redirect(url_for("ondeck_players_new"))
     if not first or not last:
         flash("First and last name are required.", "error")
-        return redirect(url_for("players_new"))
+        return redirect(url_for("ondeck_players_new"))
 
     pid = cfg.add_player(jersey, first, last)
     flash(f"Added #{jersey} {first} {last}.", "success")
-    return redirect(url_for("players_edit", pid=pid))
+    return redirect(url_for("ondeck_players_edit", pid=pid))
 
 
-@app.get("/players/<pid>/edit")
-def players_edit(pid: str):
+@app.get("/ondeck/players/<pid>/edit")
+def ondeck_players_edit(pid: str):
     player = cfg.players.get(pid)
     if not player:
         abort(404)
     return render_template("player_edit.html",
-                           pid=pid, player=player, songs=cfg.songs)
+                           pid=pid, player=player, songs=cfg.songs,
+                           default_announcement=_default_announcement(player))
 
 
-@app.post("/players/<pid>/save")
-def players_save(pid: str):
+@app.post("/ondeck/players/<pid>/save")
+def ondeck_players_save(pid: str):
     with cfg._lock:
         player = cfg.players.get(pid)
         if not player:
             abort(404)
-
         try:
             player["jersey"] = int(request.form.get("jersey", player["jersey"]))
         except (ValueError, TypeError):
             pass
-        player["first_name"] = request.form.get("first_name", player["first_name"]).strip() or player["first_name"]
-        player["last_name"] = request.form.get("last_name", player["last_name"]).strip() or player["last_name"]
-        player["walkup_song_id"] = request.form.get("walkup_song_id") or None
+        player["first_name"] = (request.form.get("first_name", player["first_name"]).strip()
+                                 or player["first_name"])
+        player["last_name"]  = (request.form.get("last_name", player["last_name"]).strip()
+                                 or player["last_name"])
+        player["walkup_song_id"]       = request.form.get("walkup_song_id") or None
         player["announcement_start_ms"] = _form_ms("ann_start_ms", 0)
-        player["announcement_end_ms"] = _form_ms_or_none("ann_end_ms")
-        player["music_cue_ms"] = _form_ms("music_cue_ms", 0)
+        player["announcement_end_ms"]   = _form_ms_or_none("ann_end_ms")
+        player["music_cue_ms"]          = _form_ms("music_cue_ms", 0)
 
         sid = player.get("walkup_song_id")
         if sid and sid in cfg.songs:
-            song = cfg.songs[sid]
-            song["start_ms"] = _form_ms("song_start_ms", 0)
-            song["end_ms"] = _form_ms_or_none("song_end_ms")
+            cfg.songs[sid]["start_ms"] = _form_ms("song_start_ms", 0)
+            cfg.songs[sid]["end_ms"]   = _form_ms_or_none("song_end_ms")
 
         cfg.save()
 
     flash("Saved.", "success")
-    return redirect(url_for("players_edit", pid=pid))
+    return redirect(url_for("ondeck_players_edit", pid=pid))
 
 
-@app.post("/players/<pid>/delete")
-def players_delete(pid: str):
+@app.post("/ondeck/players/<pid>/delete")
+def ondeck_players_delete(pid: str):
     with cfg._lock:
         player = cfg.players.pop(pid, None)
         cfg.save()
     if player:
         flash(f"Deleted #{player['jersey']} {player['first_name']} {player['last_name']}.", "success")
-    return redirect(url_for("players"))
+    return redirect(url_for("ondeck_players"))
 
 
-@app.post("/players/<pid>/record")
-def players_record(pid: str):
-    """Save a browser-recorded announcement blob (webm/ogg from MediaRecorder)."""
+@app.post("/ondeck/players/<pid>/record")
+def ondeck_players_record(pid: str):
     player = cfg.players.get(pid)
     if not player:
         abort(404)
@@ -435,9 +668,9 @@ def players_record(pid: str):
     (MUSIC_DIR / filename).write_bytes(blob)
 
     with cfg._lock:
-        player["announcement_file"] = filename
+        player["announcement_file"]     = filename
         player["announcement_start_ms"] = 0
-        player["announcement_end_ms"] = None
+        player["announcement_end_ms"]   = None
         cfg.save()
 
     try:
@@ -449,18 +682,190 @@ def players_record(pid: str):
     return jsonify(ok=True, filename=filename)
 
 
+@app.post("/ondeck/players/<pid>/set-credentials")
+def ondeck_player_set_credentials(pid: str):
+    player = cfg.players.get(pid)
+    if not player:
+        abort(404)
+    username = request.form.get("player_username", "").strip()
+    password = request.form.get("player_password", "")
+    with cfg._lock:
+        if username:
+            player["player_username"] = username
+        if password:
+            if len(password) < 6:
+                flash("Password must be at least 6 characters.", "error")
+                return redirect(url_for("ondeck_players_edit", pid=pid))
+            player["player_password_hash"] = generate_password_hash(password)
+            player["force_reset"] = True
+        cfg.save()
+    flash("Player login updated.", "success")
+    return redirect(url_for("ondeck_players_edit", pid=pid))
+
+
+@app.post("/ondeck/players/<pid>/generate-announcement")
+def ondeck_player_generate_announcement(pid: str):
+    player = cfg.players.get(pid)
+    if not player:
+        abort(404)
+    # Editable text from the player editor; fall back to the saved template.
+    text = (request.form.get("text", "").strip()
+            or _default_announcement(player))
+
+    audio, error = _elevenlabs_announce(text)
+    if error:
+        flash(f"TTS failed: {error}", "error")
+        return redirect(url_for("ondeck_players_edit", pid=pid))
+
+    filename = f"ann_{pid}_tts.mp3"
+    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    (MUSIC_DIR / filename).write_bytes(audio)
+
+    with cfg._lock:
+        old = player.get("announcement_file")
+        player["announcement_file"]     = filename
+        player["announcement_text"]     = text
+        player["announcement_start_ms"] = 0
+        player["announcement_end_ms"]   = None
+        cfg.save()
+
+    # Drop a previous take under a different name (e.g. an old webm recording)
+    # so it doesn't linger in the music dir and the sync manifest.
+    if old and old != filename:
+        (MUSIC_DIR / old).unlink(missing_ok=True)
+
+    try:
+        rq.post(_audio_pi_url("/upload"),
+                files={"file": (filename, audio, "audio/mpeg")}, timeout=15)
+    except Exception:
+        pass
+
+    flash("AI announcement generated!", "success")
+    return redirect(url_for("ondeck_players_edit", pid=pid))
+
+
+@app.post("/ondeck/api/elevenlabs/voices")
+def ondeck_api_elevenlabs_voices():
+    """List the account's voices so an admin can pick one in Settings.
+
+    Accepts an optional ``key`` in the JSON body so a just-typed (unsaved) key
+    can be verified before saving.
+    """
+    body = request.get_json(silent=True) or {}
+    key = (body.get("key") or "").strip() or _elevenlabs_key()
+    if not key:
+        return jsonify(error="Enter an API key first."), 400
+    try:
+        r = rq.get("https://api.elevenlabs.io/v1/voices",
+                   headers={"xi-api-key": key}, timeout=15)
+    except Exception as exc:
+        return jsonify(error=f"Could not reach ElevenLabs: {exc}"), 502
+    if r.status_code != 200:
+        return jsonify(error=_elevenlabs_error(r)), 502
+    voices = [{"voice_id": v.get("voice_id"), "name": v.get("name", "")}
+              for v in (r.json().get("voices") or [])]
+    return jsonify(voices=voices)
+
+
+# ---------------------------------------------------------------------------
+# Player self-service portal
+# ---------------------------------------------------------------------------
+
+@app.get("/ondeck/my-profile/change-password")
+def ondeck_my_profile_change_password():
+    pid = session.get("player_id")
+    player = cfg.players.get(pid)
+    if not player:
+        return redirect(url_for("ondeck_login"))
+    return render_template("change_password.html", player=player)
+
+
+@app.post("/ondeck/my-profile/change-password")
+def ondeck_my_profile_change_password_post():
+    pid    = session.get("player_id")
+    new_pw  = request.form.get("password", "")
+    confirm = request.form.get("confirm", "")
+    if len(new_pw) < 6:
+        flash("Password must be at least 6 characters.", "error")
+        return redirect(url_for("ondeck_my_profile_change_password"))
+    if new_pw != confirm:
+        flash("Passwords do not match.", "error")
+        return redirect(url_for("ondeck_my_profile_change_password"))
+    with cfg._lock:
+        player = cfg.players.get(pid)
+        if not player:
+            abort(403)
+        player["player_password_hash"] = generate_password_hash(new_pw)
+        player["force_reset"] = False
+        cfg.save()
+    flash("Password updated!", "success")
+    return redirect(url_for("ondeck_my_profile"))
+
+
+@app.get("/ondeck/my-profile")
+def ondeck_my_profile():
+    pid = session.get("player_id")
+    player = cfg.players.get(pid)
+    if not player:
+        session.pop("player_id", None)
+        session.pop("role", None)
+        return redirect(url_for("ondeck_login"))
+    song = cfg.songs.get(player["walkup_song_id"]) if player.get("walkup_song_id") else None
+    return render_template("my_profile.html", pid=pid, player=player, song=song)
+
+
+@app.post("/ondeck/my-profile/upload")
+def ondeck_my_profile_upload():
+    pid = session.get("player_id")
+    player = cfg.players.get(pid)
+    if not player:
+        abort(403)
+    f = request.files.get("file")
+    if not f or not f.filename:
+        flash("No file selected.", "error")
+        return redirect(url_for("ondeck_my_profile"))
+    name = Path(f.filename).name
+    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    f.save(str(MUSIC_DIR / name))
+    existing = {s["filename"]: sid for sid, s in cfg.songs.items()}
+    song_id = existing.get(name) or cfg.add_song(
+        name, Path(name).stem.replace("_", " ").replace("-", " ")
+    )
+    with cfg._lock:
+        player["walkup_song_id"] = song_id
+        cfg.save()
+    flash("Song uploaded!", "success")
+    return redirect(url_for("ondeck_my_profile"))
+
+
+@app.post("/ondeck/my-profile/save")
+def ondeck_my_profile_save():
+    pid = session.get("player_id")
+    with cfg._lock:
+        player = cfg.players.get(pid)
+        if not player:
+            abort(403)
+        sid = player.get("walkup_song_id")
+        if sid and sid in cfg.songs:
+            cfg.songs[sid]["start_ms"] = _form_ms("start_ms", 0)
+            cfg.songs[sid]["end_ms"]   = _form_ms_or_none("end_ms")
+        cfg.save()
+    flash("Saved!", "success")
+    return redirect(url_for("ondeck_my_profile"))
+
+
 # ---------------------------------------------------------------------------
 # Audio Pi proxy endpoints (called by browser JS)
 # ---------------------------------------------------------------------------
 
-@app.get("/api/status")
-def api_status():
+@app.get("/ondeck/api/status")
+def ondeck_api_status():
     data, code = _proxy("GET", "/status")
     return jsonify(data), code
 
 
-@app.post("/api/preview")
-def api_preview():
+@app.post("/ondeck/api/preview")
+def ondeck_api_preview():
     body = request.get_json(force=True) or {}
     data, code = _proxy("POST", "/queue", json=body)
     if code != 200:
@@ -469,37 +874,39 @@ def api_preview():
     return jsonify(data), code
 
 
-@app.post("/api/stop")
-def api_stop():
+@app.post("/ondeck/api/stop")
+def ondeck_api_stop():
     data, code = _proxy("POST", "/stop")
     return jsonify(data), code
 
 
-@app.post("/api/fade")
-def api_fade():
+@app.post("/ondeck/api/fade")
+def ondeck_api_fade():
     body = request.get_json(force=True, silent=True) or {}
     data, code = _proxy("POST", "/fade", json=body)
     return jsonify(data), code
 
 
-@app.post("/api/volume")
-def api_volume():
+@app.post("/ondeck/api/volume")
+def ondeck_api_volume():
     body = request.get_json(force=True) or {}
     data, code = _proxy("POST", "/volume", json=body)
     return jsonify(data), code
 
 
 # ---------------------------------------------------------------------------
-# Settings
+# Settings (admin only — enforced in _check_auth)
 # ---------------------------------------------------------------------------
 
-@app.get("/settings")
-def settings():
-    return render_template("settings.html", system=cfg.system)
+@app.get("/ondeck/settings")
+def ondeck_settings():
+    return render_template("settings.html", system=cfg.system,
+                           has_yt_cookies=COOKIES_FILE.exists(),
+                           elevenlabs_key_set=bool(_elevenlabs_key()))
 
 
-@app.post("/settings/save")
-def settings_save():
+@app.post("/ondeck/settings/save")
+def ondeck_settings_save():
     with cfg._lock:
         s = cfg.system
         s["audio_pi_ip"] = request.form.get("audio_pi_ip", "").strip()
@@ -511,26 +918,52 @@ def settings_save():
             s["volume"] = max(0, min(100, int(request.form.get("volume", 80))))
         except ValueError:
             pass
+
+        # AI announcer voice (ElevenLabs).
+        s["elevenlabs_voice_id"] = request.form.get("elevenlabs_voice_id", "").strip()
+        s["elevenlabs_model"] = (request.form.get("elevenlabs_model", "").strip()
+                                 or "eleven_multilingual_v2")
+        s["announcement_template"] = (request.form.get("announcement_template", "").strip()
+                                      or s.get("announcement_template", ""))
+        # Only overwrite the stored key when a new one is typed; an empty field
+        # leaves the existing key untouched so it's never echoed back to the page.
+        new_key = request.form.get("elevenlabs_api_key", "").strip()
+        if new_key:
+            s["elevenlabs_api_key"] = new_key
+        elif request.form.get("clear_elevenlabs_key") == "on":
+            s["elevenlabs_api_key"] = ""
+
         cfg.save(mark_dirty=False)
     flash("Settings saved.", "success")
-    return redirect(url_for("settings"))
+    return redirect(url_for("ondeck_settings"))
+
+
+@app.post("/ondeck/settings/youtube-cookies")
+def ondeck_settings_youtube_cookies():
+    text = request.form.get("cookies", "").strip()
+    if text:
+        ONDECK_HOME.mkdir(parents=True, exist_ok=True)
+        COOKIES_FILE.write_text(text)
+        flash("YouTube cookies saved.", "success")
+    else:
+        COOKIES_FILE.unlink(missing_ok=True)
+        flash("YouTube cookies cleared.", "success")
+    return redirect(url_for("ondeck_settings"))
 
 
 # ---------------------------------------------------------------------------
-# Sync API — Pi polls these to stay in sync with the cloud config
+# Sync API — Pi polls these to stay in sync with cloud config
 # ---------------------------------------------------------------------------
 
 @app.get("/sync/config")
 @_require_sync_token
 def sync_config():
-    """Full config JSON — Pi replaces its local copy with this."""
     return jsonify(cfg.data)
 
 
 @app.get("/sync/files")
 @_require_sync_token
 def sync_list_files():
-    """Manifest of every audio file: name, size, md5."""
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)
     files = []
     for f in sorted(MUSIC_DIR.iterdir()):
@@ -543,7 +976,6 @@ def sync_list_files():
 @app.get("/sync/files/<path:filename>")
 @_require_sync_token
 def sync_download_file(filename: str):
-    """Download one audio file."""
     safe = Path(filename).name
     path = MUSIC_DIR / safe
     if not path.exists():
@@ -554,8 +986,7 @@ def sync_download_file(filename: str):
 @app.post("/sync/ping")
 @_require_sync_token
 def sync_ping():
-    """Pi reports its local IP and hostname so the dashboard can show it."""
-    body = request.get_json(force=True) or {}
+    body  = request.get_json(force=True) or {}
     pi_id = (body.get("pi_id") or "default")[:64]
     with cfg._lock:
         cfg.system.setdefault("known_pis", {})[pi_id] = {
@@ -571,13 +1002,88 @@ def sync_ping():
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _elevenlabs_key() -> str:
+    """API key from config, falling back to the ELEVENLABS_API_KEY env var."""
+    return (cfg.system.get("elevenlabs_api_key") or ELEVENLABS_API_KEY).strip()
+
+
+def _elevenlabs_voice() -> str:
+    """Voice ID from config, falling back to the ELEVENLABS_VOICE_ID env var."""
+    return (cfg.system.get("elevenlabs_voice_id") or ELEVENLABS_VOICE_ID).strip()
+
+
+def _elevenlabs_model() -> str:
+    return cfg.system.get("elevenlabs_model") or "eleven_multilingual_v2"
+
+
+def _elevenlabs_ready() -> bool:
+    return bool(_elevenlabs_key() and _elevenlabs_voice())
+
+
+def _default_announcement(player: dict) -> str:
+    """Fill the announcement template with this player's details."""
+    tmpl = (cfg.system.get("announcement_template")
+            or "Now batting, number {jersey}, {first_name} {last_name}")
+    try:
+        return tmpl.format(
+            jersey=player.get("jersey", ""),
+            first_name=player.get("first_name", ""),
+            last_name=player.get("last_name", ""),
+        )
+    except Exception:
+        # A malformed template (bad placeholder) shouldn't break the page.
+        return tmpl
+
+
+def _elevenlabs_error(r) -> str:
+    """Pull a human-readable message out of an ElevenLabs error response."""
+    try:
+        detail = r.json().get("detail", "")
+        if isinstance(detail, dict):
+            detail = detail.get("message") or detail.get("status") or ""
+        if detail:
+            return f"ElevenLabs error {r.status_code}: {detail}"
+    except Exception:
+        pass
+    return f"ElevenLabs {r.status_code}: {r.text[:300]}"
+
+
+def _elevenlabs_announce(text: str) -> tuple[bytes | None, str | None]:
+    """Synthesize ``text`` to MP3 bytes. Returns (audio_bytes, error_message)."""
+    key = _elevenlabs_key()
+    if not key:
+        return None, "No ElevenLabs API key set (Settings → Announcer Voice)."
+    voice = _elevenlabs_voice()
+    if not voice:
+        return None, "No ElevenLabs voice selected (Settings → Announcer Voice)."
+    try:
+        r = rq.post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{voice}",
+            params={"output_format": "mp3_44100_128"},
+            headers={
+                "xi-api-key": key,
+                "Content-Type": "application/json",
+                "Accept": "audio/mpeg",
+            },
+            json={
+                "text": text,
+                "model_id": _elevenlabs_model(),
+                "voice_settings": {"stability": 0.55, "similarity_boost": 0.75},
+            },
+            timeout=30,
+        )
+    except Exception as exc:
+        return None, f"Could not reach ElevenLabs: {exc}"
+    if r.status_code != 200:
+        return None, _elevenlabs_error(r)
+    return r.content, None
+
+
 def _yt_dlp_import(url: str) -> tuple[str | None, str | None]:
-    """Run yt-dlp on this process (cloud mode). Returns (filename, error)."""
     import subprocess
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)
     out_tmpl = str(MUSIC_DIR / "%(title)s.%(ext)s")
 
-    # Use imageio-ffmpeg's bundled binary so we don't need a system ffmpeg.
     ffmpeg_location = None
     try:
         import imageio_ffmpeg
@@ -585,10 +1091,16 @@ def _yt_dlp_import(url: str) -> tuple[str | None, str | None]:
     except Exception:
         pass
 
-    cmd = ["yt-dlp", "-x", "--audio-format", "mp3", "--no-playlist",
-           "--print", "after_move:filepath", "-o", out_tmpl, url]
+    cmd = [
+        "yt-dlp", "-x", "--audio-format", "mp3", "--no-playlist",
+        "--print", "after_move:filepath", "-o", out_tmpl,
+        "--extractor-args", "youtube:player_client=tv_embedded",
+        url,
+    ]
     if ffmpeg_location:
         cmd += ["--ffmpeg-location", ffmpeg_location]
+    if COOKIES_FILE.exists():
+        cmd += ["--cookies", str(COOKIES_FILE)]
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)

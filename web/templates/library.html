@@ -14,7 +14,7 @@
     <h2 class="font-semibold text-white mb-4 flex items-center gap-2">
       <span>⬆</span> Upload Audio
     </h2>
-    <form method="POST" action="/library/upload" enctype="multipart/form-data">
+    <form method="POST" action="/ondeck/library/upload" enctype="multipart/form-data">
       <label id="drop-zone"
              class="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-600 hover:border-green-500 rounded-lg p-6 cursor-pointer transition-colors text-center"
              for="file-input">
@@ -32,7 +32,7 @@
     <h2 class="font-semibold text-white mb-4 flex items-center gap-2">
       <span>▶</span> YouTube Import
     </h2>
-    <form method="POST" action="/library/import" id="import-form">
+    <form method="POST" action="/ondeck/library/import" id="import-form">
       <div class="flex gap-2">
         <input type="url" name="url" placeholder="https://youtube.com/watch?v=…"
                required
@@ -82,11 +82,11 @@
                       class="px-2.5 py-1 rounded bg-gray-700 hover:bg-green-700 text-gray-300 hover:text-white text-xs font-medium transition-colors">
                 ▶
               </button>
-              <a href="/library/{{ sid }}/edit"
+              <a href="/ondeck/library/{{ sid }}/edit"
                  class="px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-xs font-medium transition-colors">
                 Edit
               </a>
-              <form method="POST" action="/library/{{ sid }}/delete"
+              <form method="POST" action="/ondeck/library/{{ sid }}/delete"
                     onsubmit="return confirm('Delete "{{ song.display_name }}"?')">
                 <button type="submit"
                         class="px-2.5 py-1 rounded bg-gray-700 hover:bg-red-800 text-gray-400 hover:text-red-200 text-xs font-medium transition-colors">
@@ -131,13 +131,8 @@
     }
   })
 
-  async function previewSong(filename, startMs, endMs) {
-    await fetch('/api/preview', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: filename, start_ms: startMs, end_ms: endMs }),
-    })
-    setTimeout(pollStatus, 400)
+  function previewSong(filename, startMs, endMs) {
+    OnDeck.preview({ file: filename, start_ms: startMs, end_ms: endMs })
   }
 </script>
 {% endblock %}

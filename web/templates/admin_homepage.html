@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Edit Homepage{% endblock %}
+{% block content %}
+
+<div class="max-w-2xl mx-auto">
+
+  <div class="flex items-center gap-3 mb-6">
+    <a href="/admin" class="text-gray-400 hover:text-white transition-colors text-sm">← Admin</a>
+    <span class="text-gray-600">/</span>
+    <h1 class="text-2xl font-bold">Edit Homepage</h1>
+    <a href="/" target="_blank"
+       class="ml-auto text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+      View live ↗
+    </a>
+  </div>
+
+  <form method="POST" action="/admin/homepage/save" class="space-y-5">
+
+    <!-- Tagline -->
+    <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
+      <label class="block text-sm font-semibold text-gray-300 mb-1.5">Hero Tagline</label>
+      <p class="text-xs text-gray-500 mb-3">Short line shown under your name at the top of the page.</p>
+      <input type="text" name="tagline" value="{{ hp.tagline }}"
+             class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30">
+    </div>
+
+    <!-- Bio -->
+    <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-300 mb-1">About Me</label>
+        <p class="text-xs text-gray-500 mb-3">Up to three paragraphs. Leave blank to hide.</p>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1.5 font-medium">Paragraph 1</label>
+        <textarea name="bio_1" rows="4"
+                  class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30 resize-y">{{ hp.bio_1 }}</textarea>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1.5 font-medium">Paragraph 2</label>
+        <textarea name="bio_2" rows="4"
+                  class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30 resize-y">{{ hp.bio_2 }}</textarea>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1.5 font-medium">Paragraph 3</label>
+        <textarea name="bio_3" rows="4"
+                  class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30 resize-y">{{ hp.bio_3 }}</textarea>
+      </div>
+    </div>
+
+    <!-- OnDeck description -->
+    <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
+      <label class="block text-sm font-semibold text-gray-300 mb-1.5">OnDeck Description</label>
+      <p class="text-xs text-gray-500 mb-3">Shown on the OnDeck product card in the Products section.</p>
+      <textarea name="ondeck_desc" rows="3"
+                class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30 resize-y">{{ hp.ondeck_desc }}</textarea>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button type="submit"
+              class="px-6 py-2.5 rounded-lg bg-green-700 hover:bg-green-600 text-white font-semibold text-sm transition-colors">
+        Save Changes
+      </button>
+      <a href="/" target="_blank"
+         class="px-5 py-2.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm font-medium transition-colors">
+        Preview
+      </a>
+    </div>
+
+  </form>
+
+</div>
+
+{% endblock %}

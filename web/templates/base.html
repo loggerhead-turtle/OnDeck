@@ -53,28 +53,46 @@
 
   <!-- Top nav -->
   <header class="bg-gray-900 border-b border-gray-800 flex items-center px-4 h-14 shrink-0">
-    <a href="/" class="flex items-center gap-2 mr-8 shrink-0">
+    <a href="/ondeck/dashboard" class="flex items-center gap-2 mr-8 shrink-0">
       <span class="text-2xl leading-none">⚾</span>
       <span class="font-bold text-lg tracking-tight text-white">OnDeck</span>
     </a>
 
+    {% if current_player %}
     <nav class="flex gap-1 text-sm font-medium">
-      <a href="/"         class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'index' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Home</a>
-      <a href="/library"  class="nav-link px-3 py-1.5 rounded-md {% if 'library' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Library</a>
-      <a href="/players"  class="nav-link px-3 py-1.5 rounded-md {% if 'player' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Players</a>
-      <a href="/settings" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'settings' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Settings</a>
+      <a href="/ondeck/my-profile" class="nav-link px-3 py-1.5 rounded-md {% if 'my_profile' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">My Profile</a>
     </nav>
+    {% elif current_user %}
+    <nav class="flex gap-1 text-sm font-medium">
+      <a href="/ondeck/dashboard" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'ondeck_dashboard' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Home</a>
+      <a href="/ondeck/library"   class="nav-link px-3 py-1.5 rounded-md {% if 'library' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Library</a>
+      <a href="/ondeck/players"   class="nav-link px-3 py-1.5 rounded-md {% if 'players' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Players</a>
+      {% if current_role == 'admin' %}
+      <a href="/ondeck/settings"  class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'ondeck_settings' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Settings</a>
+      <a href="/admin"            class="nav-link px-3 py-1.5 rounded-md {% if 'admin' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Admin</a>
+      {% endif %}
+    </nav>
+    {% endif %}
 
-    <!-- User menu -->
-    {% if current_user %}
+    <!-- User / player menu -->
+    {% if current_player %}
     <div class="ml-auto flex items-center gap-3">
-      <span class="text-xs text-gray-500 hidden sm:inline">{{ current_user }}</span>
-      <a href="/logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>
+      <span class="text-xs text-gray-500 hidden sm:inline">#{{ current_player.jersey }} {{ current_player.first_name }} {{ current_player.last_name }}</span>
+      <a href="/ondeck/logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>
+    </div>
+    {% elif current_user %}
+    <div class="ml-auto flex items-center gap-3">
+      <span class="text-xs text-gray-500 hidden sm:inline">
+        {{ current_user }}
+        {% if current_role == 'admin' %}<span class="ml-1 px-1.5 py-0.5 rounded text-xs bg-indigo-900/50 text-indigo-400 border border-indigo-700/40">admin</span>{% endif %}
+        {% if current_role == 'editor' %}<span class="ml-1 px-1.5 py-0.5 rounded text-xs bg-green-900/50 text-green-400 border border-green-700/40">editor</span>{% endif %}
+      </span>
+      <a href="/ondeck/logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>
     </div>
     {% endif %}
 
     <!-- Mode badge + Audio Pi status -->
-    <div class="{% if not current_user %}ml-auto {% endif %}flex items-center gap-3">
+    <div class="{% if not current_user and not current_player %}ml-auto {% endif %}flex items-center gap-3">
       {% if cloud_mode %}
         <span class="px-2 py-0.5 rounded text-xs font-medium bg-indigo-900/60 border border-indigo-700/40 text-indigo-300">
           ☁ Cloud
@@ -130,12 +148,266 @@
   </div>
   {% endif %}{# cloud_mode #}
 
+  <!-- Demo / Debug floating tools (available in both local and cloud mode) -->
+  <div id="ondeck-tools" class="fixed bottom-20 right-3 z-50 flex flex-col items-end gap-2 print:hidden">
+    <div id="debug-panel" class="hidden w-80 max-w-[88vw] bg-gray-900 border border-gray-700 rounded-lg shadow-2xl text-xs">
+      <div class="flex items-center justify-between px-3 py-2 border-b border-gray-800">
+        <span class="font-semibold text-gray-200">🐞 Debug</span>
+        <div class="flex gap-3">
+          <button type="button" onclick="OnDeck.copyLog()" class="text-gray-400 hover:text-white">Copy</button>
+          <button type="button" onclick="OnDeck.clearLog()" class="text-gray-400 hover:text-white">Clear</button>
+        </div>
+      </div>
+      <div id="debug-state" class="px-3 py-2 text-gray-400 font-mono whitespace-pre-wrap border-b border-gray-800"></div>
+      <pre id="debug-log" class="px-3 py-2 h-44 overflow-auto text-gray-300 font-mono whitespace-pre-wrap leading-relaxed m-0"></pre>
+    </div>
+    <div class="flex gap-2">
+      <button type="button" id="demo-toggle" onclick="OnDeck.toggleDemo()"
+              class="px-3 py-1.5 rounded-full text-xs font-semibold border bg-gray-800 border-gray-600 text-gray-300">🎧 Demo: off</button>
+      <button type="button" id="debug-toggle" onclick="OnDeck.toggleDebug()"
+              class="px-3 py-1.5 rounded-full text-xs font-semibold border bg-gray-800 border-gray-600 text-gray-300">🐞 Debug</button>
+    </div>
+  </div>
+
+  <script>
+    window.ONDECK_CLOUD = {{ 'true' if cloud_mode else 'false' }};
+    window.OnDeck = (function () {
+      const LS = window.localStorage;
+      const state = {
+        demo:  LS.getItem('ondeck_demo')  === '1',
+        debug: LS.getItem('ondeck_debug') === '1',
+      };
+      let audio = null;
+      let endWatch = null;
+      let ann = null;
+      let annWatch = null;
+      let fadeTimer = null;
+      let lastPi = '—';
+
+      function log(msg, data) {
+        const ts = new Date().toLocaleTimeString();
+        let line = '[' + ts + '] ' + msg;
+        if (data !== undefined) line += ' ' + (typeof data === 'string' ? data : JSON.stringify(data));
+        if (window.console) console.log('[OnDeck]', msg, data === undefined ? '' : data);
+        const el = document.getElementById('debug-log');
+        if (el) { el.textContent += line + '\n'; el.scrollTop = el.scrollHeight; }
+      }
+
+      function renderState() {
+        const el = document.getElementById('debug-state');
+        if (!el) return;
+        const lines = [
+          'mode: ' + (window.ONDECK_CLOUD ? 'cloud' : 'local') + '   demo: ' + (state.demo ? 'ON' : 'off'),
+          'pi: ' + lastPi,
+        ];
+        if (audio) {
+          lines.push('audio: ' + (audio.paused ? 'paused' : 'playing') +
+                     ' t=' + audio.currentTime.toFixed(2) +
+                     ' ready=' + audio.readyState + ' net=' + audio.networkState +
+                     (audio.error ? ' err=' + audio.error.code : ''));
+          lines.push('src: ' + (audio.currentSrc ? decodeURIComponent(audio.currentSrc.split('/').pop()) : '—'));
+        }
+        el.textContent = lines.join('\n');
+      }
+
+      function ensureAudio() {
+        if (!audio) {
+          audio = new Audio();
+          audio.preload = 'metadata';
+          audio.setAttribute('playsinline', '');
+          ['playing', 'pause', 'ended', 'stalled', 'waiting', 'error', 'loadedmetadata'].forEach(function (ev) {
+            audio.addEventListener(ev, function () {
+              log('audio:' + ev, ev === 'error' && audio.error ? 'code ' + audio.error.code : undefined);
+              renderState();
+            });
+          });
+          audio.addEventListener('timeupdate', renderState);
+        }
+        return audio;
+      }
+
+      function nowPlaying(text) {
+        const np = document.getElementById('now-playing-text');
+        if (np) np.textContent = text;
+      }
+
+      function ensureAnn() {
+        if (!ann) {
+          ann = new Audio();
+          ann.preload = 'metadata';
+          ann.setAttribute('playsinline', '');
+          ['playing', 'ended', 'error'].forEach(function (ev) {
+            ann.addEventListener(ev, function () { log('ann:' + ev, ev === 'error' && ann.error ? 'code ' + ann.error.code : undefined); });
+          });
+        }
+        return ann;
+      }
+
+      function startMusic(clip, fadeMs) {
+        const a = ensureAudio();
+        if (endWatch) { a.removeEventListener('timeupdate', endWatch); endWatch = null; }
+        if (fadeTimer) { clearInterval(fadeTimer); fadeTimer = null; }
+        const start = (clip.start_ms || 0) / 1000;
+        const end   = clip.end_ms != null ? clip.end_ms / 1000 : null;
+        if (a.getAttribute('data-file') !== clip.file) {
+          a.src = '/ondeck/audio/' + encodeURIComponent(clip.file);
+          a.setAttribute('data-file', clip.file);
+        }
+        const seek = function () { try { a.currentTime = start; } catch (e) {} };
+        if (a.readyState >= 1) seek(); else a.addEventListener('loadedmetadata', seek, { once: true });
+        a.volume = fadeMs ? 0 : 1;
+        a.play().then(function () { log('demo music ok'); }).catch(function (e) { log('demo music play() rejected', String(e)); });
+        if (fadeMs) {
+          const step = 50, steps = Math.max(1, Math.round(fadeMs / step));
+          let i = 0;
+          fadeTimer = setInterval(function () {
+            i++; a.volume = Math.min(1, i / steps);
+            if (i >= steps) { clearInterval(fadeTimer); fadeTimer = null; }
+          }, step);
+        }
+        if (end != null) {
+          endWatch = function () {
+            if (a.currentTime >= end) { a.pause(); a.removeEventListener('timeupdate', endWatch); endWatch = null; log('demo music reached end'); }
+          };
+          a.addEventListener('timeupdate', endWatch);
+        }
+      }
+
+      function playInBrowser(clip) {
+        stopMedia();
+        if (clip.announcement) {
+          const an = ensureAnn();
+          const cue = (clip.cue_ms || 0) / 1000;
+          if (an.getAttribute('data-file') !== clip.announcement) {
+            an.src = '/ondeck/audio/' + encodeURIComponent(clip.announcement);
+            an.setAttribute('data-file', clip.announcement);
+          }
+          const seek = function () { try { an.currentTime = 0; } catch (e) {} };
+          if (an.readyState >= 1) seek(); else an.addEventListener('loadedmetadata', seek, { once: true });
+          log('demo walk-up', { ann: clip.announcement, cueAt: cue, song: clip.file });
+          let musicStarted = false;
+          const kickMusic = function (why) {
+            if (musicStarted) return;
+            musicStarted = true;
+            if (annWatch) { an.removeEventListener('timeupdate', annWatch); annWatch = null; }
+            log('demo song fades in (' + why + ')');
+            startMusic(clip, 800);
+          };
+          annWatch = function () { if (an.currentTime >= cue) kickMusic('cue reached'); };
+          an.addEventListener('timeupdate', annWatch);
+          an.addEventListener('ended', function () { kickMusic('announcement ended'); }, { once: true });
+          if (cue <= 0.05) kickMusic('cue at start');
+          an.play().then(function () { log('demo announcement ok'); }).catch(function (e) {
+            log('demo announcement play() rejected', String(e));
+            kickMusic('announcement failed');
+          });
+          nowPlaying('▶ ' + clip.file + ' (demo walk-up)');
+          return;
+        }
+        log('demo play', { file: clip.file });
+        startMusic(clip, 0);
+        nowPlaying('▶ ' + clip.file + ' (demo)');
+      }
+
+      function stopMedia() {
+        if (audio) audio.pause();
+        if (ann) ann.pause();
+        if (endWatch && audio) { audio.removeEventListener('timeupdate', endWatch); endWatch = null; }
+        if (annWatch && ann) { ann.removeEventListener('timeupdate', annWatch); annWatch = null; }
+        if (fadeTimer) { clearInterval(fadeTimer); fadeTimer = null; }
+        if (audio) audio.volume = 1;
+      }
+
+      async function preview(clip) {
+        if (!clip || !clip.file) { log('preview: nothing to play'); return; }
+        const useBrowser = state.demo || window.ONDECK_CLOUD;
+        log('preview', { useBrowser: useBrowser, cloud: window.ONDECK_CLOUD, demo: state.demo,
+                         file: clip.file, announcement: clip.announcement || null, cue_ms: clip.cue_ms });
+        if (useBrowser) { playInBrowser(clip); return; }
+        try {
+          const r = await fetch('/ondeck/api/preview', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(clip),
+          });
+          lastPi = r.status + (r.ok ? ' ok' : ' FAIL');
+          log('preview -> Pi', lastPi);
+          if (!r.ok) log('Pi rejected the preview — turn on 🎧 Demo to play in this browser');
+        } catch (e) {
+          lastPi = 'unreachable';
+          log('preview -> Pi error', String(e));
+          log('Audio Pi unreachable — turn on 🎧 Demo to play in this browser');
+        }
+        renderState();
+        if (window.pollStatus) setTimeout(window.pollStatus, 400);
+      }
+
+      async function stopAll() {
+        stopMedia();
+        nowPlaying('Nothing playing');
+        if (!state.demo) { try { await fetch('/ondeck/api/stop', { method: 'POST' }); } catch (e) {} }
+        log('stop');
+        renderState();
+      }
+
+      function isDemoPlaying() { return !!((audio && !audio.paused) || (ann && !ann.paused)); }
+      function setLastPi(v) { lastPi = v; renderState(); }
+
+      function syncUI() {
+        const dt = document.getElementById('demo-toggle');
+        const db = document.getElementById('debug-toggle');
+        const panel = document.getElementById('debug-panel');
+        if (dt) {
+          if (window.ONDECK_CLOUD) {
+            dt.textContent = '🎧 In-browser play';
+            dt.className = 'px-3 py-1.5 rounded-full text-xs font-semibold border bg-green-800 border-green-600 text-green-100 cursor-default';
+            dt.title = 'Cloud mode has no Audio Pi, so Play always plays here in your browser.';
+          } else {
+            dt.textContent = '🎧 Demo: ' + (state.demo ? 'on' : 'off');
+            dt.className = 'px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ' +
+              (state.demo ? 'bg-green-700 border-green-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-300');
+          }
+        }
+        if (db) {
+          db.className = 'px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ' +
+            (state.debug ? 'bg-indigo-700 border-indigo-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-300');
+        }
+        if (panel) panel.classList.toggle('hidden', !state.debug);
+        renderState();
+      }
+
+      function toggleDemo() {
+        if (window.ONDECK_CLOUD) return;
+        state.demo = !state.demo;
+        LS.setItem('ondeck_demo', state.demo ? '1' : '0');
+        if (!state.demo) stopMedia();
+        log('demo mode ' + (state.demo ? 'ON' : 'off'));
+        syncUI();
+      }
+      function toggleDebug() {
+        state.debug = !state.debug;
+        LS.setItem('ondeck_debug', state.debug ? '1' : '0');
+        syncUI();
+      }
+      function clearLog() { const el = document.getElementById('debug-log'); if (el) el.textContent = ''; }
+      function copyLog() {
+        const el = document.getElementById('debug-log');
+        if (el && navigator.clipboard) navigator.clipboard.writeText(el.textContent).then(function () { log('log copied'); });
+      }
+
+      document.addEventListener('DOMContentLoaded', function () { syncUI(); log('OnDeck ready', { demo: state.demo, debug: state.debug }); });
+
+      return {
+        preview: preview, stopAll: stopAll, isDemoPlaying: isDemoPlaying, setLastPi: setLastPi,
+        toggleDemo: toggleDemo, toggleDebug: toggleDebug, clearLog: clearLog, copyLog: copyLog, log: log,
+        get demo() { return state.demo; },
+      };
+    })();
+  </script>
+
   <script>
     {% if not cloud_mode %}
-    // Poll Audio Pi status every 3 seconds.
     async function pollStatus() {
       try {
-        const r = await fetch('/api/status')
+        const r = await fetch('/ondeck/api/status')
         if (!r.ok) throw new Error()
         const d = await r.json()
         const dot = document.getElementById('pi-dot')
@@ -143,6 +415,8 @@
         const np  = document.getElementById('now-playing-text')
         dot.className = 'w-2 h-2 rounded-full ' + (d.error ? 'bg-red-500' : 'bg-green-500')
         lbl.textContent = d.error ? 'Audio Pi offline' : 'Audio Pi'
+        if (window.OnDeck) OnDeck.setLastPi(d.error ? ('offline: ' + d.error) : (d.state || 'idle'))
+        if (window.OnDeck && OnDeck.isDemoPlaying()) return
         if (!d.error) {
           document.getElementById('vol-slider').value = d.volume
           document.getElementById('vol-label').textContent = d.volume
@@ -158,17 +432,17 @@
     }
 
     async function apiStop() {
-      await fetch('/api/stop', { method: 'POST' })
+      if (window.OnDeck) await OnDeck.stopAll()
       setTimeout(pollStatus, 300)
     }
 
     async function apiFade() {
-      await fetch('/api/fade', { method: 'POST' })
+      await fetch('/ondeck/api/fade', { method: 'POST' })
     }
 
     async function apiVolume(level) {
       document.getElementById('vol-label').textContent = level
-      await fetch('/api/volume', {
+      await fetch('/ondeck/api/volume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ level: parseInt(level) })
@@ -178,11 +452,9 @@
     pollStatus()
     setInterval(pollStatus, 3000)
     {% else %}
-    // Cloud mode: no Audio Pi to poll.
     function pollStatus() {}
     {% endif %}
 
-    // Auto-dismiss flash messages after 5s.
     setTimeout(() => {
       document.querySelectorAll('#flash-container .flash-msg').forEach(el => {
         el.style.transition = 'opacity 0.4s'
