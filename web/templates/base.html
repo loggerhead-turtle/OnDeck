@@ -173,8 +173,11 @@
         demo:  LS.getItem('ondeck_demo')  === '1',
         debug: LS.getItem('ondeck_debug') === '1',
       };
-      let audio = null;     // singleton element for in-browser (demo) playback
-      let endWatch = null;  // timeupdate listener that stops at end_ms
+      let audio = null;     // singleton element for in-browser (demo) music playback
+      let endWatch = null;  // timeupdate listener that stops the music at end_ms
+      let ann = null;       // singleton element for the announcement (walk-up demo)
+      let annWatch = null;  // timeupdate listener that starts music at the cue
+      let fadeTimer = null; // music fade-in interval
       let lastPi = '—';
 
       function log(msg, data) {
@@ -224,28 +227,93 @@
         if (np) np.textContent = text;
       }
 
-      function playInBrowser(clip) {
+      function ensureAnn() {
+        if (!ann) {
+          ann = new Audio();
+          ann.preload = 'metadata';
+          ann.setAttribute('playsinline', '');
+          ['playing', 'ended', 'error'].forEach(function (ev) {
+            ann.addEventListener(ev, function () { log('ann:' + ev, ev === 'error' && ann.error ? 'code ' + ann.error.code : undefined); });
+          });
+        }
+        return ann;
+      }
+
+      // Start the trimmed song on the music element. Seeks to `start`, plays,
+      // and (if `end` given) stops there. `fadeMs` ramps the volume up.
+      function startMusic(clip, fadeMs) {
         const a = ensureAudio();
         if (endWatch) { a.removeEventListener('timeupdate', endWatch); endWatch = null; }
+        if (fadeTimer) { clearInterval(fadeTimer); fadeTimer = null; }
         const start = (clip.start_ms || 0) / 1000;
         const end   = clip.end_ms != null ? clip.end_ms / 1000 : null;
         if (a.getAttribute('data-file') !== clip.file) {
           a.src = '/audio/' + encodeURIComponent(clip.file);
           a.setAttribute('data-file', clip.file);
         }
-        log('demo play', { file: clip.file, start: start, end: end });
         const seek = function () { try { a.currentTime = start; } catch (e) {} };
         if (a.readyState >= 1) seek(); else a.addEventListener('loadedmetadata', seek, { once: true });
-        // Call play() synchronously (we're inside the click) for mobile autoplay.
-        a.play().then(function () { log('demo play() ok'); }).catch(function (e) { log('demo play() rejected', String(e)); });
+        a.volume = fadeMs ? 0 : 1;
+        a.play().then(function () { log('demo music ok'); }).catch(function (e) { log('demo music play() rejected', String(e)); });
+        if (fadeMs) {
+          const step = 50, steps = Math.max(1, Math.round(fadeMs / step));
+          let i = 0;
+          fadeTimer = setInterval(function () {
+            i++; a.volume = Math.min(1, i / steps);
+            if (i >= steps) { clearInterval(fadeTimer); fadeTimer = null; }
+          }, step);
+        }
         if (end != null) {
           endWatch = function () {
-            if (a.currentTime >= end) { a.pause(); a.removeEventListener('timeupdate', endWatch); endWatch = null; log('demo reached end'); }
+            if (a.currentTime >= end) { a.pause(); a.removeEventListener('timeupdate', endWatch); endWatch = null; log('demo music reached end'); }
           };
           a.addEventListener('timeupdate', endWatch);
         }
-        if (clip.announcement) log('demo note: announcement/cue skipped in browser (song only)');
+      }
+
+      function playInBrowser(clip) {
+        stopMedia();  // reset any in-progress demo playback
+        // Full walk-up: play the announcement, then fade the song in at the cue.
+        if (clip.announcement) {
+          const an = ensureAnn();
+          const cue = (clip.cue_ms || 0) / 1000;
+          if (an.getAttribute('data-file') !== clip.announcement) {
+            an.src = '/audio/' + encodeURIComponent(clip.announcement);
+            an.setAttribute('data-file', clip.announcement);
+          }
+          const seek = function () { try { an.currentTime = 0; } catch (e) {} };
+          if (an.readyState >= 1) seek(); else an.addEventListener('loadedmetadata', seek, { once: true });
+          log('demo walk-up', { ann: clip.announcement, cueAt: cue, song: clip.file });
+          let musicStarted = false;
+          annWatch = function () {
+            if (!musicStarted && an.currentTime >= cue) {
+              musicStarted = true;
+              an.removeEventListener('timeupdate', annWatch); annWatch = null;
+              log('demo cue reached — song fades in');
+              startMusic(clip, 800);
+            }
+          };
+          an.addEventListener('timeupdate', annWatch);
+          // If the cue is at/near 0, the timeupdate may not fire first — kick the song now.
+          if (cue <= 0.05) { musicStarted = true; if (annWatch) { an.removeEventListener('timeupdate', annWatch); annWatch = null; } startMusic(clip, 800); }
+          an.play().then(function () { log('demo announcement ok'); }).catch(function (e) { log('demo announcement play() rejected', String(e)); });
+          nowPlaying('▶ ' + clip.file + ' (demo walk-up)');
+          return;
+        }
+        // Song only.
+        log('demo play', { file: clip.file });
+        startMusic(clip, 0);
         nowPlaying('▶ ' + clip.file + ' (demo)');
+      }
+
+      // Stop just the media (no Pi call) and clear watchers/timers.
+      function stopMedia() {
+        if (audio) audio.pause();
+        if (ann) ann.pause();
+        if (endWatch && audio) { audio.removeEventListener('timeupdate', endWatch); endWatch = null; }
+        if (annWatch && ann) { ann.removeEventListener('timeupdate', annWatch); annWatch = null; }
+        if (fadeTimer) { clearInterval(fadeTimer); fadeTimer = null; }
+        if (audio) audio.volume = 1;
       }
 
       async function preview(clip) {
@@ -269,15 +337,14 @@
       }
 
       async function stopAll() {
-        if (audio) audio.pause();
-        if (endWatch && audio) { audio.removeEventListener('timeupdate', endWatch); endWatch = null; }
+        stopMedia();
         nowPlaying('Nothing playing');
         if (!state.demo) { try { await fetch('/api/stop', { method: 'POST' }); } catch (e) {} }
         log('stop');
         renderState();
       }
 
-      function isDemoPlaying() { return !!(audio && !audio.paused); }
+      function isDemoPlaying() { return !!((audio && !audio.paused) || (ann && !ann.paused)); }
       function setLastPi(v) { lastPi = v; renderState(); }
 
       function syncUI() {
@@ -300,7 +367,7 @@
       function toggleDemo() {
         state.demo = !state.demo;
         LS.setItem('ondeck_demo', state.demo ? '1' : '0');
-        if (!state.demo && audio) audio.pause();
+        if (!state.demo) stopMedia();
         log('demo mode ' + (state.demo ? 'ON' : 'off'));
         syncUI();
       }
