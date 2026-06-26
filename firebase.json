@@ -5,12 +5,12 @@
     "redirects": [
       {
         "source": "/OnDeck",
-        "destination": "https://ondeck.onrender.com",
+        "destination": "https://ondeck-43di.onrender.com",
         "type": 302
       },
       {
         "source": "/OnDeck/**",
-        "destination": "https://ondeck.onrender.com",
+        "destination": "https://ondeck-43di.onrender.com",
         "type": 302
       }
     ]
