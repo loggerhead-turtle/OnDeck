@@ -728,6 +728,8 @@ def ondeck_players_save(pid: str):
         player["last_name"]  = (request.form.get("last_name", player["last_name"]).strip()
                                  or player["last_name"])
         player["walkup_song_id"]       = request.form.get("walkup_song_id") or None
+        player["pitching_warmup_song_id"] = request.form.get("pitching_warmup_song_id") or None
+        player["midgame_song_id"]      = request.form.get("midgame_song_id") or None
         player["announcement_start_ms"] = _form_ms("ann_start_ms", 0)
         player["announcement_end_ms"]   = _form_ms_or_none("ann_end_ms")
         player["music_cue_ms"]          = _form_ms("music_cue_ms", 0)
@@ -736,10 +738,23 @@ def ondeck_players_save(pid: str):
         team_ids = request.form.getlist("team_ids")
         player["team_ids"] = [tid for tid in team_ids if tid in cfg.teams]
 
+        # Update walk-up song trim
         sid = player.get("walkup_song_id")
         if sid and sid in cfg.songs:
             cfg.songs[sid]["start_ms"] = _form_ms("song_start_ms", 0)
             cfg.songs[sid]["end_ms"]   = _form_ms_or_none("song_end_ms")
+
+        # Update pitching warm-up song trim
+        warmup_id = player.get("pitching_warmup_song_id")
+        if warmup_id and warmup_id in cfg.songs:
+            cfg.songs[warmup_id]["start_ms"] = _form_ms("warmup_start_ms", 0)
+            cfg.songs[warmup_id]["end_ms"]   = _form_ms_or_none("warmup_end_ms")
+
+        # Update mid-game song trim
+        midgame_id = player.get("midgame_song_id")
+        if midgame_id and midgame_id in cfg.songs:
+            cfg.songs[midgame_id]["start_ms"] = _form_ms("midgame_start_ms", 0)
+            cfg.songs[midgame_id]["end_ms"]   = _form_ms_or_none("midgame_end_ms")
 
         cfg.save()
 

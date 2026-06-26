@@ -23,20 +23,38 @@
     <div class="space-y-2">
       {% for player_id, player in team['members'] %}
       <div class="bg-gray-900 border border-gray-700/50 rounded-lg p-4">
-        <div class="flex items-center justify-between gap-4">
+        <div class="flex items-start justify-between gap-4">
           <div class="flex-1">
-            <div class="flex items-center gap-2 mb-1">
+            <div class="flex items-center gap-2 mb-3">
               <span class="text-lg font-black text-green-400">#{{ player['jersey'] }}</span>
               <span class="text-white font-semibold">{{ player['first_name'] }} {{ player['last_name'] }}</span>
             </div>
-            {% set walkup_song = cfg.songs.get(player['walkup_song_id']) %}
-            {% if walkup_song %}
-            <div class="text-sm text-gray-400">
-              Walk-up: <span class="text-gray-200">{{ walkup_song['display_name'] }}</span>
+            <div class="space-y-2 text-sm">
+              {% set walkup_song = cfg.songs.get(player['walkup_song_id']) %}
+              {% if walkup_song %}
+              <div class="text-gray-400">
+                🎵 Walk-up: <span class="text-gray-200">{{ walkup_song['display_name'] }}</span>
+              </div>
+              {% endif %}
+
+              {% set warmup_song = cfg.songs.get(player['pitching_warmup_song_id']) %}
+              {% if warmup_song %}
+              <div class="text-gray-400">
+                ⚾ Warm-up: <span class="text-gray-200">{{ warmup_song['display_name'] }}</span>
+              </div>
+              {% endif %}
+
+              {% set midgame_song = cfg.songs.get(player['midgame_song_id']) %}
+              {% if midgame_song %}
+              <div class="text-gray-400">
+                🎪 Mid-Inning: <span class="text-gray-200">{{ midgame_song['display_name'] }}</span>
+              </div>
+              {% endif %}
+
+              {% if not walkup_song and not warmup_song and not midgame_song %}
+              <div class="text-gray-500 italic">No songs assigned</div>
+              {% endif %}
             </div>
-            {% else %}
-            <div class="text-sm text-gray-500 italic">No walk-up song assigned</div>
-            {% endif %}
           </div>
         </div>
       </div>

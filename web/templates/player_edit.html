@@ -191,6 +191,92 @@
     {% endif %}
   </div>
 
+  <!-- Pitching Warm-Up Song section -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Pitching Warm-Up Song</h2>
+    <p class="text-xs text-gray-500 mb-4">Song to play while warming up to pitch (no announcement).</p>
+
+    <div class="mb-4">
+      <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select Song</label>
+      <select name="pitching_warmup_song_id" id="warmup-song-select"
+              onchange="onWarmupSongChange(this.value)"
+              class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
+        <option value="">— none —</option>
+        {% for sid, song in songs.items() | sort(attribute='1.display_name') %}
+          <option value="{{ sid }}"
+                  data-filename="{{ song.filename }}"
+                  data-start="{{ song.start_ms or 0 }}"
+                  data-end="{{ song.end_ms if song.end_ms is not none else '' }}"
+                  {% if player and player.pitching_warmup_song_id == sid %}selected{% endif %}>
+            {{ song.display_name }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    {% set warmup_song = songs.get(player.pitching_warmup_song_id) if player and player.pitching_warmup_song_id else None %}
+    {% if warmup_song %}
+    {{ trim_editor(
+        editor_id   = 'warmup',
+        audio_url   = url_for('ondeck_serve_audio', filename=warmup_song.filename),
+        start_ms    = warmup_song.start_ms or 0,
+        end_ms      = warmup_song.end_ms,
+        start_field = 'warmup_start_ms',
+        end_field   = 'warmup_end_ms',
+        label       = 'Warm-Up Song Trim'
+    ) }}
+    {% else %}
+    <input type="hidden" name="warmup_start_ms" value="0">
+    <input type="hidden" name="warmup_end_ms" value="">
+    <div id="warmup-editor-placeholder" class="text-sm text-gray-600 text-center py-6">
+      Select a song above to show the trim editor.
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Mid-Inning Song section -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Mid-Inning Song</h2>
+    <p class="text-xs text-gray-500 mb-4">Song you'd like played during mid-inning breaks.</p>
+
+    <div class="mb-4">
+      <label class="block text-xs text-gray-400 mb-1.5 font-medium">Select Song</label>
+      <select name="midgame_song_id" id="midgame-song-select"
+              onchange="onMidgameSongChange(this.value)"
+              class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
+        <option value="">— none —</option>
+        {% for sid, song in songs.items() | sort(attribute='1.display_name') %}
+          <option value="{{ sid }}"
+                  data-filename="{{ song.filename }}"
+                  data-start="{{ song.start_ms or 0 }}"
+                  data-end="{{ song.end_ms if song.end_ms is not none else '' }}"
+                  {% if player and player.midgame_song_id == sid %}selected{% endif %}>
+            {{ song.display_name }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    {% set midgame_song = songs.get(player.midgame_song_id) if player and player.midgame_song_id else None %}
+    {% if midgame_song %}
+    {{ trim_editor(
+        editor_id   = 'midgame',
+        audio_url   = url_for('ondeck_serve_audio', filename=midgame_song.filename),
+        start_ms    = midgame_song.start_ms or 0,
+        end_ms      = midgame_song.end_ms,
+        start_field = 'midgame_start_ms',
+        end_field   = 'midgame_end_ms',
+        label       = 'Mid-Inning Song Trim'
+    ) }}
+    {% else %}
+    <input type="hidden" name="midgame_start_ms" value="0">
+    <input type="hidden" name="midgame_end_ms" value="">
+    <div id="midgame-editor-placeholder" class="text-sm text-gray-600 text-center py-6">
+      Select a song above to show the trim editor.
+    </div>
+    {% endif %}
+  </div>
+
   {% else %}
   <!-- New player: hidden fields so form submits cleanly -->
   <input type="hidden" name="ann_start_ms" value="0">
@@ -199,6 +285,12 @@
   <input type="hidden" name="walkup_song_id" value="">
   <input type="hidden" name="song_start_ms" value="0">
   <input type="hidden" name="song_end_ms" value="">
+  <input type="hidden" name="pitching_warmup_song_id" value="">
+  <input type="hidden" name="warmup_start_ms" value="0">
+  <input type="hidden" name="warmup_end_ms" value="">
+  <input type="hidden" name="midgame_song_id" value="">
+  <input type="hidden" name="midgame_start_ms" value="0">
+  <input type="hidden" name="midgame_end_ms" value="">
   {% endif %}
 
   <!-- Player login credentials -->
@@ -372,6 +464,30 @@ function onSongChange(sid) {
     body: (() => {
       const fd = new FormData(document.getElementById('player-form'))
       fd.set('walkup_song_id', sid)
+      return fd
+    })()
+  }).then(() => window.location.reload())
+}
+
+function onWarmupSongChange(sid) {
+  // Save and reload to show the trim editor for the selected warm-up song.
+  fetch('/ondeck/players/{{ pid }}/save', {
+    method: 'POST',
+    body: (() => {
+      const fd = new FormData(document.getElementById('player-form'))
+      fd.set('pitching_warmup_song_id', sid)
+      return fd
+    })()
+  }).then(() => window.location.reload())
+}
+
+function onMidgameSongChange(sid) {
+  // Save and reload to show the trim editor for the selected mid-game song.
+  fetch('/ondeck/players/{{ pid }}/save', {
+    method: 'POST',
+    body: (() => {
+      const fd = new FormData(document.getElementById('player-form'))
+      fd.set('midgame_song_id', sid)
       return fd
     })()
   }).then(() => window.location.reload())

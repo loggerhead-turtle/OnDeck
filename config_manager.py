@@ -176,9 +176,11 @@ class ConfigManager:
         legacy_mid = self._data.get("mid_inning") or []
         if legacy_mid and not page_songs.get("mid_inning"):
             page_songs["mid_inning"] = list(legacy_mid)
-        # Ensure all players have team_ids field (added later).
+        # Ensure all players have team_ids and personal song fields (added later).
         for player in self._data.get("players", {}).values():
             player.setdefault("team_ids", [])
+            player.setdefault("pitching_warmup_song_id", None)
+            player.setdefault("midgame_song_id", None)
 
     # -- convenient accessors --------------------------------------------
 
@@ -285,6 +287,36 @@ class ConfigManager:
             "end_ms": song.get("end_ms"),
         }
 
+    def get_player_pitching_warmup(self, player_id: str) -> dict[str, Any] | None:
+        """Get player's pitching warm-up song info."""
+        player = self.players.get(player_id)
+        if not player:
+            return None
+        sid = player.get("pitching_warmup_song_id")
+        song = self.songs.get(sid) if sid else None
+        if not song:
+            return None
+        return {
+            "file": song["filename"],
+            "start_ms": song.get("start_ms", 0),
+            "end_ms": song.get("end_ms"),
+        }
+
+    def get_player_midgame_song(self, player_id: str) -> dict[str, Any] | None:
+        """Get player's mid-game/mid-inning song info."""
+        player = self.players.get(player_id)
+        if not player:
+            return None
+        sid = player.get("midgame_song_id")
+        song = self.songs.get(sid) if sid else None
+        if not song:
+            return None
+        return {
+            "file": song["filename"],
+            "start_ms": song.get("start_ms", 0),
+            "end_ms": song.get("end_ms"),
+        }
+
     # -- mutations --------------------------------------------------------
 
     def add_player(self, jersey: int, first_name: str, last_name: str, team_ids: list[str] | None = None) -> str:
@@ -300,6 +332,8 @@ class ConfigManager:
                 "announcement_end_ms": None,
                 "walkup_song_id": None,
                 "music_cue_ms": 0,
+                "pitching_warmup_song_id": None,
+                "midgame_song_id": None,
                 "team_ids": team_ids or [],
             }
             self.save()
