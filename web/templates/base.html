@@ -53,21 +53,24 @@
 
   <!-- Top nav -->
   <header class="bg-gray-900 border-b border-gray-800 flex items-center px-4 h-14 shrink-0">
-    <a href="/dashboard" class="flex items-center gap-2 mr-8 shrink-0">
+    <a href="/ondeck/dashboard" class="flex items-center gap-2 mr-8 shrink-0">
       <span class="text-2xl leading-none">⚾</span>
       <span class="font-bold text-lg tracking-tight text-white">OnDeck</span>
     </a>
 
     {% if current_player %}
     <nav class="flex gap-1 text-sm font-medium">
-      <a href="/my-profile" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'my_profile' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">My Profile</a>
+      <a href="/ondeck/my-profile" class="nav-link px-3 py-1.5 rounded-md {% if 'my_profile' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">My Profile</a>
     </nav>
-    {% else %}
+    {% elif current_user %}
     <nav class="flex gap-1 text-sm font-medium">
-      <a href="/dashboard" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'dashboard' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Home</a>
-      <a href="/library"  class="nav-link px-3 py-1.5 rounded-md {% if 'library' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Library</a>
-      <a href="/players"  class="nav-link px-3 py-1.5 rounded-md {% if 'player' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Players</a>
-      <a href="/settings" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'settings' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Settings</a>
+      <a href="/ondeck/dashboard" class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'ondeck_dashboard' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Home</a>
+      <a href="/ondeck/library"   class="nav-link px-3 py-1.5 rounded-md {% if 'library' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Library</a>
+      <a href="/ondeck/players"   class="nav-link px-3 py-1.5 rounded-md {% if 'players' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Players</a>
+      {% if current_role == 'admin' %}
+      <a href="/ondeck/settings"  class="nav-link px-3 py-1.5 rounded-md {% if request.endpoint == 'ondeck_settings' %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Settings</a>
+      <a href="/admin"            class="nav-link px-3 py-1.5 rounded-md {% if 'admin' in request.endpoint %}bg-gray-700 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %} transition-colors">Admin</a>
+      {% endif %}
     </nav>
     {% endif %}
 
@@ -75,12 +78,16 @@
     {% if current_player %}
     <div class="ml-auto flex items-center gap-3">
       <span class="text-xs text-gray-500 hidden sm:inline">#{{ current_player.jersey }} {{ current_player.first_name }} {{ current_player.last_name }}</span>
-      <a href="/player-logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>
+      <a href="/ondeck/logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>
     </div>
     {% elif current_user %}
     <div class="ml-auto flex items-center gap-3">
-      <span class="text-xs text-gray-500 hidden sm:inline">{{ current_user }}</span>
-      <a href="/logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>
+      <span class="text-xs text-gray-500 hidden sm:inline">
+        {{ current_user }}
+        {% if current_role == 'admin' %}<span class="ml-1 px-1.5 py-0.5 rounded text-xs bg-indigo-900/50 text-indigo-400 border border-indigo-700/40">admin</span>{% endif %}
+        {% if current_role == 'editor' %}<span class="ml-1 px-1.5 py-0.5 rounded text-xs bg-green-900/50 text-green-400 border border-green-700/40">editor</span>{% endif %}
+      </span>
+      <a href="/ondeck/logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>
     </div>
     {% endif %}
 
@@ -163,9 +170,6 @@
   </div>
 
   <script>
-    // Shared playback + demo-mode + debug helper, used by every page's Play
-    // buttons. In demo mode the clip plays in *this* browser (handy on a phone
-    // or in cloud mode with no Audio Pi); otherwise it's sent to the Pi.
     window.ONDECK_CLOUD = {{ 'true' if cloud_mode else 'false' }};
     window.OnDeck = (function () {
       const LS = window.localStorage;
@@ -173,11 +177,11 @@
         demo:  LS.getItem('ondeck_demo')  === '1',
         debug: LS.getItem('ondeck_debug') === '1',
       };
-      let audio = null;     // singleton element for in-browser (demo) music playback
-      let endWatch = null;  // timeupdate listener that stops the music at end_ms
-      let ann = null;       // singleton element for the announcement (walk-up demo)
-      let annWatch = null;  // timeupdate listener that starts music at the cue
-      let fadeTimer = null; // music fade-in interval
+      let audio = null;
+      let endWatch = null;
+      let ann = null;
+      let annWatch = null;
+      let fadeTimer = null;
       let lastPi = '—';
 
       function log(msg, data) {
@@ -239,8 +243,6 @@
         return ann;
       }
 
-      // Start the trimmed song on the music element. Seeks to `start`, plays,
-      // and (if `end` given) stops there. `fadeMs` ramps the volume up.
       function startMusic(clip, fadeMs) {
         const a = ensureAudio();
         if (endWatch) { a.removeEventListener('timeupdate', endWatch); endWatch = null; }
@@ -248,7 +250,7 @@
         const start = (clip.start_ms || 0) / 1000;
         const end   = clip.end_ms != null ? clip.end_ms / 1000 : null;
         if (a.getAttribute('data-file') !== clip.file) {
-          a.src = '/audio/' + encodeURIComponent(clip.file);
+          a.src = '/ondeck/audio/' + encodeURIComponent(clip.file);
           a.setAttribute('data-file', clip.file);
         }
         const seek = function () { try { a.currentTime = start; } catch (e) {} };
@@ -272,13 +274,12 @@
       }
 
       function playInBrowser(clip) {
-        stopMedia();  // reset any in-progress demo playback
-        // Full walk-up: play the announcement, then fade the song in at the cue.
+        stopMedia();
         if (clip.announcement) {
           const an = ensureAnn();
           const cue = (clip.cue_ms || 0) / 1000;
           if (an.getAttribute('data-file') !== clip.announcement) {
-            an.src = '/audio/' + encodeURIComponent(clip.announcement);
+            an.src = '/ondeck/audio/' + encodeURIComponent(clip.announcement);
             an.setAttribute('data-file', clip.announcement);
           }
           const seek = function () { try { an.currentTime = 0; } catch (e) {} };
@@ -294,25 +295,20 @@
           };
           annWatch = function () { if (an.currentTime >= cue) kickMusic('cue reached'); };
           an.addEventListener('timeupdate', annWatch);
-          // If the announcement finishes before the cue (e.g. cue past its end),
-          // start the song anyway so the walk-up is never silent.
           an.addEventListener('ended', function () { kickMusic('announcement ended'); }, { once: true });
-          // Cue at/near 0: timeupdate may not fire first — kick the song now.
           if (cue <= 0.05) kickMusic('cue at start');
           an.play().then(function () { log('demo announcement ok'); }).catch(function (e) {
             log('demo announcement play() rejected', String(e));
-            kickMusic('announcement failed');  // still play the song
+            kickMusic('announcement failed');
           });
           nowPlaying('▶ ' + clip.file + ' (demo walk-up)');
           return;
         }
-        // Song only.
         log('demo play', { file: clip.file });
         startMusic(clip, 0);
         nowPlaying('▶ ' + clip.file + ' (demo)');
       }
 
-      // Stop just the media (no Pi call) and clear watchers/timers.
       function stopMedia() {
         if (audio) audio.pause();
         if (ann) ann.pause();
@@ -324,14 +320,12 @@
 
       async function preview(clip) {
         if (!clip || !clip.file) { log('preview: nothing to play'); return; }
-        // In cloud mode there is no Audio Pi to reach, so always play in this
-        // browser. In local mode, the Demo toggle decides Pi vs. browser.
         const useBrowser = state.demo || window.ONDECK_CLOUD;
         log('preview', { useBrowser: useBrowser, cloud: window.ONDECK_CLOUD, demo: state.demo,
                          file: clip.file, announcement: clip.announcement || null, cue_ms: clip.cue_ms });
         if (useBrowser) { playInBrowser(clip); return; }
         try {
-          const r = await fetch('/api/preview', {
+          const r = await fetch('/ondeck/api/preview', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(clip),
           });
           lastPi = r.status + (r.ok ? ' ok' : ' FAIL');
@@ -349,7 +343,7 @@
       async function stopAll() {
         stopMedia();
         nowPlaying('Nothing playing');
-        if (!state.demo) { try { await fetch('/api/stop', { method: 'POST' }); } catch (e) {} }
+        if (!state.demo) { try { await fetch('/ondeck/api/stop', { method: 'POST' }); } catch (e) {} }
         log('stop');
         renderState();
       }
@@ -363,7 +357,6 @@
         const panel = document.getElementById('debug-panel');
         if (dt) {
           if (window.ONDECK_CLOUD) {
-            // No Pi in the cloud — playback is always in this browser.
             dt.textContent = '🎧 In-browser play';
             dt.className = 'px-3 py-1.5 rounded-full text-xs font-semibold border bg-green-800 border-green-600 text-green-100 cursor-default';
             dt.title = 'Cloud mode has no Audio Pi, so Play always plays here in your browser.';
@@ -382,7 +375,7 @@
       }
 
       function toggleDemo() {
-        if (window.ONDECK_CLOUD) return;  // always in-browser in cloud; toggle is informational
+        if (window.ONDECK_CLOUD) return;
         state.demo = !state.demo;
         LS.setItem('ondeck_demo', state.demo ? '1' : '0');
         if (!state.demo) stopMedia();
@@ -412,10 +405,9 @@
 
   <script>
     {% if not cloud_mode %}
-    // Poll Audio Pi status every 3 seconds.
     async function pollStatus() {
       try {
-        const r = await fetch('/api/status')
+        const r = await fetch('/ondeck/api/status')
         if (!r.ok) throw new Error()
         const d = await r.json()
         const dot = document.getElementById('pi-dot')
@@ -424,7 +416,6 @@
         dot.className = 'w-2 h-2 rounded-full ' + (d.error ? 'bg-red-500' : 'bg-green-500')
         lbl.textContent = d.error ? 'Audio Pi offline' : 'Audio Pi'
         if (window.OnDeck) OnDeck.setLastPi(d.error ? ('offline: ' + d.error) : (d.state || 'idle'))
-        // Don't let Pi status overwrite the label while demo audio is playing.
         if (window.OnDeck && OnDeck.isDemoPlaying()) return
         if (!d.error) {
           document.getElementById('vol-slider').value = d.volume
@@ -441,18 +432,17 @@
     }
 
     async function apiStop() {
-      // Stops demo (browser) playback and, when not in demo mode, the Pi.
       if (window.OnDeck) await OnDeck.stopAll()
       setTimeout(pollStatus, 300)
     }
 
     async function apiFade() {
-      await fetch('/api/fade', { method: 'POST' })
+      await fetch('/ondeck/api/fade', { method: 'POST' })
     }
 
     async function apiVolume(level) {
       document.getElementById('vol-label').textContent = level
-      await fetch('/api/volume', {
+      await fetch('/ondeck/api/volume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ level: parseInt(level) })
@@ -462,11 +452,9 @@
     pollStatus()
     setInterval(pollStatus, 3000)
     {% else %}
-    // Cloud mode: no Audio Pi to poll.
     function pollStatus() {}
     {% endif %}
 
-    // Auto-dismiss flash messages after 5s.
     setTimeout(() => {
       document.querySelectorAll('#flash-container .flash-msg').forEach(el => {
         el.style.transition = 'opacity 0.4s'

@@ -11,13 +11,13 @@
 {% block content %}
 
 <div class="flex items-center gap-3 mb-6">
-  <a href="/players" class="text-gray-400 hover:text-white transition-colors text-sm">← Players</a>
+  <a href="/ondeck/players" class="text-gray-400 hover:text-white transition-colors text-sm">← Players</a>
   <span class="text-gray-600">/</span>
   <h1 class="text-2xl font-bold">{{ page_title }}</h1>
 </div>
 
 <form method="POST"
-      action="{{ '/players/' ~ pid ~ '/save' if pid else '/players' }}"
+      action="{{ '/ondeck/players/' ~ pid ~ '/save' if pid else '/ondeck/players' }}"
       id="player-form">
 
   <!-- Basic info -->
@@ -85,7 +85,7 @@
     <!-- Announcement trim editor -->
     {{ trim_editor(
         editor_id   = 'ann',
-        audio_url   = url_for('serve_audio', filename=player.announcement_file),
+        audio_url   = url_for('ondeck_serve_audio', filename=player.announcement_file),
         start_ms    = player.announcement_start_ms or 0,
         end_ms      = player.announcement_end_ms,
         start_field = 'ann_start_ms',
@@ -129,7 +129,7 @@
     {% if sel_song %}
     {{ trim_editor(
         editor_id   = 'song',
-        audio_url   = url_for('serve_audio', filename=sel_song.filename),
+        audio_url   = url_for('ondeck_serve_audio', filename=sel_song.filename),
         start_ms    = sel_song.start_ms or 0,
         end_ms      = sel_song.end_ms,
         start_field = 'song_start_ms',
@@ -172,7 +172,7 @@
     <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-1">Player Login</h2>
     <p class="text-xs text-gray-500 mb-4">
       Share these credentials with {{ player.first_name }} so they can manage their own profile at
-      <span class="text-gray-400 font-mono">/player-login</span>.
+      <span class="text-gray-400 font-mono">/ondeck/login</span>.
     </p>
     {# Fields/button associate with #creds-form below via form= so this block
        is NOT a nested <form> inside #player-form. #}
@@ -227,10 +227,10 @@
    Their buttons/inputs above reference these via the HTML5 form= attribute. #}
 {% if pid %}
 {% if elevenlabs_ready %}
-<form id="ai-voice-form" method="POST" action="/players/{{ pid }}/generate-announcement"></form>
+<form id="ai-voice-form" method="POST" action="/ondeck/players/{{ pid }}/generate-announcement"></form>
 {% endif %}
-<form id="creds-form" method="POST" action="/players/{{ pid }}/set-credentials"></form>
-<form id="delete-form" method="POST" action="/players/{{ pid }}/delete"
+<form id="creds-form" method="POST" action="/ondeck/players/{{ pid }}/set-credentials"></form>
+<form id="delete-form" method="POST" action="/ondeck/players/{{ pid }}/delete"
       onsubmit="return confirm('Delete this player?')"></form>
 {% endif %}
 
@@ -291,7 +291,7 @@ async function uploadRecording() {
   const blob = new Blob(recChunks, { type: recorder.mimeType || 'audio/webm' })
   recBtn.textContent = '● Uploading…'
   try {
-    const r = await fetch('/players/{{ pid }}/record', {
+    const r = await fetch('/ondeck/players/{{ pid }}/record', {
       method: 'POST',
       headers: { 'Content-Type': 'audio/webm' },
       body: blob,
@@ -334,7 +334,7 @@ function onSongChange(sid) {
     sid:        sid,
   })
   // Pre-save the basic info so it doesn't get lost on song change.
-  fetch('/players/{{ pid }}/save', {
+  fetch('/ondeck/players/{{ pid }}/save', {
     method: 'POST',
     body: (() => {
       const fd = new FormData(document.getElementById('player-form'))

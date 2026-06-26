@@ -22,7 +22,7 @@
     <p class="text-sm text-gray-400 mb-5">
       Upload your walk-up song. Use MP3, WAV, M4A, or OGG.
     </p>
-    <form method="POST" action="{{ url_for('my_profile_upload') }}" enctype="multipart/form-data">
+    <form method="POST" action="{{ url_for('ondeck_my_profile_upload') }}" enctype="multipart/form-data">
       <div class="space-y-3">
         <input type="file" name="file" accept="audio/*" required
                class="block w-full text-sm text-gray-400
@@ -45,7 +45,7 @@
         Current song: <span class="text-gray-300 font-medium">{{ song.display_name }}</span>
         <span class="text-gray-600 ml-1">— click to replace</span>
       </summary>
-      <form method="POST" action="{{ url_for('my_profile_upload') }}" enctype="multipart/form-data" class="mt-3 flex items-center gap-3">
+      <form method="POST" action="{{ url_for('ondeck_my_profile_upload') }}" enctype="multipart/form-data" class="mt-3 flex items-center gap-3">
         <input type="file" name="file" accept="audio/*" required
                class="flex-1 text-sm text-gray-400
                       file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0
@@ -59,10 +59,10 @@
     </details>
 
     <!-- Trim editor -->
-    <form method="POST" action="{{ url_for('my_profile_save') }}">
+    <form method="POST" action="{{ url_for('ondeck_my_profile_save') }}">
       {{ trim_editor(
           editor_id   = 'song',
-          audio_url   = url_for('serve_audio', filename=song.filename),
+          audio_url   = url_for('ondeck_serve_audio', filename=song.filename),
           start_ms    = song.start_ms or 0,
           end_ms      = song.end_ms,
           start_field = 'start_ms',

@@ -6,7 +6,7 @@
   <h1 class="text-2xl font-bold">Settings</h1>
 </div>
 
-<form method="POST" action="/settings/save">
+<form method="POST" action="/ondeck/settings/save">
   <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5 space-y-5">
     <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Audio Pi</h2>
 
@@ -54,7 +54,7 @@
 </form>
 
 {% if cloud_mode %}
-<form method="POST" action="/settings/youtube-cookies" class="mt-6">
+<form method="POST" action="/ondeck/settings/youtube-cookies" class="mt-6">
   <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 space-y-4">
     <div class="flex items-center justify-between">
       <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">YouTube Cookies</h2>
@@ -121,7 +121,7 @@
     el.textContent = 'Testing…'
     el.className = 'text-sm ml-3 text-gray-400'
     try {
-      const r = await fetch('/api/status')
+      const r = await fetch('/ondeck/api/status')
       const d = await r.json()
       if (d.error) throw new Error(d.error)
       el.textContent = `✔ Connected — state: ${d.state}, volume: ${d.volume}`
