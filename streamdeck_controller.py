@@ -28,7 +28,13 @@ from PIL import Image, ImageDraw, ImageFont
 from StreamDeck.DeviceManager import DeviceManager
 from StreamDeck.ImageHelpers import PILHelper
 
-from config_manager import ConfigManager
+from config_manager import (
+    ConfigManager,
+    DECK_COLS,
+    DECK_DEFAULT_FONT,
+    DECK_DEFAULT_FONT_SIZE,
+    DECK_FONTS,
+)
 from lineup_manager import LineupManager
 from music_client import MusicClient
 
@@ -76,6 +82,38 @@ CELEBRATIONS = [
 ]
 
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+_FONT_DIR = "/usr/share/fonts/truetype/dejavu"
+
+# Faint look for unassigned keys: a slightly-lifted background plus dim text so
+# the "page.col.row" coordinate is legible but never loud.
+BLANK_BG = (28, 28, 30)
+BLANK_FG = (120, 120, 128)
+
+_font_cache: dict[tuple, ImageFont.FreeTypeFont] = {}
+
+
+def _resolve_font(family: str, size: int) -> ImageFont.FreeTypeFont:
+    """Load a deck font by family key + point size, cached, with fallbacks."""
+    key = (family, size)
+    cached = _font_cache.get(key)
+    if cached is not None:
+        return cached
+    meta = DECK_FONTS.get(family) or DECK_FONTS.get(DECK_DEFAULT_FONT, {})
+    candidates = []
+    if meta.get("file"):
+        candidates.append(f"{_FONT_DIR}/{meta['file']}")
+    candidates.append(FONT_PATH)
+    font = None
+    for path in candidates:
+        try:
+            font = ImageFont.truetype(path, size)
+            break
+        except Exception:
+            continue
+    if font is None:
+        font = ImageFont.load_default()
+    _font_cache[key] = font
+    return font
 
 
 class StreamDeckController:
@@ -350,20 +388,43 @@ class StreamDeckController:
         if kind == "nav":
             return (self.config.pages.get(ref, {}).get("name", ref) or "")[:10]
         if kind == "action":
-            return {"stop": "Stop", "fade": "Fade"}.get(ref, ref)
+            return {"play": "Play", "stop": "Stop", "fade": "Fade"}.get(ref, ref)
         return ""
 
+    def _coord_label(self, btn_idx: int) -> str:
+        """Addressable "page.col.row" tag for a key (all 1-based).
+
+        The page number is the page's 1-based position in the deck order, so an
+        unassigned key can be referenced when wiring buttons together later.
+        """
+        order = self.config.get_page_order()
+        try:
+            page_no = order.index(self.current_page_id) + 1
+        except ValueError:
+            page_no = 1
+        col = btn_idx % DECK_COLS + 1
+        row = btn_idx // DECK_COLS + 1
+        return f"{page_no}.{col}.{row}"
+
     def _render_slot_page(self) -> None:
-        """Paint a page from its hand-edited slots; empty keys stay dark."""
+        """Paint a page from its hand-edited slots.
+
+        Empty keys show a faint "page.col.row" coordinate so they stay
+        addressable; assigned keys honour the editor's label/colours/font.
+        """
         slots = self.config.pages.get(self.current_page_id, {}).get("slots", {})
         for btn_idx in CONTENT_SLOTS:
             slot = slots.get(str(btn_idx))
             if not slot or slot.get("type") in (None, "", "blank"):
-                self._btn(btn_idx, "", EMPTY_COLOR)
+                self._btn(btn_idx, self._coord_label(btn_idx), BLANK_BG, BLANK_FG,
+                          font="mono", font_size=12)
                 continue
             label = slot.get("label") or self._slot_default_label(slot)
-            color = self._hex2rgb(slot["color"]) if slot.get("color") else DEFAULT_BG
-            self._btn(btn_idx, label[:16], color)
+            bg = self._hex2rgb(slot["color"]) if slot.get("color") else DEFAULT_BG
+            fg = self._hex2rgb(slot["text_color"]) if slot.get("text_color") else (255, 255, 255)
+            font = slot.get("font") or DECK_DEFAULT_FONT
+            size = int(slot.get("font_size") or DECK_DEFAULT_FONT_SIZE)
+            self._btn(btn_idx, label[:16], bg, fg, font=font, font_size=size)
 
     def _handle_slot_press(self, btn_idx: int) -> None:
         slots = self.config.pages.get(self.current_page_id, {}).get("slots", {})
@@ -371,13 +432,20 @@ class StreamDeckController:
         if not slot:
             return
         kind, ref = slot.get("type"), slot.get("ref", "")
+        # "immediate" plays at once; "cue"/"queue" only loads the clip so the
+        # coach runs it with the Play button (mirrors the Lineup cue flow).
+        queue_only = slot.get("mode") in ("cue", "queue")
         ok = False
         if kind == "player_walkup":
             self.lineup.note_external_playback()
-            ok = self.music.play_walkup(ref)
+            ok = (self.music.cue_walkup(ref) if queue_only
+                  else self.music.play_walkup(ref))
         elif kind == "song":
             self.lineup.note_external_playback()
-            ok = self.music.play_song(ref)
+            if queue_only:
+                ok = self.music.queue(self.config.build_song_clip(ref) or {})
+            else:
+                ok = self.music.play_song(ref)
         elif kind == "celebration":
             self.lineup.note_external_playback()
             ok = self.music.play_celebration(ref)
@@ -385,17 +453,21 @@ class StreamDeckController:
             self.go_to_page(ref)
             return
         elif kind == "action":
-            if ref == "stop":
+            if ref == "play":
+                self.lineup.play()
+                ok = True
+            elif ref == "stop":
                 ok = self.music.stop()
             elif ref == "fade":
-                ok = self.music.fade()
+                ok = self.music.fade(int(slot.get("fade_ms") or 1000))
         if ok:
             self._flash(btn_idx)
 
     # ── Button drawing ───────────────────────────────────
 
     def _btn(self, idx: int, label: str, bg: tuple,
-             fg: tuple = (255, 255, 255)) -> None:
+             fg: tuple = (255, 255, 255), font: str = DECK_DEFAULT_FONT,
+             font_size: int = DECK_DEFAULT_FONT_SIZE) -> None:
         if not self.deck:
             return
         try:
@@ -403,17 +475,15 @@ class StreamDeckController:
             img = Image.new("RGB", sz, bg)
             drw = ImageDraw.Draw(img)
             if label:
-                try:
-                    font = ImageFont.truetype(FONT_PATH, 13)
-                except Exception:
-                    font = ImageFont.load_default()
+                fnt = _resolve_font(font, font_size)
+                line_h = font_size + 3
                 lines = label.split("\n")
-                total = len(lines) * 16
+                total = len(lines) * line_h
                 y0 = (sz[1] - total) // 2
                 for li, line in enumerate(lines):
-                    bb = drw.textbbox((0, 0), line, font=font)
+                    bb = drw.textbbox((0, 0), line, font=fnt)
                     x = (sz[0] - (bb[2] - bb[0])) // 2
-                    drw.text((x, y0 + li * 16), line, font=font, fill=fg)
+                    drw.text((x, y0 + li * line_h), line, font=fnt, fill=fg)
             self.deck.set_key_image(
                 idx, PILHelper.to_native_key_format(self.deck, img))
         except Exception as exc:

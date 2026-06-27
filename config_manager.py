@@ -120,6 +120,23 @@ def _default_pages() -> dict[str, Any]:
 _DECK_FIXED_SLOTS = {0, 8, 16, 24, 25, 26, 27, 28, 29, 30, 31}
 _DECK_CONTENT_SLOTS = [i for i in range(32) if i not in _DECK_FIXED_SLOTS]
 
+# Stream Deck XL grid geometry (used to label blank keys "page.col.row").
+DECK_COLS = 8
+DECK_ROWS = 4
+
+# Button fonts offered in the deck editor. ``file`` is a DejaVu face shipped on
+# Raspberry Pi OS (fonts-dejavu); ``css``/``weight`` drive the browser preview.
+DECK_FONTS: dict[str, dict[str, Any]] = {
+    "sans_bold":  {"label": "Sans Bold",  "file": "DejaVuSans-Bold.ttf",          "css": "sans-serif", "weight": 700},
+    "sans":       {"label": "Sans",       "file": "DejaVuSans.ttf",               "css": "sans-serif", "weight": 400},
+    "condensed":  {"label": "Condensed",  "file": "DejaVuSansCondensed-Bold.ttf", "css": "'Arial Narrow', sans-serif", "weight": 700},
+    "serif":      {"label": "Serif",      "file": "DejaVuSerif-Bold.ttf",         "css": "serif",      "weight": 700},
+    "mono":       {"label": "Mono",       "file": "DejaVuSansMono-Bold.ttf",      "css": "monospace",  "weight": 700},
+}
+DECK_FONT_ORDER = ["sans_bold", "sans", "condensed", "serif", "mono"]
+DECK_DEFAULT_FONT = "sans_bold"
+DECK_DEFAULT_FONT_SIZE = 13
+
 
 class ConfigManager:
     """Thread-safe loader/saver for the OnDeck config file."""
@@ -494,8 +511,16 @@ class ConfigManager:
     def set_page_slot(self, page_id: str, idx: int, slot: dict | None) -> None:
         """Assign or clear one content key on a page.
 
-        ``slot`` = {type, ref, label, color}. A None/blank type clears the key.
-        Fixed nav/transport keys are owned by the deck and ignored here.
+        ``slot`` carries the button's assignment plus its Companion-style look
+        and per-action settings::
+
+            {type, ref, label,            # what the key does
+             color, text_color,           # background / foreground hex
+             font, font_size,             # text style (see DECK_FONTS)
+             mode, fade_out, fade_ms}     # audio/transport action options
+
+        A None/blank type clears the key. Fixed nav/transport keys are owned by
+        the deck and ignored here.
         """
         idx = int(idx)
         if page_id not in self.pages or idx in self.DECK_FIXED_SLOTS:
@@ -505,13 +530,47 @@ class ConfigManager:
             if not slot or slot.get("type") in (None, "", "blank"):
                 slots.pop(str(idx), None)
             else:
-                slots[str(idx)] = {
-                    "type": slot.get("type", ""),
-                    "ref": slot.get("ref", ""),
-                    "label": slot.get("label", ""),
-                    "color": slot.get("color", ""),
-                }
+                slots[str(idx)] = self._clean_slot(slot)
             self.save()
+
+    @staticmethod
+    def _clean_slot(slot: dict) -> dict:
+        """Whitelist + coerce one slot dict to its stored shape.
+
+        Only non-empty styling/option fields are kept so old configs and plain
+        ``{type, ref, label}`` buttons stay small; the controller fills in
+        sensible defaults for anything missing.
+        """
+        out: dict[str, Any] = {
+            "type": slot.get("type", ""),
+            "ref": slot.get("ref", ""),
+            "label": slot.get("label", ""),
+            "color": (slot.get("color") or "").strip(),
+        }
+        text_color = (slot.get("text_color") or "").strip()
+        if text_color:
+            out["text_color"] = text_color
+        font = (slot.get("font") or "").strip()
+        if font:
+            out["font"] = font
+        try:
+            size = int(slot.get("font_size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        if size:
+            out["font_size"] = max(6, min(40, size))
+        mode = (slot.get("mode") or "").strip()
+        if mode:
+            out["mode"] = mode
+        if slot.get("fade_out"):
+            out["fade_out"] = True
+        try:
+            fade_ms = int(slot.get("fade_ms") or 0)
+        except (TypeError, ValueError):
+            fade_ms = 0
+        if fade_ms:
+            out["fade_ms"] = max(100, min(20000, fade_ms))
+        return out
 
     def clear_page_slots(self, page_id: str) -> None:
         with self._lock:
