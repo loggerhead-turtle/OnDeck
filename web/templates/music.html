@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+{% block title %}Rate Music{% endblock %}
+{% block content %}
+
+{% set is_staff = current_role in ('admin', 'editor') %}
+
+<div class="max-w-3xl mx-auto">
+
+  <!-- Header -->
+  <div class="mb-6">
+    <h1 class="text-2xl font-bold text-white">Rate the Music</h1>
+    <p class="text-sm text-gray-400 mt-1">
+      Tap the stars to rate songs. Your votes help the editors decide what to keep
+      playing between innings — nothing gets removed automatically.
+    </p>
+  </div>
+
+  <!-- Suggest a song (Spotify or title) -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-8">
+    <h2 class="font-semibold text-white mb-1 flex items-center gap-2"><span>🎧</span> Suggest a song</h2>
+    <p class="text-xs text-gray-500 mb-4">
+      Found something on Spotify? Paste the share link (or just type the title) and
+      an editor will track it down and add it to the library.
+    </p>
+    <form method="POST" action="/ondeck/music/request" class="space-y-3">
+      <div class="grid sm:grid-cols-2 gap-3">
+        <input type="text" name="title" placeholder="Song title"
+               class="bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500">
+        <input type="text" name="artist" placeholder="Artist (optional)"
+               class="bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500">
+      </div>
+      <input type="url" name="spotify_url" placeholder="https://open.spotify.com/track/… (optional)"
+             class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500">
+      <input type="text" name="note" placeholder="Note for the editor (optional)"
+             class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500">
+      <button type="submit"
+              class="px-4 py-2 bg-green-700 hover:bg-green-600 text-white text-sm font-semibold rounded-lg transition-colors">
+        Submit request
+      </button>
+    </form>
+  </div>
+
+  <!-- Song requests queue -->
+  {% if requests %}
+  <div class="mb-8">
+    <h2 class="font-semibold text-white mb-3 flex items-center gap-2"><span>📝</span> Song Requests</h2>
+    <div class="space-y-2">
+      {% for r in requests %}
+        {% set req = r.req %}
+        <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-4 {% if req.status == 'sourced' %}opacity-60{% elif req.status == 'dismissed' %}opacity-40{% endif %}">
+          <div class="flex items-start justify-between gap-3 flex-wrap">
+            <div class="min-w-0">
+              <div class="font-medium text-white">
+                {{ req.title }}{% if req.artist %} <span class="text-gray-400 font-normal">— {{ req.artist }}</span>{% endif %}
+                {% if req.status == 'sourced' %}<span class="ml-2 text-xs px-2 py-0.5 rounded-full bg-green-900/60 text-green-300 border border-green-700/50">✓ Added</span>
+                {% elif req.status == 'dismissed' %}<span class="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-700 text-gray-400">dismissed</span>{% endif %}
+              </div>
+              <div class="text-xs text-gray-500 mt-0.5">Requested by {{ req.requester_name or 'someone' }}</div>
+              {% if req.note %}<div class="text-xs text-gray-400 mt-1 italic">“{{ req.note }}”</div>{% endif %}
+              {% if req.spotify_url %}
+                <a href="{{ req.spotify_url }}" target="_blank" rel="noopener"
+                   class="inline-flex items-center gap-1 text-xs text-green-400 hover:text-green-300 mt-1">▶ Open in Spotify</a>
+              {% endif %}
+            </div>
+            <div class="flex flex-col items-end gap-1 shrink-0">
+              <!-- Request rating (community) -->
+              <div class="star-rate flex items-center" data-kind="request" data-id="{{ req.id }}" data-mine="{{ r.mine }}">
+                {% for i in range(1, 6) %}<button type="button" data-v="{{ i }}" class="text-lg leading-none px-0.5 text-gray-600">★</button>{% endfor %}
+              </div>
+              <div class="text-xs text-gray-500">
+                {% if r.count %}{{ '%.1f'|format(r.avg) }} · {{ r.count }} vote{% if r.count != 1 %}s{% endif %}{% else %}no votes yet{% endif %}
+              </div>
+            </div>
+          </div>
+          <!-- Editor / requester actions -->
+          {% set is_mine = current_role == 'player' and req.requested_by and req.requested_by.startswith('p:') %}
+          <div class="flex items-center gap-2 mt-3">
+            {% if is_staff %}
+              {% if req.status != 'sourced' %}
+              <form method="POST" action="/ondeck/music/request/{{ req.id }}/status">
+                <input type="hidden" name="status" value="sourced">
+                <button class="px-2.5 py-1 rounded bg-green-800 hover:bg-green-700 text-green-100 text-xs font-medium transition-colors">Mark added</button>
+              </form>
+              {% endif %}
+              {% if req.status != 'dismissed' %}
+              <form method="POST" action="/ondeck/music/request/{{ req.id }}/status">
+                <input type="hidden" name="status" value="dismissed">
+                <button class="px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors">Dismiss</button>
+              </form>
+              {% endif %}
+              {% if req.status != 'open' %}
+              <form method="POST" action="/ondeck/music/request/{{ req.id }}/status">
+                <input type="hidden" name="status" value="open">
+                <button class="px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors">Reopen</button>
+              </form>
+              {% endif %}
+            {% endif %}
+            <form method="POST" action="/ondeck/music/request/{{ req.id }}/delete"
+                  onsubmit="return confirm('Remove this request?')">
+              <button class="px-2.5 py-1 rounded bg-gray-700 hover:bg-red-800 text-gray-400 hover:text-red-200 text-xs font-medium transition-colors">Remove</button>
+            </form>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Library songs to rate -->
+  <h2 class="font-semibold text-white mb-3 flex items-center gap-2"><span>🎵</span> Library</h2>
+  {% if songs %}
+  <div class="space-y-2">
+    {% for s in songs %}
+      <div class="bg-gray-800 rounded-xl border border-gray-700/50 px-4 py-3 flex items-center justify-between gap-3">
+        <div class="min-w-0">
+          <div class="font-medium text-white truncate">{{ s.name }}</div>
+          <div class="text-xs text-gray-500 mt-0.5">
+            <span id="avg-{{ s.sid }}">
+              {% if s.count %}★ {{ '%.1f'|format(s.avg) }} · {{ s.count }} vote{% if s.count != 1 %}s{% endif %}{% else %}no ratings yet{% endif %}
+            </span>
+          </div>
+        </div>
+        <div class="flex items-center gap-3 shrink-0">
+          <div class="star-rate flex items-center" data-kind="song" data-id="{{ s.sid }}" data-mine="{{ s.mine }}">
+            {% for i in range(1, 6) %}<button type="button" data-v="{{ i }}" class="text-xl leading-none px-0.5 text-gray-600">★</button>{% endfor %}
+          </div>
+          <button onclick="previewSong('{{ s.song.filename }}', {{ s.song.start_ms or 0 }}, {{ s.song.end_ms if s.song.end_ms is not none else 'null' }})"
+                  class="px-2.5 py-1 rounded bg-gray-700 hover:bg-green-700 text-gray-300 hover:text-white text-xs font-medium transition-colors">▶</button>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="bg-gray-800/50 border border-gray-700/50 rounded-xl p-10 text-center">
+    <div class="text-3xl mb-2">🎵</div>
+    <div class="text-gray-300 font-medium">No songs in the library yet</div>
+    <div class="text-gray-500 text-sm">Suggest one above and an editor will add it.</div>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+  // Paint a star-rate widget: fill up to `n` stars (or the saved `mine` value).
+  function paintStars(widget, n) {
+    const mine = parseInt(widget.dataset.mine || '0', 10)
+    const v = (n == null) ? mine : n
+    widget.querySelectorAll('button').forEach(b => {
+      const bv = parseInt(b.dataset.v, 10)
+      b.classList.toggle('text-yellow-400', bv <= v)
+      b.classList.toggle('text-gray-600', bv > v)
+    })
+  }
+
+  function previewSong(filename, startMs, endMs) {
+    OnDeck.preview({ file: filename, start_ms: startMs, end_ms: endMs })
+  }
+
+  document.querySelectorAll('.star-rate').forEach(widget => {
+    const kind = widget.dataset.kind
+    const id = widget.dataset.id
+    paintStars(widget)
+    widget.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('mouseenter', () => paintStars(widget, parseInt(btn.dataset.v, 10)))
+      btn.addEventListener('click', async () => {
+        let stars = parseInt(btn.dataset.v, 10)
+        // Clicking your current rating again clears it.
+        if (stars === parseInt(widget.dataset.mine || '0', 10)) stars = 0
+        const url = kind === 'song'
+          ? `/ondeck/music/${id}/rate`
+          : `/ondeck/music/request/${id}/rate`
+        const body = new URLSearchParams({ stars })
+        if (kind === 'song') {
+          const r = await fetch(url, { method: 'POST', body,
+            headers: { 'X-Requested-With': 'fetch' } })
+          if (r.ok) {
+            const d = await r.json()
+            widget.dataset.mine = d.mine
+            paintStars(widget)
+            const avg = document.getElementById('avg-' + id)
+            if (avg) avg.textContent = d.count
+              ? `★ ${d.avg.toFixed(1)} · ${d.count} vote${d.count !== 1 ? 's' : ''}`
+              : 'no ratings yet'
+          }
+        } else {
+          // Requests: simple form post + reload keeps the queue ordering fresh.
+          const f = document.createElement('form')
+          f.method = 'POST'; f.action = url
+          f.innerHTML = `<input name="stars" value="${stars}">`
+          document.body.appendChild(f); f.submit()
+        }
+      })
+    })
+    widget.addEventListener('mouseleave', () => paintStars(widget))
+  })
+</script>
+{% endblock %}

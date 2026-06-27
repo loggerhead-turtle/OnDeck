@@ -34,7 +34,7 @@ from flask import (
 from werkzeug.security import check_password_hash, generate_password_hash
 import requests as rq
 
-from config_manager import ConfigManager, MUSIC_DIR, ONDECK_HOME, CONFIG_PATH
+from config_manager import ConfigManager, MUSIC_DIR, ONDECK_HOME, CONFIG_PATH, rating_summary
 
 # ---------------------------------------------------------------------------
 # Mode detection
@@ -271,6 +271,8 @@ def _check_auth(allowed_roles=None):
             "ondeck_serve_audio",
             "ondeck_my_profile_change_password", "ondeck_my_profile_change_password_post",
             "ondeck_team_roster",
+            "ondeck_music", "ondeck_music_rate",
+            "ondeck_music_request", "ondeck_request_rate", "ondeck_request_delete",
             "ondeck_logout",
         }
         if request.endpoint not in player_ok:
@@ -310,6 +312,25 @@ def _inject_globals():
         "elevenlabs_ready": _elevenlabs_ready(),
         "unread_notifications": _unread_notification_count() if role in ("admin", "editor") else 0,
     }
+
+
+def _rater_identity() -> tuple[str | None, str | None]:
+    """A stable (rater_key, display_name) for whoever is logged in.
+
+    Players rate as ``p:<player_id>``, staff as ``u:<user_id>`` — distinct
+    namespaces so a player and an editor can never collide on a rating slot.
+    Returns ``(None, None)`` for an unauthenticated session.
+    """
+    role = session.get("role")
+    if role == "player":
+        pid = session.get("player_id")
+        p = cfg.players.get(pid)
+        if p:
+            name = f"#{p.get('jersey', '')} {p.get('first_name', '')} {p.get('last_name', '')}".strip()
+            return f"p:{pid}", name
+    elif role in ("admin", "editor"):
+        return f"u:{session.get('user_id')}", session.get("username") or "Staff"
+    return None, None
 
 
 def _bearer_token() -> str:
@@ -727,7 +748,39 @@ def ondeck_dashboard():
 
 @app.get("/ondeck/library")
 def ondeck_library():
-    return render_template("library.html", songs=cfg.songs, cfg=cfg)
+    sort = request.args.get("sort", "rating")  # rating | name
+    # Group base songs with their per-player trim variants, attaching rating
+    # stats so editors can see at a glance which songs are hot or cold.
+    groups: dict[str, dict] = {}
+    for sid, song in cfg.songs.items():
+        base_id = song.get("base_song_id") or sid
+        g = groups.setdefault(base_id, {"base": None, "variants": []})
+        if song.get("base_song_id"):
+            g["variants"].append((sid, song))
+        else:
+            g["base"] = (sid, song)
+    rows = []
+    for base_id, g in groups.items():
+        if not g["base"]:
+            continue
+        sid, song = g["base"]
+        stats = rating_summary(song.get("ratings"))
+        rows.append({
+            "sid": sid,
+            "song": song,
+            "name": song.get("alias") or song.get("display_name") or song.get("filename"),
+            "avg": stats["avg"],
+            "count": stats["count"],
+            "variants": sorted(g["variants"], key=lambda v: v[1].get("created_by_player") or ""),
+        })
+    if sort == "name":
+        rows.sort(key=lambda r: r["name"].lower())
+    else:
+        # Highest-rated first; unrated songs sink to the bottom, then alpha.
+        rows.sort(key=lambda r: (-(r["avg"] if r["count"] else -1), r["name"].lower()))
+    open_requests = sum(1 for r in cfg.song_requests if r.get("status") == "open")
+    return render_template("library.html", rows=rows, cfg=cfg, sort=sort,
+                           song_count=len(rows), open_requests=open_requests)
 
 
 @app.post("/ondeck/library/upload")
@@ -820,6 +873,129 @@ def ondeck_library_delete(sid: str):
         (MUSIC_DIR / song["filename"]).unlink(missing_ok=True)
         flash(f"Deleted '{song['display_name']}'.", "success")
     return redirect(url_for("ondeck_library"))
+
+
+# ---------------------------------------------------------------------------
+# Music ratings + song requests (players, editors, admins)
+# ---------------------------------------------------------------------------
+
+def _song_entries_with_ratings(my_key: str | None) -> list[dict]:
+    """Base songs (no per-player trim variants) plus rating stats + my vote."""
+    entries = []
+    for sid, song in cfg.songs.items():
+        if song.get("base_song_id"):
+            continue  # skip trimmed variants — rate the underlying song
+        stats = rating_summary(song.get("ratings"))
+        entries.append({
+            "sid": sid,
+            "song": song,
+            "name": song.get("alias") or song.get("display_name") or song.get("filename"),
+            "avg": stats["avg"],
+            "count": stats["count"],
+            "mine": (song.get("ratings") or {}).get(my_key, 0) if my_key else 0,
+        })
+    entries.sort(key=lambda e: e["name"].lower())
+    return entries
+
+
+def _request_entries(my_key: str | None) -> list[dict]:
+    out = []
+    for req in cfg.song_requests:
+        stats = rating_summary(req.get("ratings"))
+        out.append({
+            "req": req,
+            "avg": stats["avg"],
+            "count": stats["count"],
+            "mine": (req.get("ratings") or {}).get(my_key, 0) if my_key else 0,
+        })
+    return out
+
+
+@app.get("/ondeck/music")
+def ondeck_music():
+    """Player/staff page to star-rate library songs and suggest new ones."""
+    my_key, _ = _rater_identity()
+    return render_template(
+        "music.html",
+        songs=_song_entries_with_ratings(my_key),
+        requests=_request_entries(my_key),
+    )
+
+
+@app.post("/ondeck/music/<sid>/rate")
+def ondeck_music_rate(sid: str):
+    my_key, _ = _rater_identity()
+    if not my_key:
+        abort(403)
+    try:
+        stars = int(request.form.get("stars", 0))
+    except (TypeError, ValueError):
+        stars = 0
+    if not cfg.set_song_rating(sid, my_key, stars):
+        abort(404)
+    if request.headers.get("X-Requested-With") == "fetch":
+        song = cfg.songs.get(sid, {})
+        return jsonify(ok=True, mine=stars, **rating_summary(song.get("ratings")))
+    flash("Rating saved." if stars else "Rating cleared.", "success")
+    return redirect(url_for("ondeck_music"))
+
+
+@app.post("/ondeck/music/request")
+def ondeck_music_request():
+    my_key, my_name = _rater_identity()
+    if not my_key:
+        abort(403)
+    title = request.form.get("title", "").strip()
+    spotify_url = request.form.get("spotify_url", "").strip()
+    if not title and not spotify_url:
+        flash("Add a song title or a Spotify link.", "error")
+        return redirect(url_for("ondeck_music"))
+    cfg.add_song_request(
+        my_key, my_name,
+        title=title or "(from Spotify link)",
+        artist=request.form.get("artist", "").strip(),
+        spotify_url=spotify_url,
+        note=request.form.get("note", "").strip(),
+    )
+    flash("Song request submitted — an editor will review it.", "success")
+    return redirect(url_for("ondeck_music"))
+
+
+@app.post("/ondeck/music/request/<rid>/rate")
+def ondeck_request_rate(rid: str):
+    my_key, _ = _rater_identity()
+    if not my_key:
+        abort(403)
+    try:
+        stars = int(request.form.get("stars", 0))
+    except (TypeError, ValueError):
+        stars = 0
+    if not cfg.set_request_rating(rid, my_key, stars):
+        abort(404)
+    return redirect(url_for("ondeck_music"))
+
+
+@app.post("/ondeck/music/request/<rid>/status")
+def ondeck_request_status(rid: str):
+    # Staff-only (not in the player allow-list in _check_auth).
+    status = request.form.get("status", "")
+    if not cfg.set_request_status(rid, status):
+        abort(400)
+    flash(f"Request marked {status}.", "success")
+    return redirect(request.referrer or url_for("ondeck_music"))
+
+
+@app.post("/ondeck/music/request/<rid>/delete")
+def ondeck_request_delete(rid: str):
+    my_key, _ = _rater_identity()
+    role = session.get("role")
+    req = cfg._request(rid)
+    # A player may delete only their own request; staff may delete any.
+    if req and role not in ("admin", "editor") and req.get("requested_by") != my_key:
+        abort(403)
+    cfg.delete_song_request(rid)
+    flash("Request removed.", "success")
+    return redirect(request.referrer or url_for("ondeck_music"))
 
 
 # ---------------------------------------------------------------------------
