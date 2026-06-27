@@ -215,7 +215,7 @@ def _check_auth(allowed_roles=None):
     # Check if specific roles are required for this route
     if allowed_roles and role not in allowed_roles:
         flash("Access denied.", "error")
-        return redirect(url_for("ondeck_dashboard"))
+        return redirect(url_for("ondeck_settings_hub"))
 
     if role == "admin":
         return
@@ -228,7 +228,7 @@ def _check_auth(allowed_roles=None):
         }
         if request.endpoint in admin_only:
             flash("Admin access required.", "error")
-            return redirect(url_for("ondeck_dashboard"))
+            return redirect(url_for("ondeck_settings_hub"))
         return
 
     if role == "player":
@@ -337,18 +337,18 @@ def _proxy(method: str, path: str, **kwargs):
 @app.get("/")
 def public_home():
     if session.get("role") in ("admin", "editor"):
-        return redirect(url_for("ondeck_dashboard"))
+        return redirect(url_for("ondeck_settings_hub"))
     return render_template("public_home.html", hp=_load_homepage())
 
 
 # ---------------------------------------------------------------------------
-# OnDeck entry point  /ondeck  →  dashboard or login
+# OnDeck entry point  /ondeck  →  settings hub or login
 # ---------------------------------------------------------------------------
 
 @app.get("/ondeck")
 def ondeck_home():
     if session.get("role") in ("admin", "editor"):
-        return redirect(url_for("ondeck_dashboard"))
+        return redirect(url_for("ondeck_settings_hub"))
     return redirect(url_for("ondeck_login"))
 
 
@@ -359,7 +359,7 @@ def ondeck_home():
 @app.get("/ondeck/login")
 def ondeck_login():
     if session.get("role") in ("admin", "editor"):
-        return redirect(url_for("ondeck_dashboard"))
+        return redirect(url_for("ondeck_settings_hub"))
     if session.get("role") == "player":
         return redirect(url_for("ondeck_my_profile"))
     return render_template("login.html")
@@ -378,9 +378,9 @@ def ondeck_login_post():
         session["user_id"] = user["id"]
         session["role"] = user["role"]
         session["username"] = user["username"]
-        next_url = request.args.get("next") or url_for("ondeck_dashboard")
+        next_url = request.args.get("next") or url_for("ondeck_settings_hub")
         if not next_url.startswith("/"):
-            next_url = url_for("ondeck_dashboard")
+            next_url = url_for("ondeck_settings_hub")
         return redirect(next_url)
 
     # Try player credentials in cfg.players.
@@ -447,14 +447,14 @@ def ondeck_logout():
 @app.get("/ondeck/setup")
 def ondeck_setup():
     if _load_users():
-        return redirect(url_for("ondeck_dashboard"))
+        return redirect(url_for("ondeck_settings_hub"))
     return render_template("setup.html")
 
 
 @app.post("/ondeck/setup")
 def ondeck_setup_post():
     if _load_users():
-        return redirect(url_for("ondeck_dashboard"))
+        return redirect(url_for("ondeck_settings_hub"))
 
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "")
@@ -681,6 +681,7 @@ def ondeck_serve_audio(filename: str):
 
 @app.get("/ondeck/dashboard")
 def ondeck_dashboard():
+    """Game-day dashboard — accessible from settings hub."""
     status, _ = _proxy("GET", "/status")
     players = cfg.players_by_jersey()
     return render_template("index.html", status=status, system=cfg.system,
