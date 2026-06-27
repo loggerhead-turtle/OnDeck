@@ -30,7 +30,6 @@ from StreamDeck.ImageHelpers import PILHelper
 
 from config_manager import (
     ConfigManager,
-    DECK_COLS,
     DECK_DEFAULT_FONT,
     DECK_DEFAULT_FONT_SIZE,
     DECK_FONTS,
@@ -84,11 +83,6 @@ CELEBRATIONS = [
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 _FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 
-# Faint look for unassigned keys: a slightly-lifted background plus dim text so
-# the "page.col.row" coordinate is legible but never loud.
-BLANK_BG = (28, 28, 30)
-BLANK_FG = (120, 120, 128)
-
 _font_cache: dict[tuple, ImageFont.FreeTypeFont] = {}
 
 
@@ -123,6 +117,12 @@ class StreamDeckController:
         self.lineup = lineup
         self.music = music
         self.current_page_id = "home"
+
+        # Edit-lineup mode: tap "Edit Lineup", tap a batting-order slot to arm
+        # it, then tap a player on the players page to fill that spot.
+        self._edit_lineup = False
+        self._lineup_assign_pos = None   # 1-based position awaiting a player
+        self._lineup_return_page = None  # page to bounce back to after picking
 
         # Repaint the deck whenever the lineup auto-advances.
         self.lineup.on_change = self.refresh
@@ -231,6 +231,10 @@ class StreamDeckController:
             players = self.config.players_by_jersey()
             if slot < len(players):
                 pid, _ = players[slot]
+                # Edit-lineup mode: fill the armed batting spot instead of playing.
+                if self._edit_lineup and self._lineup_assign_pos is not None:
+                    self._assign_player_to_lineup(pid, btn_idx)
+                    return
                 self.lineup.note_external_playback()
                 if self.music.play_walkup(pid):
                     self._flash(btn_idx)
@@ -328,11 +332,11 @@ class StreamDeckController:
                 slot_idx = filled[i]
                 player = self.config.players.get(lineup[slot_idx], {})
                 jersey = player.get("jersey", "")
-                last = (player.get("last_name", "") or "")[:8]
+                first = (player.get("first_name", "") or "")[:8]
                 active = (slot_idx == cur)
                 bg = ACTIVE_COLOR if active else PAGE_BG["lineup"]
                 fg = (0, 0, 0) if active else (255, 255, 255)
-                self._btn(btn_idx, f"{i + 1}. #{jersey}\n{last}", bg, fg)
+                self._btn(btn_idx, f"{i + 1}. #{jersey}\n{first}", bg, fg)
             else:
                 self._btn(btn_idx, "", EMPTY_COLOR)
 
@@ -343,10 +347,10 @@ class StreamDeckController:
             if i < len(players):
                 _pid, p = players[i]
                 jersey = p.get("jersey", "")
-                last = (p.get("last_name", "") or "")[:8]
+                first = (p.get("first_name", "") or "")[:8]
                 has_walkup = bool(p.get("walkup_song_id"))
                 bg = PAGE_BG["players"] if has_walkup else (35, 35, 35)
-                self._btn(btn_idx, f"#{jersey}\n{last}", bg)
+                self._btn(btn_idx, f"#{jersey}\n{first}", bg)
             else:
                 self._btn(btn_idx, "", EMPTY_COLOR)
 
@@ -375,12 +379,16 @@ class StreamDeckController:
 
     # ── Slot-driven pages (web Stream Deck editor) ───────
 
+    def _player_label(self, player_id: str) -> str:
+        """Number + first name — the canonical look for a player/lineup key."""
+        p = self.config.players.get(player_id, {})
+        return f"#{p.get('jersey', '')}\n{(p.get('first_name', '') or '')[:8]}"
+
     def _slot_default_label(self, slot: dict) -> str:
         """A sensible button label when the editor left the label blank."""
         kind, ref = slot.get("type"), slot.get("ref", "")
         if kind == "player_walkup":
-            p = self.config.players.get(ref, {})
-            return f"#{p.get('jersey', '')}\n{(p.get('last_name', '') or '')[:8]}"
+            return self._player_label(ref)
         if kind == "song":
             return (self.config.get_song_display_name(ref) or "")[:14]
         if kind == "celebration":
@@ -389,41 +397,49 @@ class StreamDeckController:
             return (self.config.pages.get(ref, {}).get("name", ref) or "")[:10]
         if kind == "action":
             return {"play": "Play", "stop": "Stop", "fade": "Fade"}.get(ref, ref)
+        if kind == "edit_lineup":
+            return "Edit\nLineup"
+        if kind == "lineup_slot":
+            pos = self._slot_position(slot)
+            lineup = self.config.lineup
+            if pos and 0 < pos <= len(lineup) and lineup[pos - 1]:
+                return f"{pos}. " + self._player_label(lineup[pos - 1])
+            return f"{pos or '?'}.\nEmpty"
         return ""
 
-    def _coord_label(self, btn_idx: int) -> str:
-        """Addressable "page.col.row" tag for a key (all 1-based).
-
-        The page number is the page's 1-based position in the deck order, so an
-        unassigned key can be referenced when wiring buttons together later.
-        """
-        order = self.config.get_page_order()
+    @staticmethod
+    def _slot_position(slot: dict) -> int:
+        """The 1-based batting-order position stored on a lineup_slot key."""
         try:
-            page_no = order.index(self.current_page_id) + 1
-        except ValueError:
-            page_no = 1
-        col = btn_idx % DECK_COLS + 1
-        row = btn_idx // DECK_COLS + 1
-        return f"{page_no}.{col}.{row}"
+            return int(slot.get("ref") or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _render_slot_page(self) -> None:
         """Paint a page from its hand-edited slots.
 
-        Empty keys show a faint "page.col.row" coordinate so they stay
-        addressable; assigned keys honour the editor's label/colours/font.
+        Empty keys stay dark (the "page.col.row" address is an editor-only aid);
+        assigned and text-only keys honour the editor's label/colours/font.
         """
         slots = self.config.pages.get(self.current_page_id, {}).get("slots", {})
         for btn_idx in CONTENT_SLOTS:
             slot = slots.get(str(btn_idx))
             if not slot or slot.get("type") in (None, "", "blank"):
-                self._btn(btn_idx, self._coord_label(btn_idx), BLANK_BG, BLANK_FG,
-                          font="mono", font_size=12)
+                self._btn(btn_idx, "", EMPTY_COLOR)
                 continue
+            kind = slot.get("type")
             label = slot.get("label") or self._slot_default_label(slot)
             bg = self._hex2rgb(slot["color"]) if slot.get("color") else DEFAULT_BG
             fg = self._hex2rgb(slot["text_color"]) if slot.get("text_color") else (255, 255, 255)
             font = slot.get("font") or DECK_DEFAULT_FONT
             size = int(slot.get("font_size") or DECK_DEFAULT_FONT_SIZE)
+            # Live state: the active Edit-Lineup key and the armed batting slot
+            # glow yellow so the coach can see what's being edited.
+            if kind == "edit_lineup" and self._edit_lineup:
+                bg, fg = ACTIVE_COLOR, (0, 0, 0)
+            elif (kind == "lineup_slot" and self._edit_lineup
+                  and self._slot_position(slot) == self._lineup_assign_pos):
+                bg, fg = ACTIVE_COLOR, (0, 0, 0)
             self._btn(btn_idx, label[:16], bg, fg, font=font, font_size=size)
 
     def _handle_slot_press(self, btn_idx: int) -> None:
@@ -436,7 +452,20 @@ class StreamDeckController:
         # coach runs it with the Play button (mirrors the Lineup cue flow).
         queue_only = slot.get("mode") in ("cue", "queue")
         ok = False
-        if kind == "player_walkup":
+        if kind == "text":
+            return  # a label-only key — nothing to do
+        elif kind == "edit_lineup":
+            self._toggle_edit_lineup(btn_idx)
+            return
+        elif kind == "lineup_slot":
+            self._press_lineup_slot(slot, btn_idx)
+            return
+        elif kind == "player_walkup":
+            # In edit-lineup mode a player press fills the armed batting slot
+            # instead of playing the walk-up.
+            if self._edit_lineup and self._lineup_assign_pos is not None:
+                self._assign_player_to_lineup(ref, btn_idx)
+                return
             self.lineup.note_external_playback()
             ok = (self.music.cue_walkup(ref) if queue_only
                   else self.music.play_walkup(ref))
@@ -462,6 +491,54 @@ class StreamDeckController:
                 ok = self.music.fade(int(slot.get("fade_ms") or 1000))
         if ok:
             self._flash(btn_idx)
+
+    # ── Edit-lineup flow ─────────────────────────────────
+
+    def _players_page_id(self) -> str | None:
+        """The first built-in 'players' page — where lineup picks happen."""
+        for pid in self.config.get_page_order():
+            if self.config.pages.get(pid, {}).get("kind") == "players":
+                return pid
+        return None
+
+    def _toggle_edit_lineup(self, btn_idx: int) -> None:
+        self._edit_lineup = not self._edit_lineup
+        if not self._edit_lineup:
+            self._lineup_assign_pos = None
+            self._lineup_return_page = None
+        self._flash(btn_idx)
+
+    def _press_lineup_slot(self, slot: dict, btn_idx: int) -> None:
+        pos = self._slot_position(slot)
+        if not pos:
+            return
+        if self._edit_lineup:
+            # Arm this batting spot and jump to the players page to pick someone.
+            self._lineup_assign_pos = pos
+            self._lineup_return_page = self.current_page_id
+            players_page = self._players_page_id()
+            if players_page:
+                self.go_to_page(players_page)
+            else:
+                self._render_all()
+            return
+        # Normal press: cue this batter so the coach can hit Play.
+        self.lineup.set_current(pos - 1)
+        if self.lineup.cue_current():
+            self._flash(btn_idx)
+
+    def _assign_player_to_lineup(self, player_id: str, btn_idx: int) -> None:
+        self.config.set_lineup_slot(self._lineup_assign_pos, player_id)
+        return_page = self._lineup_return_page or "lineup"
+        self._lineup_assign_pos = None
+        self._lineup_return_page = None
+        # Bounce back to where editing started; Edit-Lineup mode stays on so the
+        # coach can set the next spot straight away.
+        self._flash(btn_idx)
+        if return_page in self.config.pages:
+            self.go_to_page(return_page)
+        else:
+            self._render_all()
 
     # ── Button drawing ───────────────────────────────────
 

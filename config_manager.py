@@ -51,6 +51,8 @@ def _default_config() -> dict[str, Any]:
             "dirty": False,
             # Signup link settings.
             "signup_link_expires_hours": 168,  # 1 week
+            # Deck button editor presentation: "sidebar" (docked) or "modal".
+            "deck_editor_mode": "sidebar",
         },
         "players": {},          # player_id -> player dict
         "songs": {},            # song_id -> song dict
@@ -527,11 +529,40 @@ class ConfigManager:
             return
         with self._lock:
             slots = self.pages[page_id].setdefault("slots", {})
-            if not slot or slot.get("type") in (None, "", "blank"):
+            kind = (slot or {}).get("type")
+            label = ((slot or {}).get("label") or "").strip()
+            # A key with no action but some text is a "text holder": keep it
+            # (as type "text") so it displays without doing anything on press.
+            if slot and kind in (None, "", "blank") and label:
+                slot = {**slot, "type": "text"}
+                kind = "text"
+            if not slot or (kind in (None, "", "blank") and not label):
                 slots.pop(str(idx), None)
             else:
                 slots[str(idx)] = self._clean_slot(slot)
             self.save()
+
+    def set_deck_editor_mode(self, mode: str) -> None:
+        """Persist the deck-editor presentation ("sidebar" or "modal")."""
+        mode = "modal" if mode == "modal" else "sidebar"
+        with self._lock:
+            self._data["system"]["deck_editor_mode"] = mode
+            self.save()
+
+    def set_lineup_slot(self, position: int, player_id: str | None) -> None:
+        """Assign one batting-order position (1-based) to a player (or clear)."""
+        i = int(position) - 1
+        if i < 0:
+            return
+        size = self._data.get("lineup_size", 9)
+        with self._lock:
+            lineup = list(self._data.get("lineup", []))
+            while len(lineup) <= i and len(lineup) < size:
+                lineup.append(None)
+            if 0 <= i < len(lineup):
+                lineup[i] = player_id if player_id in self.players else None
+                self._data["lineup"] = lineup
+                self.save()
 
     @staticmethod
     def _clean_slot(slot: dict) -> dict:

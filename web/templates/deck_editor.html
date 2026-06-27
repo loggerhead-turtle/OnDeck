@@ -2,9 +2,34 @@
 {% block title %}Stream Deck{% endblock %}
 {% block content %}
 
+<style>
+  /* Editor presentation: docked sidebar vs centered modal. */
+  #deck-editor.mode-sidebar .editor-cols { display:grid; gap:1.5rem; grid-template-columns:1fr 22rem; }
+  #deck-editor.mode-modal   .editor-cols { display:block; }
+  #deck-editor.mode-modal   #panel-wrap {
+    position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center;
+    background:rgba(0,0,0,.65); padding:1rem;
+  }
+  #deck-editor.mode-modal   #panel-wrap.panel-hidden { display:none; }
+  #deck-editor.mode-modal   #editor-panel { width:24rem; max-width:100%; max-height:88vh; overflow:auto; }
+  #deck-editor.mode-sidebar #panel-close { display:none; }
+  @media (max-width:1023px){ #deck-editor.mode-sidebar .editor-cols { grid-template-columns:1fr; } }
+</style>
+
+<div id="deck-editor" class="mode-{{ editor_mode }}">
+
 <div class="flex items-center justify-between mb-6">
   <h1 class="text-2xl font-bold">Stream Deck Editor</h1>
-  <span class="text-xs text-gray-500">8 × 4 (XL) — page {{ page_no }}</span>
+  <div class="flex items-center gap-3">
+    <!-- Modal / sidebar preference (saved + synced to the deck Pis) -->
+    <div class="inline-flex rounded-lg overflow-hidden border border-gray-600 text-xs">
+      <button type="button" id="mode-sidebar" onclick="setEditorMode('sidebar')"
+              class="px-2.5 py-1 font-medium">Sidebar</button>
+      <button type="button" id="mode-modal" onclick="setEditorMode('modal')"
+              class="px-2.5 py-1 font-medium">Modal</button>
+    </div>
+    <span class="text-xs text-gray-500">8 × 4 (XL) — page {{ page_no }}</span>
+  </div>
 </div>
 
 <!-- Page tabs -->
@@ -17,7 +42,7 @@
   {% endfor %}
 </div>
 
-<div class="grid gap-6 lg:grid-cols-[1fr_22rem]">
+<div class="editor-cols">
   <!-- Visual grid + page tools -->
   <div class="bg-gray-800 border border-gray-700/50 rounded-xl p-6">
     <div class="flex items-center justify-between mb-1">
@@ -26,7 +51,8 @@
     </div>
     <p class="text-xs text-gray-500 mb-4">
       Empty keys show their <span class="font-mono text-gray-400">page.column.row</span>
-      address so you can reference them later.
+      address here in the editor (it never shows on the deck). Add an action or
+      text and the address disappears.
     </p>
 
     <div id="deck-grid" class="grid grid-cols-8 gap-1.5"></div>
@@ -76,118 +102,129 @@
     </div>
   </div>
 
-  <!-- Companion-style sidebar editor -->
-  <div id="deck-sidebar" class="bg-gray-800 border border-gray-700/50 rounded-xl p-5 self-start lg:sticky lg:top-4">
-    <div id="sb-empty" class="text-center text-gray-500 text-sm py-12">
-      Select a key on the left to edit it.
-    </div>
-
-    <div id="sb-editor" class="hidden space-y-4">
-      <div class="flex items-center justify-between">
-        <h3 class="text-base font-semibold text-white">Button <span id="sb-coord" class="font-mono text-green-400"></span></h3>
-        <button type="button" id="sb-clear"
-                class="px-2.5 py-1 rounded-lg bg-red-800/70 hover:bg-red-700 text-red-100 text-xs font-medium">Clear</button>
+  <!-- Companion-style editor panel (docked sidebar OR centered modal) -->
+  <div id="panel-wrap" class="panel-hidden">
+    <div id="editor-panel" class="bg-gray-800 border border-gray-700/50 rounded-xl p-5 self-start lg:sticky lg:top-4">
+      <div id="sb-empty" class="text-center text-gray-500 text-sm py-12">
+        Select a key on the left to edit it.
       </div>
 
-      <!-- Text & style -->
-      <div>
-        <label class="block text-xs text-gray-400 mb-1">Button text</label>
-        <textarea id="sb-label" rows="2" placeholder="Defaults to the action name"
-                  class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 focus:border-green-500 text-white text-sm resize-none"></textarea>
-        <p class="text-[11px] text-gray-500 mt-1">Use Enter for a new line.</p>
-      </div>
-
-      <div class="grid grid-cols-2 gap-3">
-        <div>
-          <label class="block text-xs text-gray-400 mb-1">Font</label>
-          <select id="sb-font" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 focus:border-green-500 text-white text-sm"></select>
+      <div id="sb-editor" class="hidden space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="text-base font-semibold text-white">Button <span id="sb-coord" class="font-mono text-green-400"></span></h3>
+          <div class="flex items-center gap-2">
+            <button type="button" id="sb-clear"
+                    class="px-2.5 py-1 rounded-lg bg-red-800/70 hover:bg-red-700 text-red-100 text-xs font-medium">Clear</button>
+            <button type="button" id="panel-close" onclick="closePanel()"
+                    class="px-2 py-1 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs font-medium">✕</button>
+          </div>
         </div>
-        <div>
-          <label class="block text-xs text-gray-400 mb-1">Size</label>
-          <input id="sb-font-size" type="number" min="6" max="40" step="1"
-                 class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 focus:border-green-500 text-white text-sm">
-        </div>
-      </div>
 
-      <div class="grid grid-cols-2 gap-3">
+        <!-- Text & style -->
         <div>
-          <label class="block text-xs text-gray-400 mb-1">Text color</label>
-          <input id="sb-text-color" type="color"
-                 class="w-full h-9 rounded-lg bg-gray-700 border border-gray-600 cursor-pointer">
+          <label class="block text-xs text-gray-400 mb-1">Button text</label>
+          <textarea id="sb-label" rows="2" placeholder="Defaults to the action name"
+                    class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 focus:border-green-500 text-white text-sm resize-none"></textarea>
+          <p class="text-[11px] text-gray-500 mt-1">Use Enter for a new line.</p>
         </div>
-        <div>
-          <label class="block text-xs text-gray-400 mb-1">Background</label>
-          <input id="sb-color" type="color"
-                 class="w-full h-9 rounded-lg bg-gray-700 border border-gray-600 cursor-pointer">
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Font</label>
+            <select id="sb-font" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 focus:border-green-500 text-white text-sm"></select>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Size</label>
+            <input id="sb-font-size" type="number" min="6" max="40" step="1"
+                   class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 focus:border-green-500 text-white text-sm">
+          </div>
         </div>
-      </div>
 
-      <!-- Action -->
-      <div class="pt-2 border-t border-gray-700/50">
-        <label class="block text-xs text-gray-400 mb-1">Action</label>
-        <select id="sb-action" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 focus:border-green-500 text-white text-sm">
-          <option value="blank">— Empty —</option>
-          <option value="player_walkup">Player walk-up</option>
-          <option value="song">Play song</option>
-          <option value="celebration">Celebration</option>
-          <option value="nav">Navigate to page</option>
-          <option value="play">Transport: Play</option>
-          <option value="stop">Transport: Stop</option>
-          <option value="fade">Transport: Fade out</option>
-        </select>
-      </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Text color</label>
+            <input id="sb-text-color" type="color"
+                   class="w-full h-9 rounded-lg bg-gray-700 border border-gray-600 cursor-pointer">
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Background</label>
+            <input id="sb-color" type="color"
+                   class="w-full h-9 rounded-lg bg-gray-700 border border-gray-600 cursor-pointer">
+          </div>
+        </div>
 
-      <!-- Action params -->
-      <div id="p-player_walkup" class="sb-param hidden space-y-3">
-        <div>
+        <!-- Action -->
+        <div class="pt-2 border-t border-gray-700/50">
+          <label class="block text-xs text-gray-400 mb-1">Action</label>
+          <select id="sb-action" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 focus:border-green-500 text-white text-sm">
+            <option value="blank">— Empty —</option>
+            <option value="text">Text only (no action)</option>
+            <option value="player_walkup">Player walk-up</option>
+            <option value="song">Play song</option>
+            <option value="celebration">Celebration</option>
+            <option value="nav">Navigate to page</option>
+            <option value="edit_lineup">Edit lineup (toggle)</option>
+            <option value="lineup_slot">Lineup spot</option>
+            <option value="play">Transport: Play</option>
+            <option value="stop">Transport: Stop</option>
+            <option value="fade">Transport: Fade out</option>
+          </select>
+        </div>
+
+        <!-- Action params -->
+        <div id="p-player_walkup" class="sb-param hidden">
           <label class="block text-xs text-gray-400 mb-1">Player</label>
           <select id="sb-player" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm"></select>
+          <p class="text-[11px] text-gray-500 mt-1">Plays whatever walk-up this player has chosen.</p>
         </div>
-        <div>
-          <label class="block text-xs text-gray-400 mb-1">When pressed</label>
-          <select id="sb-player-mode" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm">
-            <option value="immediate">Play immediately</option>
-            <option value="cue">Cue (wait for Play)</option>
-          </select>
+
+        <div id="p-song" class="sb-param hidden space-y-3">
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Song / file</label>
+            <select id="sb-song" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm"></select>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">When pressed</label>
+            <select id="sb-song-mode" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm">
+              <option value="immediate">Play immediately</option>
+              <option value="queue">Queue (wait for Play)</option>
+            </select>
+          </div>
         </div>
-      </div>
 
-      <div id="p-song" class="sb-param hidden space-y-3">
-        <div>
-          <label class="block text-xs text-gray-400 mb-1">Song / file</label>
-          <select id="sb-song" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm"></select>
+        <div id="p-celebration" class="sb-param hidden">
+          <label class="block text-xs text-gray-400 mb-1">Celebration stinger</label>
+          <select id="sb-celebration" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm"></select>
         </div>
-        <div>
-          <label class="block text-xs text-gray-400 mb-1">When pressed</label>
-          <select id="sb-song-mode" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm">
-            <option value="immediate">Play immediately</option>
-            <option value="queue">Queue (wait for Play)</option>
-          </select>
+
+        <div id="p-nav" class="sb-param hidden">
+          <label class="block text-xs text-gray-400 mb-1">Target page</label>
+          <select id="sb-nav" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm"></select>
         </div>
-      </div>
 
-      <div id="p-celebration" class="sb-param hidden">
-        <label class="block text-xs text-gray-400 mb-1">Celebration stinger</label>
-        <select id="sb-celebration" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm"></select>
-      </div>
+        <div id="p-lineup_slot" class="sb-param hidden">
+          <label class="block text-xs text-gray-400 mb-1">Batting-order spot</label>
+          <input id="sb-position" type="number" min="1" max="{{ lineup_size }}" step="1" value="1"
+                 class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm">
+          <p class="text-[11px] text-gray-500 mt-1">
+            With Edit&nbsp;Lineup on, tapping this jumps to the players page to fill the spot.
+          </p>
+        </div>
 
-      <div id="p-nav" class="sb-param hidden">
-        <label class="block text-xs text-gray-400 mb-1">Target page</label>
-        <select id="sb-nav" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm"></select>
-      </div>
+        <div id="p-fade" class="sb-param hidden">
+          <label class="block text-xs text-gray-400 mb-1">Fade duration (ms)</label>
+          <input id="sb-fade-ms" type="number" min="100" max="20000" step="100" value="1000"
+                 class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm">
+          <p class="text-[11px] text-gray-500 mt-1">How long the audio takes to fade to silence.</p>
+        </div>
 
-      <div id="p-fade" class="sb-param hidden">
-        <label class="block text-xs text-gray-400 mb-1">Fade duration (ms)</label>
-        <input id="sb-fade-ms" type="number" min="100" max="20000" step="100" value="1000"
-               class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm">
-        <p class="text-[11px] text-gray-500 mt-1">How long the audio takes to fade to silence.</p>
+        <button type="button" id="sb-save"
+                class="w-full px-3 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold">Save button</button>
+        <p id="sb-status" class="text-center text-xs text-green-400 h-4"></p>
       </div>
-
-      <button type="button" id="sb-save"
-              class="w-full px-3 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold">Save button</button>
-      <p id="sb-status" class="text-center text-xs text-green-400 h-4"></p>
     </div>
   </div>
+</div>
 </div>
 
 <script>
@@ -207,11 +244,13 @@ const DECK = {
   defaultFont: {{ default_font|tojson }},
   defaultFontSize: {{ default_font_size|tojson }},
   saveUrl: {{ url_for('ondeck_deck_slot', page_id=page_id)|tojson }},
+  modeUrl: {{ url_for('ondeck_deck_editor_mode')|tojson }},
 };
 
-const BLANK_BG = '#1c1c1e', BLANK_FG = '#7a7a80';
 const DEFAULT_BG = '#374151', DEFAULT_FG = '#ffffff';
+const BLANK_BG = '#1c1c1e', BLANK_FG = '#7a7a80';
 const FIXED = new Set(Object.keys(DECK.fixedLabels).map(Number));
+let editorMode = {{ editor_mode|tojson }};
 let selected = null;
 
 const $ = (id) => document.getElementById(id);
@@ -221,20 +260,27 @@ function coord(idx) {
   return DECK.pageNo + '.' + (idx % DECK.cols + 1) + '.' + (Math.floor(idx / DECK.cols) + 1);
 }
 
+// A key counts as "filled" once it has an action OR any text — only then does
+// its address disappear from the editor grid.
+function hasData(slot) {
+  return !!(slot && ((slot.type && slot.type !== 'blank') || (slot.label && slot.label.trim())));
+}
+
 // Label shown when the editor left the text blank — mirrors the deck runtime.
 function defaultLabel(slot) {
-  if (!slot || !slot.type || slot.type === 'blank') return '';
-  if (slot.type === 'player_walkup')
-    return (DECK.players.find(p => p.id === slot.ref) || {}).label || 'Player';
-  if (slot.type === 'song')
-    return (DECK.songs.find(s => s.id === slot.ref) || {}).label || 'Song';
-  if (slot.type === 'celebration')
-    return (DECK.celebrations.find(c => c.id === slot.ref) || {}).label || slot.ref;
-  if (slot.type === 'nav')
-    return (DECK.navPages.find(n => n.id === slot.ref) || {}).label || 'Page';
-  if (slot.type === 'action')
-    return { play: 'Play', stop: 'Stop', fade: 'Fade' }[slot.ref] || slot.ref;
-  return '';
+  if (!hasData(slot)) return '';
+  const t = slot.type;
+  if (t === 'player_walkup') {
+    const p = DECK.players.find(p => p.id === slot.ref) || {};
+    return p.first_name ? ('#' + p.jersey + '\n' + p.first_name) : 'Player';
+  }
+  if (t === 'song') return (DECK.songs.find(s => s.id === slot.ref) || {}).label || 'Song';
+  if (t === 'celebration') return (DECK.celebrations.find(c => c.id === slot.ref) || {}).label || slot.ref;
+  if (t === 'nav') return (DECK.navPages.find(n => n.id === slot.ref) || {}).label || 'Page';
+  if (t === 'edit_lineup') return 'Edit\nLineup';
+  if (t === 'lineup_slot') return 'Spot ' + (slot.ref || '?');
+  if (t === 'action') return { play: 'Play', stop: 'Stop', fade: 'Fade' }[slot.ref] || slot.ref;
+  return '';   // text-only: falls back to its own label
 }
 
 function renderGrid() {
@@ -256,7 +302,7 @@ function renderGrid() {
     cell.style.cursor = 'pointer';
     cell.dataset.idx = idx;
     cell.classList.add('border');
-    if (slot && slot.type && slot.type !== 'blank') {
+    if (hasData(slot)) {
       const f = fontCss(slot.font || DECK.defaultFont);
       cell.style.background = slot.color || DEFAULT_BG;
       cell.style.color = slot.text_color || DEFAULT_FG;
@@ -284,8 +330,9 @@ const ACTION_PARAMS = {
   song: ['p-song'],
   celebration: ['p-celebration'],
   nav: ['p-nav'],
+  lineup_slot: ['p-lineup_slot'],
   fade: ['p-fade'],
-  play: [], stop: [], blank: [],
+  text: [], edit_lineup: [], play: [], stop: [], blank: [],
 };
 
 function showParams(action) {
@@ -298,20 +345,34 @@ function fillSelect(sel, items, value) {
   if (value != null) sel.value = value;
 }
 
+// Map a stored slot to the action <select> value.
+function slotAction(slot) {
+  if (!slot || !slot.type) return 'blank';
+  if (slot.type === 'action') return slot.ref || 'blank';
+  return slot.type;
+}
+
+function openPanel() {
+  $('panel-wrap').classList.remove('panel-hidden');
+}
+function closePanel() {
+  selected = null;
+  $('sb-editor').classList.add('hidden');
+  $('sb-empty').classList.remove('hidden');
+  if (editorMode === 'modal') $('panel-wrap').classList.add('panel-hidden');
+  renderGrid();
+}
+
 function selectSlot(idx) {
   selected = idx;
   const slot = DECK.slots[String(idx)] || {};
   $('sb-empty').classList.add('hidden');
   $('sb-editor').classList.remove('hidden');
+  openPanel();
   $('sb-coord').textContent = coord(idx);
   $('sb-status').textContent = '';
 
-  // Map stored slot -> the action <select> value.
-  let action = 'blank';
-  if (slot.type === 'action') action = slot.ref;
-  else if (slot.type) action = slot.type;
-  $('sb-action').value = action;
-
+  $('sb-action').value = slotAction(slot);
   $('sb-label').value = slot.label || '';
   $('sb-font').value = slot.font || DECK.defaultFont;
   $('sb-font-size').value = slot.font_size || DECK.defaultFontSize;
@@ -322,15 +383,15 @@ function selectSlot(idx) {
   fillSelect($('sb-song'), DECK.songs, slot.type === 'song' ? slot.ref : null);
   fillSelect($('sb-celebration'), DECK.celebrations, slot.type === 'celebration' ? slot.ref : null);
   fillSelect($('sb-nav'), DECK.navPages, slot.type === 'nav' ? slot.ref : null);
-  $('sb-player-mode').value = slot.mode || 'immediate';
   $('sb-song-mode').value = slot.mode || 'immediate';
+  $('sb-position').value = (slot.type === 'lineup_slot' && slot.ref) ? slot.ref : 1;
   $('sb-fade-ms').value = slot.fade_ms || 1000;
 
-  showParams(action);
+  showParams($('sb-action').value);
   renderGrid();
 }
 
-// Build the slot object from the current sidebar fields.
+// Build the slot object from the current panel fields.
 function collectSlot() {
   const action = $('sb-action').value;
   const slot = {
@@ -342,29 +403,21 @@ function collectSlot() {
     color: $('sb-color').value,
   };
   if (action === 'blank') { slot.type = 'blank'; }
-  else if (action === 'player_walkup') {
-    slot.type = 'player_walkup'; slot.ref = $('sb-player').value;
-    slot.mode = $('sb-player-mode').value;
-  } else if (action === 'song') {
-    slot.type = 'song'; slot.ref = $('sb-song').value;
-    slot.mode = $('sb-song-mode').value;
-  } else if (action === 'celebration') {
-    slot.type = 'celebration'; slot.ref = $('sb-celebration').value;
-  } else if (action === 'nav') {
-    slot.type = 'nav'; slot.ref = $('sb-nav').value;
-  } else { // play / stop / fade transport actions
-    slot.type = 'action'; slot.ref = action;
-    if (action === 'fade') slot.fade_ms = parseInt($('sb-fade-ms').value) || 1000;
-  }
+  else if (action === 'text') { slot.type = 'text'; }
+  else if (action === 'player_walkup') { slot.type = 'player_walkup'; slot.ref = $('sb-player').value; }
+  else if (action === 'song') { slot.type = 'song'; slot.ref = $('sb-song').value; slot.mode = $('sb-song-mode').value; }
+  else if (action === 'celebration') { slot.type = 'celebration'; slot.ref = $('sb-celebration').value; }
+  else if (action === 'nav') { slot.type = 'nav'; slot.ref = $('sb-nav').value; }
+  else if (action === 'edit_lineup') { slot.type = 'edit_lineup'; }
+  else if (action === 'lineup_slot') { slot.type = 'lineup_slot'; slot.ref = String(parseInt($('sb-position').value) || 1); }
+  else { slot.type = 'action'; slot.ref = action; if (action === 'fade') slot.fade_ms = parseInt($('sb-fade-ms').value) || 1000; }
   return slot;
 }
 
-// Live-preview the selected key as the user edits.
 function previewSlot() {
   if (selected === null) return;
   const slot = collectSlot();
-  if (slot.type === 'blank') DECK.slots[String(selected)] = {};
-  else DECK.slots[String(selected)] = slot;
+  DECK.slots[String(selected)] = (slot.type === 'blank') ? {} : slot;
   renderGrid();
 }
 
@@ -372,8 +425,7 @@ async function saveSlot() {
   if (selected === null) return;
   const slot = collectSlot();
   const r = await fetch(DECK.saveUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(slot),
   });
   if (r.ok) {
@@ -387,30 +439,62 @@ async function saveSlot() {
 }
 
 function clearSlot() {
+  // Empty the text too, so the backend doesn't keep it as a text-only key.
+  $('sb-label').value = '';
   $('sb-action').value = 'blank';
   showParams('blank');
   previewSlot();
   saveSlot();
 }
 
+// Modal / sidebar preference — persisted to config and synced to the deck Pis.
+function applyMode() {
+  const wrap = $('deck-editor');
+  wrap.classList.toggle('mode-sidebar', editorMode === 'sidebar');
+  wrap.classList.toggle('mode-modal', editorMode === 'modal');
+  $('mode-sidebar').className = 'px-2.5 py-1 font-medium ' +
+    (editorMode === 'sidebar' ? 'bg-green-700 text-white' : 'bg-gray-700 text-gray-300');
+  $('mode-modal').className = 'px-2.5 py-1 font-medium ' +
+    (editorMode === 'modal' ? 'bg-green-700 text-white' : 'bg-gray-700 text-gray-300');
+  // In sidebar mode the panel is always docked; in modal it hides until a key
+  // is selected.
+  if (editorMode === 'sidebar') $('panel-wrap').classList.remove('panel-hidden');
+  else if (selected === null) $('panel-wrap').classList.add('panel-hidden');
+}
+
+async function setEditorMode(mode) {
+  editorMode = mode;
+  applyMode();
+  try {
+    await fetch(DECK.modeUrl, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
+  } catch (e) { /* preference is best-effort */ }
+}
+
 function initFonts() {
-  $('sb-font').innerHTML = DECK.fonts
-    .map(f => `<option value="${f.id}">${f.label}</option>`).join('');
+  $('sb-font').innerHTML = DECK.fonts.map(f => `<option value="${f.id}">${f.label}</option>`).join('');
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   initFonts();
+  applyMode();
   renderGrid();
   $('sb-action').addEventListener('change', () => { showParams($('sb-action').value); previewSlot(); });
   ['sb-label', 'sb-font', 'sb-font-size', 'sb-text-color', 'sb-color',
    'sb-player', 'sb-song', 'sb-celebration', 'sb-nav',
-   'sb-player-mode', 'sb-song-mode', 'sb-fade-ms'].forEach(id => {
+   'sb-song-mode', 'sb-position', 'sb-fade-ms'].forEach(id => {
     const el = $(id);
     el.addEventListener('input', previewSlot);
     el.addEventListener('change', previewSlot);
   });
   $('sb-save').addEventListener('click', saveSlot);
   $('sb-clear').addEventListener('click', clearSlot);
+  // Click the modal backdrop to dismiss.
+  $('panel-wrap').addEventListener('click', (e) => {
+    if (editorMode === 'modal' && e.target === $('panel-wrap')) closePanel();
+  });
 });
 </script>
 

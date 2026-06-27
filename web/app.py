@@ -1640,7 +1640,10 @@ def ondeck_deck():
     page_no = order.index(page_id) + 1 if page_id in order else 1
     # Choice lists the Companion-style sidebar needs, as plain dicts for JSON.
     players = [
-        {"id": pid, "label": f"#{p.get('jersey', '')} {p.get('last_name', '')}".strip()}
+        {"id": pid,
+         "label": f"#{p.get('jersey', '')} {p.get('first_name', '')} {p.get('last_name', '')}".strip(),
+         "first_name": p.get("first_name", ""),
+         "jersey": p.get("jersey", "")}
         for pid, p in cfg.players_by_jersey()
     ]
     songs = [{"id": sid, "label": name} for sid, name in _deck_song_choices()]
@@ -1669,7 +1672,18 @@ def ondeck_deck():
         fonts=fonts,
         default_font=DECK_DEFAULT_FONT,
         default_font_size=DECK_DEFAULT_FONT_SIZE,
+        editor_mode=cfg.system.get("deck_editor_mode", "sidebar"),
+        lineup_size=cfg.data.get("lineup_size", 9),
     )
+
+
+@app.post("/ondeck/deck/editor-mode")
+def ondeck_deck_editor_mode():
+    """Persist the deck-editor presentation (sidebar vs modal). Synced to Pis."""
+    _check_auth(["admin", "editor"])
+    data = request.get_json(silent=True) or request.form
+    cfg.set_deck_editor_mode((data.get("mode") or "sidebar"))
+    return jsonify(ok=True, mode=cfg.system.get("deck_editor_mode", "sidebar"))
 
 
 @app.post("/ondeck/deck/<page_id>/slot")
