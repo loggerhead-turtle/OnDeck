@@ -887,9 +887,14 @@ def ondeck_library_delete(sid: str):
 # ---------------------------------------------------------------------------
 
 def _song_entries_with_ratings(my_key: str | None) -> list[dict]:
-    """Base songs (no per-player trim variants) plus rating stats + my vote."""
+    """Mid-inning songs with rating stats + my vote.
+
+    Only the shared **mid-inning** pool is rateable — walk-up and pitcher
+    warm-up music belong to individual players, so they're deliberately left
+    out. The pool is whatever the coach assigned on the Sounds page.
+    """
     entries = []
-    for sid, song in cfg.songs.items():
+    for sid, song in cfg.get_songs_for_page("mid_inning"):
         if song.get("base_song_id"):
             continue  # skip trimmed variants — rate the underlying song
         stats = rating_summary(song.get("ratings"))
@@ -2435,6 +2440,33 @@ def _spotify_playlist_tracks(url: str) -> tuple[list[dict] | None, str | None]:
             })
         next_url = d.get("next")
     return out, None
+
+
+_LINK_PLATFORMS = [
+    ("spotify", ("open.spotify.com", "spotify:")),
+    ("youtube", ("youtube.com", "youtu.be")),
+    ("apple", ("music.apple.com", "itunes.apple.com")),
+    ("soundcloud", ("soundcloud.com",)),
+    ("amazon", ("music.amazon.",)),
+    ("tidal", ("tidal.com",)),
+    ("bandcamp", ("bandcamp.com",)),
+]
+
+
+@app.template_filter("link_platform")
+def _link_platform(url: str) -> str:
+    """Best-guess music platform for a URL — drives the logo shown beside it.
+
+    Returns a short key ('spotify', 'youtube', 'apple', …) or 'link' for an
+    unrecognized host, or '' when there's no URL at all.
+    """
+    u = (url or "").strip().lower()
+    if not u:
+        return ""
+    for key, needles in _LINK_PLATFORMS:
+        if any(n in u for n in needles):
+            return key
+    return "link"
 
 
 def _elevenlabs_voice() -> str:

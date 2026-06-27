@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from '_music_link.html' import link_badge %}
 {% block title %}Rate Music{% endblock %}
 {% block content %}
 
@@ -10,8 +11,10 @@
   <div class="mb-6">
     <h1 class="text-2xl font-bold text-white">Rate the Music</h1>
     <p class="text-sm text-gray-400 mt-1">
-      Tap the stars to rate songs. Your votes help the editors decide what to keep
-      playing between innings — nothing gets removed automatically.
+      Tap the stars to rate the <span class="text-gray-200 font-medium">mid-inning</span> songs.
+      Your votes help the editors decide what to keep playing between innings —
+      nothing gets removed automatically. (Walk-up and warm-up songs are each
+      player's own pick, so they're not rated here.)
     </p>
   </div>
 
@@ -19,8 +22,9 @@
   <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-8">
     <h2 class="font-semibold text-white mb-1 flex items-center gap-2"><span>🎧</span> Suggest a song</h2>
     <p class="text-xs text-gray-500 mb-4">
-      Found something on Spotify? Paste the share link (or just type the title) and
-      an editor will track it down and add it to the library.
+      Heard something you like? Paste a link from <span class="text-gray-300">Spotify, YouTube,
+      Apple Music</span> — anywhere — (or just type the title) and an editor will track it
+      down and add it to the library.
     </p>
     <form method="POST" action="/ondeck/music/request" class="space-y-3">
       <div class="grid sm:grid-cols-2 gap-3">
@@ -29,7 +33,7 @@
         <input type="text" name="artist" placeholder="Artist (optional)"
                class="bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500">
       </div>
-      <input type="url" name="spotify_url" placeholder="https://open.spotify.com/track/… (optional)"
+      <input type="url" name="spotify_url" placeholder="Paste a song link — Spotify, YouTube, Apple Music… (optional)"
              class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500">
       <input type="text" name="note" placeholder="Note for the editor (optional)"
              class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500">
@@ -65,10 +69,7 @@
               </div>
               <div class="text-xs text-gray-500 mt-0.5">Requested by {{ req.requester_name or 'someone' }}</div>
               {% if req.note %}<div class="text-xs text-gray-400 mt-1 italic">“{{ req.note }}”</div>{% endif %}
-              {% if req.spotify_url %}
-                <a href="{{ req.spotify_url }}" target="_blank" rel="noopener"
-                   class="inline-flex items-center gap-1 text-xs text-green-400 hover:text-green-300 mt-1">▶ Open in Spotify</a>
-              {% endif %}
+              {% if req.spotify_url %}<div class="mt-1">{{ link_badge(req.spotify_url) }}</div>{% endif %}
               </div>
             </div>
             <div class="flex flex-col items-end gap-1 shrink-0">
@@ -123,8 +124,8 @@
   </div>
   {% endif %}
 
-  <!-- Library songs to rate -->
-  <h2 class="font-semibold text-white mb-3 flex items-center gap-2"><span>🎵</span> Library</h2>
+  <!-- Mid-inning songs to rate -->
+  <h2 class="font-semibold text-white mb-3 flex items-center gap-2"><span>🎵</span> Mid-Inning Music</h2>
   {% if songs %}
   <div class="space-y-2">
     {% for s in songs %}
@@ -150,8 +151,11 @@
   {% else %}
   <div class="bg-gray-800/50 border border-gray-700/50 rounded-xl p-10 text-center">
     <div class="text-3xl mb-2">🎵</div>
-    <div class="text-gray-300 font-medium">No songs in the library yet</div>
-    <div class="text-gray-500 text-sm">Suggest one above and an editor will add it.</div>
+    <div class="text-gray-300 font-medium">No mid-inning songs to rate yet</div>
+    <div class="text-gray-500 text-sm">
+      {% if is_staff %}Add songs to the mid-inning list on the Sounds page, and they'll show up here for rating.
+      {% else %}Once your coach adds mid-inning songs, they'll show up here. Suggest one above in the meantime!{% endif %}
+    </div>
   </div>
   {% endif %}
 </div>
