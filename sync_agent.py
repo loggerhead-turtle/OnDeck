@@ -58,8 +58,10 @@ def _local_ip() -> str:
 
 def sync() -> bool:
     if not CLOUD_URL:
-        print("ONDECK_CLOUD_URL not set — nothing to sync", flush=True)
-        return False
+        # Not linked yet — a no-op, not a failure (otherwise the 5-minute timer
+        # reports a failed job on every tick until the device is linked).
+        print("Not linked yet (no ONDECK_CLOUD_URL) — nothing to sync.", flush=True)
+        return True
 
     print(f"Syncing from {CLOUD_URL} …", flush=True)
 
