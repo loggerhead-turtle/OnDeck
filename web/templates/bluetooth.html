@@ -34,6 +34,7 @@
   <!-- Paired / discovered devices -->
   <div class="bg-gray-800 border border-gray-700/50 rounded-xl p-6">
     <h2 class="text-lg font-semibold text-white mb-4">Speakers</h2>
+    <div id="discovered" class="space-y-2 text-sm text-gray-400 mb-3"></div>
     <div id="devices" class="space-y-2 text-sm text-gray-400">
       <p class="text-gray-500">No devices yet.</p>
     </div>
@@ -49,8 +50,14 @@
 const BANNER = document.getElementById('banner');
 const STATUS = document.getElementById('status');
 const DEVICES = document.getElementById('devices');
+const DISCOVERED = document.getElementById('discovered');
 const AUTO = document.getElementById('autoconnect');
 let preferredMac = null;
+// Discovered (unpaired) speakers from the last scan. Kept in a separate
+// container so the 5s status refresh can't wipe the scan results.
+let discovered = [];
+let scanEmpty = false;
+let knownMacs = new Set();
 
 function banner(msg, kind){
   BANNER.textContent = msg;
@@ -103,6 +110,20 @@ function discoveredRow(d){
   </div>`;
 }
 
+function renderDiscovered(){
+  if (discovered.length){
+    DISCOVERED.innerHTML =
+      '<p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Discovered</p>' +
+      discovered.map(discoveredRow).join('');
+  } else if (scanEmpty){
+    DISCOVERED.innerHTML =
+      '<p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Discovered</p>' +
+      '<p class="text-gray-500">Nothing found. Make sure the speaker is in pairing mode.</p>';
+  } else {
+    DISCOVERED.innerHTML = '';
+  }
+}
+
 async function refresh(){
   const { code, data } = await api('/ondeck/api/bluetooth/status');
   if (code !== 200 || !data.ok){
@@ -122,9 +143,14 @@ async function refresh(){
   const devs = data.devices || [];
   DEVICES.innerHTML = devs.length ? devs.map(d => deviceRow(d, data)).join('')
                                   : '<p class="text-gray-500">No paired speakers yet — scan to add one.</p>';
+  // Drop anything that's now paired/known from the discovered list so it
+  // doesn't show up twice, then re-render the (separate) discovered section.
+  knownMacs = new Set(devs.map(d => d.mac));
+  discovered = discovered.filter(d => !knownMacs.has(d.mac));
+  renderDiscovered();
 }
 
-DEVICES.addEventListener('click', async (e) => {
+async function onDeviceClick(e){
   const btn = e.target.closest('button[data-act]');
   if (!btn) return;
   const { act, mac, name } = btn.dataset;
@@ -142,17 +168,21 @@ DEVICES.addEventListener('click', async (e) => {
   const ok = res.code === 200 && res.data.ok !== false;
   banner(ok ? (act + ' ok') : (res.data.error || act + ' failed'), ok ? 'ok' : 'error');
   await refresh();
-});
+}
+// Both lists carry action buttons (Pair lives in #discovered, the rest in #devices).
+DEVICES.addEventListener('click', onDeviceClick);
+DISCOVERED.addEventListener('click', onDeviceClick);
 
 document.getElementById('rescan').addEventListener('click', async function(){
   this.disabled = true; this.textContent = 'Scanning…';
   const { code, data } = await api('/ondeck/api/bluetooth/scan', {seconds: 8});
   this.disabled = false; this.textContent = 'Scan for speakers';
   if (code !== 200 || !data.ok){ banner('Scan failed (Audio Pi unreachable?)', 'error'); return; }
-  const found = (data.devices || []);
-  DEVICES.insertAdjacentHTML('afterbegin',
-    '<p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Discovered</p>' +
-    (found.length ? found.map(discoveredRow).join('') : '<p class="text-gray-500 mb-3">Nothing found. Make sure the speaker is in pairing mode.</p>'));
+  // Show only speakers that aren't already paired; refresh() keeps this pruned.
+  const found = (data.devices || []).filter(d => !knownMacs.has(d.mac));
+  discovered = found;
+  scanEmpty = found.length === 0;
+  renderDiscovered();
 });
 
 AUTO.addEventListener('change', async () => {
