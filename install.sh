@@ -133,6 +133,27 @@ EOF
   sudo chmod 0440 /etc/sudoers.d/ondeck-rfkill
   sudo systemctl enable bluetooth 2>/dev/null || true
   sudo systemctl start bluetooth 2>/dev/null || true
+  # systemd-rfkill restores the *saved* (possibly blocked) state at every boot,
+  # so a one-time unblock above won't survive a reboot. This oneshot re-unblocks
+  # and powers the radio on each boot — and `enable --now` runs it immediately,
+  # which is what actually clears "Soft blocked: yes / Powered: no" during a
+  # re-install (no reboot needed).
+  sudo tee /etc/systemd/system/ondeck-bt-radio.service >/dev/null <<EOF
+[Unit]
+Description=OnDeck — unblock and power on the Bluetooth radio
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'rfkill unblock bluetooth || true; sleep 1; bluetoothctl power on || true'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now ondeck-bt-radio.service 2>/dev/null || true
   # Enable the user PipeWire stack so the bluez sink exists headless.
   sudo -u "$RUN_USER" XDG_RUNTIME_DIR="/run/user/$(id -u "$RUN_USER")" \
     systemctl --user enable --now pipewire pipewire-pulse wireplumber 2>/dev/null || true
@@ -169,7 +190,21 @@ fi
 # common cause of "both Pis were unreachable overnight, fine after reboot".
 # Disable it persistently.
 echo "==> Disabling Wi-Fi power saving on wlan0"
+# Turn it off right now for the running connection…
 sudo iw dev wlan0 set power_save off 2>/dev/null || true
+# …and at the source. On Bookworm, NetworkManager owns the radio and re-enables
+# power-save on every (re)connect, so an `iw` command alone doesn't stick — a
+# conf drop-in (2 = disable) makes it persistent. `reload` (not restart) avoids
+# dropping the SSH/Wi-Fi link you're installing over.
+if command -v nmcli >/dev/null 2>&1; then
+  sudo mkdir -p /etc/NetworkManager/conf.d
+  printf '[connection]\nwifi.powersave = 2\n' \
+    | sudo tee /etc/NetworkManager/conf.d/99-ondeck-no-powersave.conf >/dev/null
+  active="$(nmcli -t -f NAME connection show --active 2>/dev/null | head -1)"
+  [[ -n "$active" ]] && sudo nmcli connection modify "$active" 802-11-wireless.powersave 2 2>/dev/null || true
+  sudo systemctl reload NetworkManager 2>/dev/null || true
+fi
+# Belt-and-suspenders for non-NetworkManager (dhcpcd/wpa_supplicant) images.
 sudo tee /etc/systemd/system/ondeck-wifi-awake.service >/dev/null <<EOF
 [Unit]
 Description=OnDeck — disable wlan0 Wi-Fi power saving
