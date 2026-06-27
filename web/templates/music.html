@@ -86,14 +86,17 @@
           {% set is_mine = current_role == 'player' and req.requested_by and req.requested_by.startswith('p:') %}
           <div class="flex items-center gap-2 mt-3 flex-wrap">
             {% if is_staff %}
-              <!-- Upload the purchased audio → promotes to library with this rating -->
+              <!-- Promote to library (carries this rating). Uses the player's
+                   attached audio if there is one; otherwise upload the purchase. -->
               <form method="POST" action="/ondeck/music/request/{{ req.id }}/promote"
                     enctype="multipart/form-data" class="flex items-center gap-1.5">
-                <input type="file" name="file" accept="audio/*" required
+                <input type="file" name="file" accept="audio/*" {% if not req.uploaded_file %}required{% endif %}
                        class="block text-xs text-gray-400 max-w-[11rem] file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-gray-700 file:text-gray-200 file:text-xs hover:file:bg-gray-600">
                 <button type="submit"
-                        class="px-2.5 py-1 rounded bg-green-800 hover:bg-green-700 text-green-100 text-xs font-medium transition-colors whitespace-nowrap">⬆ To library</button>
+                        class="px-2.5 py-1 rounded bg-green-800 hover:bg-green-700 text-green-100 text-xs font-medium transition-colors whitespace-nowrap">
+                  {% if req.uploaded_file %}✓ Approve → library{% else %}⬆ To library{% endif %}</button>
               </form>
+              {% if req.uploaded_file %}<span class="text-xs text-green-400/80 self-center">🎵 audio attached</span>{% endif %}
               {% if req.status != 'sourced' %}
               <form method="POST" action="/ondeck/music/request/{{ req.id }}/status">
                 <input type="hidden" name="status" value="sourced">

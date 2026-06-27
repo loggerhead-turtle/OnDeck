@@ -564,7 +564,21 @@ def player_signup_post(code: str):
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "")
     confirm  = request.form.get("confirm", "")
+    first_name = request.form.get("first_name", "").strip()
+    last_name  = request.form.get("last_name", "").strip()
+    jersey_raw = request.form.get("jersey", "").strip()
 
+    if not first_name or not last_name:
+        flash("First and last name are required.", "error")
+        return redirect(url_for("player_signup", code=code))
+    # Jersey is optional; accept a number or leave it unset for the coach.
+    jersey = None
+    if jersey_raw:
+        try:
+            jersey = int(jersey_raw)
+        except ValueError:
+            flash("Jersey number must be a number (or left blank).", "error")
+            return redirect(url_for("player_signup", code=code))
     if not username:
         flash("Username is required.", "error")
         return redirect(url_for("player_signup", code=code))
@@ -586,9 +600,9 @@ def player_signup_post(code: str):
     pid = uuid.uuid4().hex
     with cfg._lock:
         cfg.players[pid] = {
-            "jersey": None,  # Admin will set this later
-            "first_name": "",
-            "last_name": username,  # Use username as temporary display name
+            "jersey": jersey,  # optional; coach can fill/adjust later
+            "first_name": first_name,
+            "last_name": last_name,
             "player_username": username,
             "player_password_hash": password_hash,
             "team_ids": link["team_ids"],
@@ -958,19 +972,28 @@ def ondeck_music_request():
     if not my_key:
         abort(403)
     title = request.form.get("title", "").strip()
-    spotify_url = request.form.get("spotify_url", "").strip()
-    if not title and not spotify_url:
-        flash("Add a song title or a Spotify link.", "error")
-        return redirect(url_for("ondeck_music"))
+    link = request.form.get("spotify_url", "").strip()
+    # Players may optionally attach an audio file with their suggestion.
+    uploaded = ""
+    f = request.files.get("file")
+    if f and f.filename:
+        name = Path(f.filename).name
+        MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+        f.save(str(MUSIC_DIR / name))
+        uploaded = name
+    if not title and not link and not uploaded:
+        flash("Add a song title, a link, or an audio file.", "error")
+        return redirect(request.referrer or url_for("ondeck_music"))
     cfg.add_song_request(
         my_key, my_name,
-        title=title or "(from Spotify link)",
+        title=title or (uploaded and Path(uploaded).stem.replace("_", " ")) or "(from link)",
         artist=request.form.get("artist", "").strip(),
-        spotify_url=spotify_url,
+        spotify_url=link,
         note=request.form.get("note", "").strip(),
+        uploaded_file=uploaded,
     )
-    flash("Song request submitted — an editor will review it.", "success")
-    return redirect(url_for("ondeck_music"))
+    flash("Song suggestion submitted — an editor will review it.", "success")
+    return redirect(request.referrer or url_for("ondeck_music"))
 
 
 @app.post("/ondeck/music/request/<rid>/rate")
@@ -1059,12 +1082,16 @@ def ondeck_request_promote(rid: str):
     if not req:
         abort(404)
     f = request.files.get("file")
-    if not f or not f.filename:
+    if f and f.filename:
+        name = Path(f.filename).name
+        MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+        f.save(str(MUSIC_DIR / name))
+    elif req.get("uploaded_file"):
+        # The player already attached the audio — just approve it.
+        name = req["uploaded_file"]
+    else:
         flash("Choose an audio file to upload for this song.", "error")
         return redirect(request.referrer or url_for("ondeck_spotify_import"))
-    name = Path(f.filename).name
-    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
-    f.save(str(MUSIC_DIR / name))
     sid = cfg.promote_request_to_song(rid, name)
     # Mirror to the Audio Pi just like a normal library upload.
     try:
@@ -1349,10 +1376,15 @@ def ondeck_my_profile():
     player_teams = [cfg.teams.get(tid) for tid in player.get("team_ids", [])]
     player_teams = [t for t in player_teams if t]  # Filter out None values
 
+    # Mid-inning songs the player can rate (the shared pool the coach curates).
+    my_key, _ = _rater_identity()
+    midinning_songs = _song_entries_with_ratings(my_key)
+
     return render_template("my_profile.html", pid=pid, player=player,
                           walkup_song=walkup_song, warmup_song=warmup_song,
                           midgame_song=midgame_song, songs=cfg.songs,
-                          player_teams=player_teams)
+                          player_teams=player_teams,
+                          midinning_songs=midinning_songs)
 
 
 @app.post("/ondeck/my-profile/upload")
