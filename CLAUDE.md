@@ -160,8 +160,12 @@ pair,connect,disconnect,forget,preferred}`. The portal page `/ondeck/bluetooth`
 manages it by **proxying** to the Audio Pi via `/ondeck/api/bluetooth/*` — so it
 works from any browser that can reach the Pi (the Stream Deck Pi's portal on the
 field Wi-Fi). The cloud portal can't route to the Pi, so there it shows "Audio Pi
-unreachable". Audio role installs PipeWire + `libspa-0.2-bluetooth` and enables
-user-session lingering so the bluez sink exists headless.
+unreachable". Audio role installs PipeWire + `libspa-0.2-bluetooth`, enables
+user-session lingering, and drops a WirePlumber config disabling
+`monitor.bluez.seat-monitoring` so the bluez sink exists headless. (Without
+that, WirePlumber gates its Bluetooth monitor on an active logind seat — which
+a headless/lingering-only Pi lacks — and `connect` fails with
+`org.bluez.Error.Failed br-connection-profile-unavailable`.)
 
 ## Render Deployment
 
