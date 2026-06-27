@@ -147,7 +147,7 @@ Wants=bluetooth.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'rfkill unblock bluetooth || true; sleep 1; bluetoothctl power on || true'
+ExecStart=/bin/sh -c 'rfkill unblock bluetooth || true; sleep 2; for i in 1 2 3 4 5; do bluetoothctl power on && break; sleep 2; done'
 
 [Install]
 WantedBy=multi-user.target
