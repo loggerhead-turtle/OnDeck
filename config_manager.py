@@ -27,6 +27,18 @@ MUSIC_DIR = ONDECK_HOME / "music"
 CONFIG_PATH = ONDECK_HOME / "config.json"
 
 
+def rating_summary(ratings: dict[str, Any] | None) -> dict[str, Any]:
+    """Aggregate a ``{rater_key: stars}`` map into ``{avg, count}``.
+
+    ``avg`` is a float rounded to two places (0.0 when there are no ratings).
+    Used by both the player rating page and the editor heat-map curation view.
+    """
+    vals = [int(v) for v in (ratings or {}).values() if v]
+    if not vals:
+        return {"avg": 0.0, "count": 0}
+    return {"avg": round(sum(vals) / len(vals), 2), "count": len(vals)}
+
+
 def _default_config() -> dict[str, Any]:
     """A fresh config with empty rosters and the built-in pages.
 
@@ -46,6 +58,10 @@ def _default_config() -> dict[str, Any]:
             "elevenlabs_voice_id": "",
             "elevenlabs_model": "eleven_multilingual_v2",
             "announcement_template": "Now batting, number {jersey}, {first_name} {last_name}",
+            # Spotify Web API (read-only) — turns a shared playlist link into a
+            # list of pending songs. App-level credentials; no per-user login.
+            "spotify_client_id": "",
+            "spotify_client_secret": "",
             # Cloud sync bookkeeping.
             "last_synced_at": None,
             "dirty": False,
@@ -87,6 +103,11 @@ def _default_config() -> dict[str, Any]:
         "devices": {},          # device_id -> {id, name, role, token, hostname,
                                 #               ip, paired_at, last_seen, revoked}
         "pairing_codes": [],    # [{code, name, role, created_at, expires_at, redeemed_by}]
+        # Player-submitted song suggestions (a Spotify link or just a title). An
+        # editor reviews these and sources the actual audio. Never auto-played.
+        # Each entry: {id, created_at, requested_by, requester_name, title,
+        #              artist, spotify_url, note, status, ratings:{rater:stars}}.
+        "song_requests": [],
     }
 
 
@@ -202,6 +223,13 @@ class ConfigManager:
             song.setdefault("alias", "")
             song.setdefault("base_song_id", None)  # null for originals; song_id for variants
             song.setdefault("created_by_player", None)  # player_id who created this variant
+            song.setdefault("ratings", {})  # rater_key -> stars (1..5)
+            song.setdefault("spotify_url", "")  # set when promoted from a Spotify request
+        # Backfill fields added to pending song requests after their first ship.
+        for req in self._data.get("song_requests", []):
+            req.setdefault("source", "player")
+            req.setdefault("album_art", "")
+            req.setdefault("ratings", {})
 
     # -- convenient accessors --------------------------------------------
 
@@ -248,6 +276,10 @@ class ConfigManager:
     @property
     def pairing_codes(self) -> list[Any]:
         return self._data.setdefault("pairing_codes", [])
+
+    @property
+    def song_requests(self) -> list[Any]:
+        return self._data.setdefault("song_requests", [])
 
     # -- Stream Deck helpers ---------------------------------------------
     # These mirror the read-only accessors the play-call deck relied on, so
@@ -377,9 +409,136 @@ class ConfigManager:
                 "start_ms": 0,
                 "end_ms": None,
                 "alias": "",  # User-friendly name override
+                "ratings": {},  # rater_key -> stars (1..5)
             }
             self.save()
         return sid
+
+    # -- ratings & song requests -----------------------------------------
+
+    def set_song_rating(self, song_id: str, rater_key: str, stars: int) -> bool:
+        """Record one rater's star rating (1-5) for a song.
+
+        ``stars`` of 0 (or out of range) clears that rater's vote. Returns
+        ``False`` if the song doesn't exist. Ratings are per-rater so a song
+        keeps an average across everyone who voted, and re-voting overwrites.
+        """
+        with self._lock:
+            song = self.songs.get(song_id)
+            if not song:
+                return False
+            ratings = song.setdefault("ratings", {})
+            stars = int(stars) if stars else 0
+            if 1 <= stars <= 5:
+                ratings[rater_key] = stars
+            else:
+                ratings.pop(rater_key, None)
+            self.save()
+            return True
+
+    def add_song_request(self, requester_key: str, requester_name: str,
+                         title: str, artist: str = "", spotify_url: str = "",
+                         note: str = "", source: str = "player",
+                         album_art: str = "") -> str:
+        """Add a pending song to the request queue. Returns its id.
+
+        ``source`` is ``player`` for a hand-typed suggestion or
+        ``spotify_import`` for a track pulled from a shared playlist.
+        """
+        rid = uuid.uuid4().hex
+        with self._lock:
+            self.song_requests.insert(0, {
+                "id": rid,
+                "created_at": time.time(),
+                "requested_by": requester_key,
+                "requester_name": requester_name,
+                "title": title,
+                "artist": artist,
+                "spotify_url": spotify_url,
+                "album_art": album_art,
+                "note": note,
+                "source": source,
+                "status": "open",   # open | sourced | dismissed
+                "ratings": {},      # rater_key -> stars (1..5)
+            })
+            self.save()
+        return rid
+
+    def promote_request_to_song(self, req_id: str, filename: str,
+                               display_name: str | None = None) -> str | None:
+        """Turn a pending request into a real library song.
+
+        The uploaded ``filename`` becomes the song's audio; the request's
+        accumulated player ratings carry over verbatim, and the pending entry
+        is removed. Returns the new song_id, or ``None`` if the request is gone.
+        """
+        with self._lock:
+            req = self._request(req_id)
+            if not req:
+                return None
+            name = display_name or req.get("title") or Path(filename).stem
+            artist = req.get("artist") or ""
+            if artist and artist.lower() not in name.lower():
+                name = f"{name} — {artist}"
+            sid = uuid.uuid4().hex
+            self.songs[sid] = {
+                "filename": filename,
+                "display_name": name,
+                "start_ms": 0,
+                "end_ms": None,
+                "alias": "",
+                "base_song_id": None,
+                "created_by_player": None,
+                "ratings": dict(req.get("ratings") or {}),
+                "spotify_url": req.get("spotify_url", ""),
+            }
+            self._data["song_requests"] = [
+                r for r in self.song_requests if r.get("id") != req_id
+            ]
+            self.save()
+        return sid
+
+    def _request(self, req_id: str) -> dict[str, Any] | None:
+        for r in self.song_requests:
+            if r.get("id") == req_id:
+                return r
+        return None
+
+    def set_request_rating(self, req_id: str, rater_key: str, stars: int) -> bool:
+        with self._lock:
+            req = self._request(req_id)
+            if not req:
+                return False
+            ratings = req.setdefault("ratings", {})
+            stars = int(stars) if stars else 0
+            if 1 <= stars <= 5:
+                ratings[rater_key] = stars
+            else:
+                ratings.pop(rater_key, None)
+            self.save()
+            return True
+
+    def set_request_status(self, req_id: str, status: str) -> bool:
+        if status not in ("open", "sourced", "dismissed"):
+            return False
+        with self._lock:
+            req = self._request(req_id)
+            if not req:
+                return False
+            req["status"] = status
+            self.save()
+            return True
+
+    def delete_song_request(self, req_id: str) -> bool:
+        with self._lock:
+            before = len(self.song_requests)
+            self._data["song_requests"] = [
+                r for r in self.song_requests if r.get("id") != req_id
+            ]
+            if len(self._data["song_requests"]) == before:
+                return False
+            self.save()
+            return True
 
     def get_or_create_player_song_variant(
         self, base_song_id: str, player_id: str
