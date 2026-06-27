@@ -1717,6 +1717,21 @@ def ondeck_teams():
     return render_template("team_management.html", teams=teams_list)
 
 
+@app.get("/ondeck/teams/<tid>")
+def ondeck_team_detail(tid: str):
+    _check_auth(["admin", "editor"])
+    if tid not in cfg.teams:
+        abort(404)
+    team = cfg.teams[tid]
+    # Get all players assigned to this team
+    team_players = []
+    for pid, player in cfg.players.items():
+        if tid in player.get("team_ids", []):
+            team_players.append((pid, player))
+    team_players.sort(key=lambda kv: (kv[1].get("jersey") or 999, kv[1].get("first_name", "")))
+    return render_template("team_detail.html", team_id=tid, team=team, team_players=team_players)
+
+
 @app.post("/ondeck/teams/add")
 def ondeck_teams_add():
     _check_auth(["admin", "editor"])
