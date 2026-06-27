@@ -151,6 +151,21 @@ def _find_user(username: str) -> dict | None:
     return None
 
 
+def _purge_auth_users_by_username(username: str) -> int:
+    """Delete any auth.json rows matching ``username`` (case-insensitive).
+
+    Used when a player is deleted so a leftover legacy ``player``-role row can't
+    resurrect the player on next login. Returns the number of rows removed.
+    """
+    if not username:
+        return 0
+    users = _load_users()
+    keep = [u for u in users if u["username"].lower() != username.lower()]
+    if len(keep) != len(users):
+        _save_users(keep)
+    return len(users) - len(keep)
+
+
 # ---------------------------------------------------------------------------
 # Notifications — coach-facing activity log of player-made changes
 # ---------------------------------------------------------------------------
@@ -265,6 +280,8 @@ def _check_auth(allowed_roles=None):
     if role == "editor":
         admin_only = {
             "admin_panel", "admin_add_user", "admin_delete_user", "admin_change_role",
+            "admin_reset_user_password", "admin_reset_player_password",
+            "admin_set_player_username", "admin_delete_player",
             "admin_homepage", "admin_homepage_save",
             "ondeck_settings", "ondeck_settings_save", "ondeck_settings_youtube_cookies",
         }
@@ -645,9 +662,27 @@ def player_signup_post(code: str):
 @app.get("/admin")
 def admin_panel():
     users = _load_users()
+    staff = [u for u in users if u.get("role") != "player"]
+    # Legacy/orphan rows in auth.json that authenticate as players. These are the
+    # ghosts that used to resurrect deleted players; surface them so they can be
+    # purged directly.
+    ghosts = [u for u in users if u.get("role") == "player"]
     players = cfg.players_by_jersey()
+
+    # Every username currently in play, so the template can flag collisions
+    # between the two credential stores (auth.json vs cfg.players).
+    seen: dict[str, int] = {}
+    for u in users:
+        seen[u["username"].lower()] = seen.get(u["username"].lower(), 0) + 1
+    for _pid, p in players:
+        un = (p.get("player_username") or "").lower()
+        if un:
+            seen[un] = seen.get(un, 0) + 1
+    collisions = {un for un, n in seen.items() if n > 1}
+
     teams = cfg.teams
-    return render_template("admin.html", users=users, players=players, teams=teams)
+    return render_template("admin.html", users=users, staff=staff, ghosts=ghosts,
+                           players=players, teams=teams, collisions=collisions)
 
 
 @app.post("/admin/players/<pid>/teams")
@@ -718,6 +753,101 @@ def admin_change_role(uid: str):
     target["role"] = new_role
     _save_users(users)
     flash(f"Updated '{target['username']}' to {new_role}.", "success")
+    return redirect(url_for("admin_panel"))
+
+
+@app.post("/admin/users/<uid>/password")
+def admin_reset_user_password(uid: str):
+    """Set a new password for a staff (admin/editor) account."""
+    password = request.form.get("password", "")
+    users = _load_users()
+    target = next((u for u in users if u["id"] == uid), None)
+    if not target:
+        flash("User not found.", "error")
+        return redirect(url_for("admin_panel"))
+    if len(password) < 8:
+        flash("Password must be at least 8 characters.", "error")
+        return redirect(url_for("admin_panel"))
+    target["password_hash"] = generate_password_hash(password)
+    _save_users(users)
+    flash(f"Password reset for '{target['username']}'.", "success")
+    return redirect(url_for("admin_panel"))
+
+
+@app.post("/admin/players/<pid>/password")
+def admin_reset_player_password(pid: str):
+    """Set a new login password for a player account."""
+    player = cfg.players.get(pid)
+    if not player:
+        flash("Player not found.", "error")
+        return redirect(url_for("admin_panel"))
+    if not (player.get("player_username") or "").strip():
+        flash("Set a username for this player before assigning a password.", "error")
+        return redirect(url_for("admin_panel"))
+    password = request.form.get("password", "")
+    if len(password) < 6:
+        flash("Password must be at least 6 characters.", "error")
+        return redirect(url_for("admin_panel"))
+    force_reset = request.form.get("force_reset") == "on"
+    with cfg._lock:
+        player["player_password_hash"] = generate_password_hash(password)
+        player["force_reset"] = force_reset
+        cfg.save()
+    flash(f"Password set for @{player['player_username']}.", "success")
+    return redirect(url_for("admin_panel"))
+
+
+@app.post("/admin/players/<pid>/username")
+def admin_set_player_username(pid: str):
+    """Change a player's login username, or clear their login entirely."""
+    player = cfg.players.get(pid)
+    if not player:
+        flash("Player not found.", "error")
+        return redirect(url_for("admin_panel"))
+    username = request.form.get("player_username", "").strip()
+
+    if not username:
+        # Clearing the username removes the login (username + password) so the
+        # player can no longer sign in. The player record itself is kept.
+        old = player.get("player_username") or ""
+        with cfg._lock:
+            player["player_username"] = ""
+            player["player_password_hash"] = None
+            player["force_reset"] = False
+            cfg.save()
+        if old:
+            _purge_auth_users_by_username(old)
+        flash("Login removed for player.", "success")
+        return redirect(url_for("admin_panel"))
+
+    # Reject a username already taken by another account in either store.
+    if any(u["username"].lower() == username.lower() for u in _load_users()):
+        flash(f"Username '{username}' is already used by a staff/legacy account.", "error")
+        return redirect(url_for("admin_panel"))
+    for other_pid, other in cfg.players.items():
+        if other_pid != pid and (other.get("player_username") or "").lower() == username.lower():
+            flash(f"Username '{username}' is already used by another player.", "error")
+            return redirect(url_for("admin_panel"))
+
+    with cfg._lock:
+        player["player_username"] = username
+        cfg.save()
+    flash(f"Username set to @{username}.", "success")
+    return redirect(url_for("admin_panel"))
+
+
+@app.post("/admin/players/<pid>/delete")
+def admin_delete_player(pid: str):
+    """Delete a player outright from the admin page (with ghost purge)."""
+    with cfg._lock:
+        player = cfg.players.pop(pid, None)
+        cfg.save()
+    if not player:
+        flash("Player not found.", "error")
+        return redirect(url_for("admin_panel"))
+    _purge_auth_users_by_username(player.get("player_username") or "")
+    name = f"#{player.get('jersey', '')} {player.get('first_name', '')} {player.get('last_name', '')}".strip()
+    flash(f"Deleted player {name}.", "success")
     return redirect(url_for("admin_panel"))
 
 
@@ -1219,6 +1349,9 @@ def ondeck_players_delete(pid: str):
         player = cfg.players.pop(pid, None)
         cfg.save()
     if player:
+        # Purge any legacy auth.json row sharing this username, otherwise the
+        # login handler's legacy-player path would recreate the player.
+        _purge_auth_users_by_username(player.get("player_username") or "")
         flash(f"Deleted #{player['jersey']} {player['first_name']} {player['last_name']}.", "success")
     return redirect(url_for("ondeck_players"))
 
