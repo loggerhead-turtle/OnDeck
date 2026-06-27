@@ -58,6 +58,10 @@ def _default_config() -> dict[str, Any]:
             "elevenlabs_voice_id": "",
             "elevenlabs_model": "eleven_multilingual_v2",
             "announcement_template": "Now batting, number {jersey}, {first_name} {last_name}",
+            # Spotify Web API (read-only) — turns a shared playlist link into a
+            # list of pending songs. App-level credentials; no per-user login.
+            "spotify_client_id": "",
+            "spotify_client_secret": "",
             # Cloud sync bookkeeping.
             "last_synced_at": None,
             "dirty": False,
@@ -220,6 +224,12 @@ class ConfigManager:
             song.setdefault("base_song_id", None)  # null for originals; song_id for variants
             song.setdefault("created_by_player", None)  # player_id who created this variant
             song.setdefault("ratings", {})  # rater_key -> stars (1..5)
+            song.setdefault("spotify_url", "")  # set when promoted from a Spotify request
+        # Backfill fields added to pending song requests after their first ship.
+        for req in self._data.get("song_requests", []):
+            req.setdefault("source", "player")
+            req.setdefault("album_art", "")
+            req.setdefault("ratings", {})
 
     # -- convenient accessors --------------------------------------------
 
@@ -428,8 +438,13 @@ class ConfigManager:
 
     def add_song_request(self, requester_key: str, requester_name: str,
                          title: str, artist: str = "", spotify_url: str = "",
-                         note: str = "") -> str:
-        """Add a player-suggested song to the request queue. Returns its id."""
+                         note: str = "", source: str = "player",
+                         album_art: str = "") -> str:
+        """Add a pending song to the request queue. Returns its id.
+
+        ``source`` is ``player`` for a hand-typed suggestion or
+        ``spotify_import`` for a track pulled from a shared playlist.
+        """
         rid = uuid.uuid4().hex
         with self._lock:
             self.song_requests.insert(0, {
@@ -440,12 +455,48 @@ class ConfigManager:
                 "title": title,
                 "artist": artist,
                 "spotify_url": spotify_url,
+                "album_art": album_art,
                 "note": note,
+                "source": source,
                 "status": "open",   # open | sourced | dismissed
                 "ratings": {},      # rater_key -> stars (1..5)
             })
             self.save()
         return rid
+
+    def promote_request_to_song(self, req_id: str, filename: str,
+                               display_name: str | None = None) -> str | None:
+        """Turn a pending request into a real library song.
+
+        The uploaded ``filename`` becomes the song's audio; the request's
+        accumulated player ratings carry over verbatim, and the pending entry
+        is removed. Returns the new song_id, or ``None`` if the request is gone.
+        """
+        with self._lock:
+            req = self._request(req_id)
+            if not req:
+                return None
+            name = display_name or req.get("title") or Path(filename).stem
+            artist = req.get("artist") or ""
+            if artist and artist.lower() not in name.lower():
+                name = f"{name} — {artist}"
+            sid = uuid.uuid4().hex
+            self.songs[sid] = {
+                "filename": filename,
+                "display_name": name,
+                "start_ms": 0,
+                "end_ms": None,
+                "alias": "",
+                "base_song_id": None,
+                "created_by_player": None,
+                "ratings": dict(req.get("ratings") or {}),
+                "spotify_url": req.get("spotify_url", ""),
+            }
+            self._data["song_requests"] = [
+                r for r in self.song_requests if r.get("id") != req_id
+            ]
+            self.save()
+        return sid
 
     def _request(self, req_id: str) -> dict[str, Any] | None:
         for r in self.song_requests:

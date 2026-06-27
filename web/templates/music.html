@@ -43,13 +43,21 @@
   <!-- Song requests queue -->
   {% if requests %}
   <div class="mb-8">
-    <h2 class="font-semibold text-white mb-3 flex items-center gap-2"><span>📝</span> Song Requests</h2>
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-semibold text-white flex items-center gap-2"><span>📝</span> Song Requests</h2>
+      {% if is_staff %}
+      <a href="/ondeck/spotify-import"
+         class="text-xs px-3 py-1.5 rounded-lg bg-green-800 hover:bg-green-700 text-green-100 transition-colors">🎧 Import from Spotify</a>
+      {% endif %}
+    </div>
     <div class="space-y-2">
       {% for r in requests %}
         {% set req = r.req %}
         <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-4 {% if req.status == 'sourced' %}opacity-60{% elif req.status == 'dismissed' %}opacity-40{% endif %}">
           <div class="flex items-start justify-between gap-3 flex-wrap">
-            <div class="min-w-0">
+            <div class="min-w-0 flex items-start gap-3">
+              {% if req.album_art %}<img src="{{ req.album_art }}" alt="" class="w-10 h-10 rounded shrink-0 object-cover">{% endif %}
+              <div class="min-w-0">
               <div class="font-medium text-white">
                 {{ req.title }}{% if req.artist %} <span class="text-gray-400 font-normal">— {{ req.artist }}</span>{% endif %}
                 {% if req.status == 'sourced' %}<span class="ml-2 text-xs px-2 py-0.5 rounded-full bg-green-900/60 text-green-300 border border-green-700/50">✓ Added</span>
@@ -61,6 +69,7 @@
                 <a href="{{ req.spotify_url }}" target="_blank" rel="noopener"
                    class="inline-flex items-center gap-1 text-xs text-green-400 hover:text-green-300 mt-1">▶ Open in Spotify</a>
               {% endif %}
+              </div>
             </div>
             <div class="flex flex-col items-end gap-1 shrink-0">
               <!-- Request rating (community) -->
@@ -74,8 +83,16 @@
           </div>
           <!-- Editor / requester actions -->
           {% set is_mine = current_role == 'player' and req.requested_by and req.requested_by.startswith('p:') %}
-          <div class="flex items-center gap-2 mt-3">
+          <div class="flex items-center gap-2 mt-3 flex-wrap">
             {% if is_staff %}
+              <!-- Upload the purchased audio → promotes to library with this rating -->
+              <form method="POST" action="/ondeck/music/request/{{ req.id }}/promote"
+                    enctype="multipart/form-data" class="flex items-center gap-1.5">
+                <input type="file" name="file" accept="audio/*" required
+                       class="block text-xs text-gray-400 max-w-[11rem] file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-gray-700 file:text-gray-200 file:text-xs hover:file:bg-gray-600">
+                <button type="submit"
+                        class="px-2.5 py-1 rounded bg-green-800 hover:bg-green-700 text-green-100 text-xs font-medium transition-colors whitespace-nowrap">⬆ To library</button>
+              </form>
               {% if req.status != 'sourced' %}
               <form method="POST" action="/ondeck/music/request/{{ req.id }}/status">
                 <input type="hidden" name="status" value="sourced">

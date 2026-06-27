@@ -7,10 +7,13 @@ Sync endpoints (/sync/*) are unchanged so the Pi agent keeps working.
 
 from __future__ import annotations
 
+import base64
 import functools
 import hashlib
 import json
+import re
 import sys
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -46,6 +49,10 @@ SYNC_TOKEN          = os.environ.get("ONDECK_SYNC_TOKEN", "")
 # these env vars act as fallbacks when the config fields are left blank.
 ELEVENLABS_API_KEY  = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "")
+# Spotify Web API (read-only playlist lookups). Configured in Settings or via
+# these env-var fallbacks. App-level credentials — no per-player Spotify login.
+SPOTIFY_CLIENT_ID     = os.environ.get("SPOTIFY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
 
 AUTH_FILE      = ONDECK_HOME / "auth.json"
 COOKIES_FILE   = ONDECK_HOME / "youtube_cookies.txt"
@@ -996,6 +1003,73 @@ def ondeck_request_delete(rid: str):
     cfg.delete_song_request(rid)
     flash("Request removed.", "success")
     return redirect(request.referrer or url_for("ondeck_music"))
+
+
+@app.get("/ondeck/spotify-import")
+def ondeck_spotify_import():
+    """Admin page: paste a shared playlist link; manage the pending queue."""
+    my_key, _ = _rater_identity()
+    pending = [r for r in _request_entries(my_key)
+               if r["req"].get("status") != "dismissed"]
+    return render_template("spotify_import.html", requests=pending,
+                           spotify_ready=_spotify_ready())
+
+
+@app.post("/ondeck/spotify-import")
+def ondeck_spotify_import_post():
+    """Read a shared playlist and add its tracks to the pending queue."""
+    url = request.form.get("playlist_url", "").strip()
+    tracks, err = _spotify_playlist_tracks(url)
+    if err:
+        flash(err, "error")
+        return redirect(url_for("ondeck_spotify_import"))
+    # Skip tracks already pending or already in the library (by Spotify URL).
+    seen = {r.get("spotify_url") for r in cfg.song_requests if r.get("spotify_url")}
+    seen |= {s.get("spotify_url") for s in cfg.songs.values() if s.get("spotify_url")}
+    added = skipped = 0
+    for t in tracks:
+        if t["spotify_url"] and t["spotify_url"] in seen:
+            skipped += 1
+            continue
+        cfg.add_song_request("spotify:import", "Spotify playlist",
+                             title=t["title"], artist=t["artist"],
+                             spotify_url=t["spotify_url"],
+                             source="spotify_import", album_art=t["album_art"])
+        if t["spotify_url"]:
+            seen.add(t["spotify_url"])
+        added += 1
+    msg = f"Imported {added} song{'s' if added != 1 else ''} from Spotify."
+    if skipped:
+        msg = (f"Imported {added}, skipped {skipped} already pending or in the "
+               f"library.")
+    flash(msg, "success")
+    return redirect(url_for("ondeck_spotify_import"))
+
+
+@app.post("/ondeck/music/request/<rid>/promote")
+def ondeck_request_promote(rid: str):
+    """Staff-only: upload the purchased audio; promote the pending song to the
+    library, carrying its player rating over verbatim."""
+    req = cfg._request(rid)
+    if not req:
+        abort(404)
+    f = request.files.get("file")
+    if not f or not f.filename:
+        flash("Choose an audio file to upload for this song.", "error")
+        return redirect(request.referrer or url_for("ondeck_spotify_import"))
+    name = Path(f.filename).name
+    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    f.save(str(MUSIC_DIR / name))
+    sid = cfg.promote_request_to_song(rid, name)
+    # Mirror to the Audio Pi just like a normal library upload.
+    try:
+        with open(str(MUSIC_DIR / name), "rb") as fh:
+            rq.post(_audio_pi_url("/upload"), files={"file": (name, fh)}, timeout=30)
+    except Exception:
+        pass
+    if sid:
+        flash(f'Added "{req.get("title")}" to the library with its rating.', "success")
+    return redirect(request.referrer or url_for("ondeck_spotify_import"))
 
 
 # ---------------------------------------------------------------------------
@@ -2122,7 +2196,9 @@ def ondeck_settings_hub():
 def ondeck_settings():
     return render_template("settings.html", system=cfg.system,
                            has_yt_cookies=COOKIES_FILE.exists(),
-                           elevenlabs_key_set=bool(_elevenlabs_key()))
+                           elevenlabs_key_set=bool(_elevenlabs_key()),
+                           spotify_ready=_spotify_ready(),
+                           spotify_secret_set=bool(_spotify_creds()[1]))
 
 
 @app.post("/ondeck/settings/save")
@@ -2152,6 +2228,15 @@ def ondeck_settings_save():
             s["elevenlabs_api_key"] = new_key
         elif request.form.get("clear_elevenlabs_key") == "on":
             s["elevenlabs_api_key"] = ""
+
+        # Spotify Web API credentials (read-only playlist import).
+        s["spotify_client_id"] = request.form.get("spotify_client_id",
+                                                  s.get("spotify_client_id", "")).strip()
+        new_secret = request.form.get("spotify_client_secret", "").strip()
+        if new_secret:
+            s["spotify_client_secret"] = new_secret
+        elif request.form.get("clear_spotify_secret") == "on":
+            s["spotify_client_secret"] = ""
 
         cfg.save(mark_dirty=False)
     flash("Settings saved.", "success")
@@ -2261,6 +2346,95 @@ def sync_pair():
 def _elevenlabs_key() -> str:
     """API key from config, falling back to the ELEVENLABS_API_KEY env var."""
     return (cfg.system.get("elevenlabs_api_key") or ELEVENLABS_API_KEY).strip()
+
+
+# -- Spotify (read-only playlist lookups) -----------------------------------
+
+_spotify_tok = {"token": "", "exp": 0.0}  # cached client-credentials token
+
+
+def _spotify_creds() -> tuple[str, str]:
+    cid = (cfg.system.get("spotify_client_id") or SPOTIFY_CLIENT_ID).strip()
+    secret = (cfg.system.get("spotify_client_secret") or SPOTIFY_CLIENT_SECRET).strip()
+    return cid, secret
+
+
+def _spotify_ready() -> bool:
+    cid, secret = _spotify_creds()
+    return bool(cid and secret)
+
+
+def _spotify_token() -> str | None:
+    """A cached client-credentials access token, or None if unconfigured/failed."""
+    cid, secret = _spotify_creds()
+    if not (cid and secret):
+        return None
+    if _spotify_tok["token"] and _spotify_tok["exp"] - 30 > time.time():
+        return _spotify_tok["token"]
+    auth = base64.b64encode(f"{cid}:{secret}".encode()).decode()
+    try:
+        r = rq.post("https://accounts.spotify.com/api/token",
+                    data={"grant_type": "client_credentials"},
+                    headers={"Authorization": f"Basic {auth}"}, timeout=15)
+    except rq.RequestException:
+        return None
+    if r.status_code != 200:
+        return None
+    d = r.json()
+    _spotify_tok["token"] = d.get("access_token", "")
+    _spotify_tok["exp"] = time.time() + int(d.get("expires_in", 3600))
+    return _spotify_tok["token"] or None
+
+
+def _spotify_playlist_id(url: str) -> str | None:
+    """Pull the base-62 playlist id out of any Spotify playlist link/URI."""
+    m = re.search(r"playlist[:/]([A-Za-z0-9]+)", url or "")
+    return m.group(1) if m else None
+
+
+def _spotify_playlist_tracks(url: str) -> tuple[list[dict] | None, str | None]:
+    """Return (tracks, None) or (None, error_message) for a playlist link.
+
+    Each track: {title, artist, spotify_url, album_art}. Pages through the
+    whole playlist. Read-only — no audio is fetched, just the metadata + link.
+    """
+    pid = _spotify_playlist_id(url)
+    if not pid:
+        return None, "That doesn't look like a Spotify playlist link."
+    tok = _spotify_token()
+    if not tok:
+        return None, "Spotify isn't connected — add your API credentials in Settings."
+    fields = "next,items(track(name,artists(name),external_urls(spotify),album(images)))"
+    next_url = (f"https://api.spotify.com/v1/playlists/{pid}/tracks"
+                f"?limit=100&fields={fields}")
+    out: list[dict] = []
+    while next_url:
+        try:
+            r = rq.get(next_url, headers={"Authorization": f"Bearer {tok}"}, timeout=20)
+        except rq.RequestException:
+            return None, "Couldn't reach Spotify. Try again in a moment."
+        if r.status_code == 404:
+            return None, "Playlist not found — make sure it's public or shared by link."
+        if r.status_code == 401:
+            _spotify_tok["token"] = ""  # force refresh next time
+            return None, "Spotify rejected the credentials. Check them in Settings."
+        if r.status_code != 200:
+            return None, f"Spotify returned an error ({r.status_code})."
+        d = r.json()
+        for item in d.get("items", []):
+            t = item.get("track") or {}
+            if not t.get("name"):
+                continue
+            artists = ", ".join(a.get("name", "") for a in t.get("artists", []) if a.get("name"))
+            imgs = (t.get("album") or {}).get("images") or []
+            out.append({
+                "title": t["name"],
+                "artist": artists,
+                "spotify_url": (t.get("external_urls") or {}).get("spotify", ""),
+                "album_art": imgs[-1]["url"] if imgs else "",
+            })
+        next_url = d.get("next")
+    return out, None
 
 
 def _elevenlabs_voice() -> str:
