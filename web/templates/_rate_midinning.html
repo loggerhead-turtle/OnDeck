@@ -1,0 +1,114 @@
+{# Mid-inning suggest-a-song module + rateable song list.
+   Players request songs (link or file), rate the existing mid-inning pool,
+   but never assign them — assignment is an editor job. Self-contained: its
+   own scoped script wires the star widgets without colliding with the host
+   page. Expects `midinning_songs` (entries from _song_entries_with_ratings). #}
+{% from '_music_link.html' import link_badge %}
+
+<div id="midinning-rate">
+
+  <!-- Suggest a song -->
+  <div class="mb-5 p-4 rounded-lg bg-gray-900/50 border border-gray-600/30">
+    <h3 class="text-xs text-gray-300 font-semibold uppercase tracking-wider mb-1">Suggest a Mid-Inning Song</h3>
+    <p class="text-xs text-gray-500 mb-3">
+      Paste a link from <span class="text-gray-300">Spotify, YouTube, Apple Music</span> — anywhere —
+      or upload an audio file. An editor reviews it before it goes in the rotation.
+    </p>
+    <form method="POST" action="/ondeck/music/request" enctype="multipart/form-data" class="space-y-2">
+      <div class="grid sm:grid-cols-2 gap-2">
+        <input type="text" name="title" placeholder="Song title"
+               class="bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500">
+        <input type="text" name="artist" placeholder="Artist (optional)"
+               class="bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500">
+      </div>
+      <input type="url" name="spotify_url" placeholder="Paste a song link — Spotify, YouTube, Apple Music…"
+             class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500">
+      <div class="flex items-center gap-2 flex-wrap">
+        <input type="file" name="file" accept="audio/*"
+               class="block text-xs text-gray-400 file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-gray-700 file:text-gray-200 file:text-xs hover:file:bg-gray-600">
+        <span class="text-xs text-gray-600">optional audio file</span>
+        <button type="submit"
+                class="ml-auto px-4 py-2 bg-green-700 hover:bg-green-600 text-white text-sm font-semibold rounded-lg transition-colors">
+          Submit
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Rate the current mid-inning songs -->
+  <h3 class="text-xs text-gray-300 font-semibold uppercase tracking-wider mb-3">Rate the Mid-Inning Songs</h3>
+  {% if midinning_songs %}
+  <div class="space-y-2">
+    {% for s in midinning_songs %}
+      <div class="bg-gray-900 rounded-lg border border-gray-700/50 px-4 py-3 flex items-center justify-between gap-3">
+        <div class="min-w-0">
+          <div class="font-medium text-white truncate">{{ s.name }}</div>
+          <div class="text-xs text-gray-500 mt-0.5 flex items-center gap-2 flex-wrap">
+            <span id="mi-avg-{{ s.sid }}">
+              {% if s.count %}★ {{ '%.1f'|format(s.avg) }} · {{ s.count }} vote{% if s.count != 1 %}s{% endif %}{% else %}no ratings yet{% endif %}
+            </span>
+            {% if s.song.spotify_url %}{{ link_badge(s.song.spotify_url) }}{% endif %}
+          </div>
+        </div>
+        <div class="flex items-center gap-3 shrink-0">
+          <div class="star-rate flex items-center" data-kind="song" data-id="{{ s.sid }}" data-mine="{{ s.mine }}">
+            {% for i in range(1, 6) %}<button type="button" data-v="{{ i }}" class="text-xl leading-none px-0.5 text-gray-600">★</button>{% endfor %}
+          </div>
+          <button type="button"
+                  onclick="OnDeck.preview({ file: '{{ s.song.filename }}', start_ms: {{ s.song.start_ms or 0 }}, end_ms: {{ s.song.end_ms if s.song.end_ms is not none else 'null' }} })"
+                  class="px-2.5 py-1 rounded bg-gray-700 hover:bg-green-700 text-gray-300 hover:text-white text-xs font-medium transition-colors">▶</button>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="text-sm text-gray-600 text-center py-6">
+    No mid-inning songs yet — once your coach adds some, they'll show up here to rate.
+  </div>
+  {% endif %}
+</div>
+
+<script>
+(function () {
+  const root = document.getElementById('midinning-rate');
+  if (!root || root.dataset.wired) return;
+  root.dataset.wired = '1';
+
+  function paint(widget, n) {
+    const mine = parseInt(widget.dataset.mine || '0', 10);
+    const v = (n == null) ? mine : n;
+    widget.querySelectorAll('button').forEach(b => {
+      const bv = parseInt(b.dataset.v, 10);
+      b.classList.toggle('text-yellow-400', bv <= v);
+      b.classList.toggle('text-gray-600', bv > v);
+    });
+  }
+
+  root.querySelectorAll('.star-rate').forEach(widget => {
+    const id = widget.dataset.id;
+    paint(widget);
+    widget.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('mouseenter', () => paint(widget, parseInt(btn.dataset.v, 10)));
+      btn.addEventListener('click', async () => {
+        let stars = parseInt(btn.dataset.v, 10);
+        if (stars === parseInt(widget.dataset.mine || '0', 10)) stars = 0;  // click again to clear
+        const r = await fetch(`/ondeck/music/${id}/rate`, {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'fetch' },
+          body: new URLSearchParams({ stars })
+        });
+        if (r.ok) {
+          const d = await r.json();
+          widget.dataset.mine = d.mine;
+          paint(widget);
+          const avg = document.getElementById('mi-avg-' + id);
+          if (avg) avg.textContent = d.count
+            ? `★ ${d.avg.toFixed(1)} · ${d.count} vote${d.count !== 1 ? 's' : ''}`
+            : 'no ratings yet';
+        }
+      });
+    });
+    widget.addEventListener('mouseleave', () => paint(widget));
+  });
+})();
+</script>

@@ -229,6 +229,7 @@ class ConfigManager:
         for req in self._data.get("song_requests", []):
             req.setdefault("source", "player")
             req.setdefault("album_art", "")
+            req.setdefault("uploaded_file", "")
             req.setdefault("ratings", {})
 
     # -- convenient accessors --------------------------------------------
@@ -410,6 +411,7 @@ class ConfigManager:
                 "end_ms": None,
                 "alias": "",  # User-friendly name override
                 "ratings": {},  # rater_key -> stars (1..5)
+                "spotify_url": "",
             }
             self.save()
         return sid
@@ -439,7 +441,7 @@ class ConfigManager:
     def add_song_request(self, requester_key: str, requester_name: str,
                          title: str, artist: str = "", spotify_url: str = "",
                          note: str = "", source: str = "player",
-                         album_art: str = "") -> str:
+                         album_art: str = "", uploaded_file: str = "") -> str:
         """Add a pending song to the request queue. Returns its id.
 
         ``source`` is ``player`` for a hand-typed suggestion or
@@ -458,6 +460,7 @@ class ConfigManager:
                 "album_art": album_art,
                 "note": note,
                 "source": source,
+                "uploaded_file": uploaded_file,  # audio a player attached, if any
                 "status": "open",   # open | sourced | dismissed
                 "ratings": {},      # rater_key -> stars (1..5)
             })
