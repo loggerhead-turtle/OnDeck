@@ -1498,7 +1498,7 @@ def ondeck_api_volume():
 @app.get("/ondeck/bluetooth")
 def ondeck_bluetooth():
     _check_auth(["admin", "editor"])
-    return render_template("bluetooth.html")
+    return render_template("bluetooth.html", cloud_mode=CLOUD_MODE)
 
 
 @app.get("/ondeck/api/bluetooth/status")

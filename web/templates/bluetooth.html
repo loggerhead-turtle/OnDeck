@@ -7,6 +7,15 @@
   <button id="rescan" class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-medium">Scan for speakers</button>
 </div>
 
+{% if cloud_mode %}
+<div class="mb-4 px-4 py-3 rounded-lg text-sm bg-amber-900/30 text-amber-200 border border-amber-700/40">
+  <b>Manage Bluetooth from the field portal.</b> This is the cloud site, which
+  can't reach the Audio Pi on your local network — so the speaker will always
+  read as "unreachable" here. Open the Stream Deck Pi's portal on the field
+  Wi-Fi instead: <span class="font-mono">http://&lt;stream-deck-pi-ip&gt;:5000/ondeck/bluetooth</span>.
+</div>
+{% endif %}
+
 <p id="banner" class="hidden mb-4 px-4 py-2 rounded-lg text-sm"></p>
 
 <div class="grid gap-6 lg:grid-cols-2">

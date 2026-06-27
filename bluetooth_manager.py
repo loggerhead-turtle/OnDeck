@@ -127,7 +127,27 @@ class BluetoothManager:
 
     # -- operations -------------------------------------------------------
 
+    def _unblock_radio(self) -> None:
+        """Clear an rfkill soft-block on the Bluetooth radio.
+
+        A soft-block is common on a Raspberry Pi — and the OnDeck setup hotspot
+        toggles the radios — which makes ``bluetoothctl power on`` fail silently,
+        leaving the speaker page stuck on "radio off". ``rfkill`` needs root, so
+        we try a passwordless sudo (installed by install.sh) first, then a plain
+        call, and ignore any failure so a locked-down box never crashes here.
+        """
+        for cmd in (["sudo", "-n", "rfkill", "unblock", "bluetooth"],
+                    ["rfkill", "unblock", "bluetooth"]):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True,
+                                   check=False, timeout=8)
+                if r.returncode == 0:
+                    return
+            except Exception:
+                continue
+
     def power_on(self) -> None:
+        self._unblock_radio()
         self._ctl("power", "on", timeout=8)
 
     def powered(self) -> bool:
