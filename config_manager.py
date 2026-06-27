@@ -67,6 +67,8 @@ def _default_config() -> dict[str, Any]:
             "dirty": False,
             # Signup link settings.
             "signup_link_expires_hours": 168,  # 1 week
+            # Deck button editor presentation: "sidebar" (docked) or "modal".
+            "deck_editor_mode": "sidebar",
         },
         "players": {},          # player_id -> player dict
         "songs": {},            # song_id -> song dict
@@ -140,6 +142,23 @@ def _default_pages() -> dict[str, Any]:
 # reference them — a class-scope comprehension can't see sibling class vars).
 _DECK_FIXED_SLOTS = {0, 8, 16, 24, 25, 26, 27, 28, 29, 30, 31}
 _DECK_CONTENT_SLOTS = [i for i in range(32) if i not in _DECK_FIXED_SLOTS]
+
+# Stream Deck XL grid geometry (used to label blank keys "page.col.row").
+DECK_COLS = 8
+DECK_ROWS = 4
+
+# Button fonts offered in the deck editor. ``file`` is a DejaVu face shipped on
+# Raspberry Pi OS (fonts-dejavu); ``css``/``weight`` drive the browser preview.
+DECK_FONTS: dict[str, dict[str, Any]] = {
+    "sans_bold":  {"label": "Sans Bold",  "file": "DejaVuSans-Bold.ttf",          "css": "sans-serif", "weight": 700},
+    "sans":       {"label": "Sans",       "file": "DejaVuSans.ttf",               "css": "sans-serif", "weight": 400},
+    "condensed":  {"label": "Condensed",  "file": "DejaVuSansCondensed-Bold.ttf", "css": "'Arial Narrow', sans-serif", "weight": 700},
+    "serif":      {"label": "Serif",      "file": "DejaVuSerif-Bold.ttf",         "css": "serif",      "weight": 700},
+    "mono":       {"label": "Mono",       "file": "DejaVuSansMono-Bold.ttf",      "css": "monospace",  "weight": 700},
+}
+DECK_FONT_ORDER = ["sans_bold", "sans", "condensed", "serif", "mono"]
+DECK_DEFAULT_FONT = "sans_bold"
+DECK_DEFAULT_FONT_SIZE = 13
 
 
 class ConfigManager:
@@ -656,24 +675,95 @@ class ConfigManager:
     def set_page_slot(self, page_id: str, idx: int, slot: dict | None) -> None:
         """Assign or clear one content key on a page.
 
-        ``slot`` = {type, ref, label, color}. A None/blank type clears the key.
-        Fixed nav/transport keys are owned by the deck and ignored here.
+        ``slot`` carries the button's assignment plus its Companion-style look
+        and per-action settings::
+
+            {type, ref, label,            # what the key does
+             color, text_color,           # background / foreground hex
+             font, font_size,             # text style (see DECK_FONTS)
+             mode, fade_out, fade_ms}     # audio/transport action options
+
+        A None/blank type clears the key. Fixed nav/transport keys are owned by
+        the deck and ignored here.
         """
         idx = int(idx)
         if page_id not in self.pages or idx in self.DECK_FIXED_SLOTS:
             return
         with self._lock:
             slots = self.pages[page_id].setdefault("slots", {})
-            if not slot or slot.get("type") in (None, "", "blank"):
+            kind = (slot or {}).get("type")
+            label = ((slot or {}).get("label") or "").strip()
+            # A key with no action but some text is a "text holder": keep it
+            # (as type "text") so it displays without doing anything on press.
+            if slot and kind in (None, "", "blank") and label:
+                slot = {**slot, "type": "text"}
+                kind = "text"
+            if not slot or (kind in (None, "", "blank") and not label):
                 slots.pop(str(idx), None)
             else:
-                slots[str(idx)] = {
-                    "type": slot.get("type", ""),
-                    "ref": slot.get("ref", ""),
-                    "label": slot.get("label", ""),
-                    "color": slot.get("color", ""),
-                }
+                slots[str(idx)] = self._clean_slot(slot)
             self.save()
+
+    def set_deck_editor_mode(self, mode: str) -> None:
+        """Persist the deck-editor presentation ("sidebar" or "modal")."""
+        mode = "modal" if mode == "modal" else "sidebar"
+        with self._lock:
+            self._data["system"]["deck_editor_mode"] = mode
+            self.save()
+
+    def set_lineup_slot(self, position: int, player_id: str | None) -> None:
+        """Assign one batting-order position (1-based) to a player (or clear)."""
+        i = int(position) - 1
+        if i < 0:
+            return
+        size = self._data.get("lineup_size", 9)
+        with self._lock:
+            lineup = list(self._data.get("lineup", []))
+            while len(lineup) <= i and len(lineup) < size:
+                lineup.append(None)
+            if 0 <= i < len(lineup):
+                lineup[i] = player_id if player_id in self.players else None
+                self._data["lineup"] = lineup
+                self.save()
+
+    @staticmethod
+    def _clean_slot(slot: dict) -> dict:
+        """Whitelist + coerce one slot dict to its stored shape.
+
+        Only non-empty styling/option fields are kept so old configs and plain
+        ``{type, ref, label}`` buttons stay small; the controller fills in
+        sensible defaults for anything missing.
+        """
+        out: dict[str, Any] = {
+            "type": slot.get("type", ""),
+            "ref": slot.get("ref", ""),
+            "label": slot.get("label", ""),
+            "color": (slot.get("color") or "").strip(),
+        }
+        text_color = (slot.get("text_color") or "").strip()
+        if text_color:
+            out["text_color"] = text_color
+        font = (slot.get("font") or "").strip()
+        if font:
+            out["font"] = font
+        try:
+            size = int(slot.get("font_size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        if size:
+            out["font_size"] = max(6, min(40, size))
+        mode = (slot.get("mode") or "").strip()
+        if mode:
+            out["mode"] = mode
+        if slot.get("fade_out"):
+            out["fade_out"] = True
+        try:
+            fade_ms = int(slot.get("fade_ms") or 0)
+        except (TypeError, ValueError):
+            fade_ms = 0
+        if fade_ms:
+            out["fade_ms"] = max(100, min(20000, fade_ms))
+        return out
 
     def clear_page_slots(self, page_id: str) -> None:
         with self._lock:

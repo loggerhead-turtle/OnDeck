@@ -37,7 +37,11 @@ from flask import (
 from werkzeug.security import check_password_hash, generate_password_hash
 import requests as rq
 
-from config_manager import ConfigManager, MUSIC_DIR, ONDECK_HOME, CONFIG_PATH, rating_summary
+from config_manager import (
+    ConfigManager, MUSIC_DIR, ONDECK_HOME, CONFIG_PATH, rating_summary,
+    DECK_COLS, DECK_ROWS, DECK_FONTS, DECK_FONT_ORDER,
+    DECK_DEFAULT_FONT, DECK_DEFAULT_FONT_SIZE,
+)
 
 # ---------------------------------------------------------------------------
 # Mode detection
@@ -1781,7 +1785,7 @@ def ondeck_api_volume():
 @app.get("/ondeck/bluetooth")
 def ondeck_bluetooth():
     _check_auth(["admin", "editor"])
-    return render_template("bluetooth.html")
+    return render_template("bluetooth.html", cloud_mode=CLOUD_MODE)
 
 
 @app.get("/ondeck/api/bluetooth/status")
@@ -1920,39 +1924,80 @@ def ondeck_deck():
     if page_id not in cfg.pages:
         page_id = order[0] if order else "home"
     page = cfg.pages.get(page_id, {})
+    page_no = order.index(page_id) + 1 if page_id in order else 1
+    # Choice lists the Companion-style sidebar needs, as plain dicts for JSON.
+    players = [
+        {"id": pid,
+         "label": f"#{p.get('jersey', '')} {p.get('first_name', '')} {p.get('last_name', '')}".strip(),
+         "first_name": p.get("first_name", ""),
+         "jersey": p.get("jersey", "")}
+        for pid, p in cfg.players_by_jersey()
+    ]
+    songs = [{"id": sid, "label": name} for sid, name in _deck_song_choices()]
+    celebrations = [{"id": key, "label": label} for key, label in CELEBRATIONS]
+    nav_pages = [{"id": pid, "label": cfg.pages[pid].get("name", pid)} for pid in order]
+    fonts = [
+        {"id": key, "label": DECK_FONTS[key]["label"],
+         "css": DECK_FONTS[key]["css"], "weight": DECK_FONTS[key]["weight"]}
+        for key in DECK_FONT_ORDER
+    ]
     return render_template(
         "deck_editor.html",
         pages=[(pid, cfg.pages[pid]) for pid in order],
         page_id=page_id,
         page=page,
+        page_no=page_no,
         slots=page.get("slots", {}),
         content_slots=cfg.DECK_CONTENT_SLOTS,
         fixed_labels=_DECK_FIXED_LABELS,
-        players=cfg.players_by_jersey(),
-        songs=_deck_song_choices(),
-        celebrations=CELEBRATIONS,
+        deck_cols=DECK_COLS,
+        deck_rows=DECK_ROWS,
+        players=players,
+        songs=songs,
+        celebrations=celebrations,
+        nav_pages=nav_pages,
+        fonts=fonts,
+        default_font=DECK_DEFAULT_FONT,
+        default_font_size=DECK_DEFAULT_FONT_SIZE,
+        editor_mode=cfg.system.get("deck_editor_mode", "sidebar"),
+        lineup_size=cfg.data.get("lineup_size", 9),
     )
+
+
+@app.post("/ondeck/deck/editor-mode")
+def ondeck_deck_editor_mode():
+    """Persist the deck-editor presentation (sidebar vs modal). Synced to Pis."""
+    _check_auth(["admin", "editor"])
+    data = request.get_json(silent=True) or request.form
+    cfg.set_deck_editor_mode((data.get("mode") or "sidebar"))
+    return jsonify(ok=True, mode=cfg.system.get("deck_editor_mode", "sidebar"))
 
 
 @app.post("/ondeck/deck/<page_id>/slot")
 def ondeck_deck_slot(page_id: str):
+    """Save (or clear) one content key. Used by the sidebar editor via JSON."""
     _check_auth(["admin", "editor"])
     if page_id not in cfg.pages:
         abort(404)
+    data = request.get_json(silent=True) or request.form
     try:
-        idx = int(request.form.get("idx", ""))
-    except ValueError:
+        idx = int(data.get("idx"))
+    except (TypeError, ValueError):
         abort(400)
-    # The button assignment arrives as "type:ref" (e.g. "song:abc123",
-    # "action:fade", "blank:" to clear).
-    assign = request.form.get("assign", "blank:")
-    kind, _, ref = assign.partition(":")
     cfg.set_page_slot(page_id, idx, {
-        "type": kind,
-        "ref": ref,
-        "label": request.form.get("label", "").strip(),
-        "color": request.form.get("color", "").strip(),
+        "type": (data.get("type") or "blank").strip(),
+        "ref": (data.get("ref") or "").strip(),
+        "label": (data.get("label") or "").strip(),
+        "color": (data.get("color") or "").strip(),
+        "text_color": (data.get("text_color") or "").strip(),
+        "font": (data.get("font") or "").strip(),
+        "font_size": data.get("font_size"),
+        "mode": (data.get("mode") or "").strip(),
+        "fade_out": bool(data.get("fade_out")),
+        "fade_ms": data.get("fade_ms"),
     })
+    if request.is_json:
+        return jsonify(ok=True)
     flash("Button saved.", "success")
     return redirect(url_for("ondeck_deck", page=page_id))
 

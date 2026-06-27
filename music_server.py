@@ -465,6 +465,14 @@ def main() -> None:
     except Exception as exc:  # optional — must not stop audio playback
         log.warning("Pi web routes not registered: %s", exc)
     if bt is not None:
+        # Power the radio on at boot (clearing any rfkill soft-block) so the
+        # speaker page shows "radio on" and scanning works even before a
+        # preferred speaker exists — the auto-connect loop only powers on when
+        # one is already set.
+        try:
+            bt.power_on()
+        except Exception as exc:
+            log.warning("Bluetooth power-on at startup failed: %s", exc)
         bt.start_autoconnect()
     app.run(host="0.0.0.0", port=port, threaded=True)
 

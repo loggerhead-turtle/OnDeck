@@ -93,7 +93,8 @@ WorkingDirectory=$REPO_DIR
 Environment=ONDECK_HOME=$ONDECK_HOME
 ${extra_env}
 ExecStart=$VENV/bin/python $exec_line
-Restart=on-failure
+# Always restart — covers a hung/blocked process, not just a non-zero exit.
+Restart=always
 RestartSec=3
 
 [Install]
@@ -111,8 +112,25 @@ if [[ "$INSTALL_AUDIO" == 1 ]]; then
   # manager linger so PipeWire/WirePlumber run at boot, (b) add the user to the
   # audio/bluetooth groups, and (c) point the service at the user's runtime dir.
   echo "==> Configuring Bluetooth audio for $RUN_USER"
+  sudo apt-get install -y --no-install-recommends rfkill 2>/dev/null || true
   sudo usermod -aG bluetooth,audio "$RUN_USER" 2>/dev/null || true
   sudo loginctl enable-linger "$RUN_USER" 2>/dev/null || true
+  # Clear any rfkill soft-block and let BlueZ power the controller on at boot,
+  # so the speaker page never gets stuck on "radio off".
+  sudo rfkill unblock bluetooth 2>/dev/null || true
+  if [[ -f /etc/bluetooth/main.conf ]] && ! grep -q '^\s*AutoEnable=true' /etc/bluetooth/main.conf; then
+    if grep -q '^\[Policy\]' /etc/bluetooth/main.conf; then
+      sudo sed -i '/^\[Policy\]/a AutoEnable=true' /etc/bluetooth/main.conf
+    else
+      printf '\n[Policy]\nAutoEnable=true\n' | sudo tee -a /etc/bluetooth/main.conf >/dev/null
+    fi
+  fi
+  # Let the service user clear a soft-block at runtime (no password) — the
+  # captive-portal hotspot can re-block the radio after onboarding.
+  sudo tee /etc/sudoers.d/ondeck-rfkill >/dev/null <<EOF
+$RUN_USER ALL=(root) NOPASSWD: /usr/sbin/rfkill unblock bluetooth, /sbin/rfkill unblock bluetooth, /usr/bin/rfkill unblock bluetooth
+EOF
+  sudo chmod 0440 /etc/sudoers.d/ondeck-rfkill
   sudo systemctl enable bluetooth 2>/dev/null || true
   sudo systemctl start bluetooth 2>/dev/null || true
   # Enable the user PipeWire stack so the bluez sink exists headless.
@@ -144,6 +162,30 @@ EOF
 
   install_service "ondeck-coach" "$REPO_DIR/main.py" "OnDeck Stream Deck Pi (Stream Deck + web portal)"
 fi
+
+# --- keep Wi-Fi awake (both roles) ---------------------------------------
+# The Pi's onboard Wi-Fi defaults to power-save, which after an idle stretch
+# parks the radio and often fails to re-associate until a reboot — the most
+# common cause of "both Pis were unreachable overnight, fine after reboot".
+# Disable it persistently.
+echo "==> Disabling Wi-Fi power saving on wlan0"
+sudo iw dev wlan0 set power_save off 2>/dev/null || true
+sudo tee /etc/systemd/system/ondeck-wifi-awake.service >/dev/null <<EOF
+[Unit]
+Description=OnDeck — disable wlan0 Wi-Fi power saving
+After=network.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c '/sbin/iw dev wlan0 set power_save off || /usr/sbin/iw dev wlan0 set power_save off || true'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now ondeck-wifi-awake.service 2>/dev/null || true
 
 # Let the service user manage Wi-Fi via the helper without a password prompt —
 # used by the /wifi page on BOTH the deck portal and the Audio Pi's :5100 server.
