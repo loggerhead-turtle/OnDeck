@@ -97,7 +97,33 @@ regardless of Wi-Fi/link state, and the marker is consumed after one run.
 
 ---
 
-## 5. Services & logs
+## 5. Bluetooth speaker (Audio Pi)
+
+The Audio Pi can play through a Bluetooth speaker (e.g. **Bose S1 Pro+**)
+instead of a cable. Manage it from a browser on the **field Wi-Fi**: open the
+Stream Deck Pi's portal and go to **Bluetooth** (the page proxies to the Audio
+Pi).
+
+**One-time pairing:**
+1. Put the speaker in Bluetooth pairing mode.
+2. On the **Bluetooth** page, click **Scan**, then **Pair** next to the speaker.
+3. It's automatically set as the **preferred speaker** with **auto-connect on**.
+
+**Every game after that:** just power the speaker on near the Audio Pi. A
+background loop reconnects within a few seconds — no app, no cloud, fully
+offline. Pressing a song on the Stream Deck then plays through the speaker.
+
+Notes:
+- Preferred speaker + auto-connect are stored on the Audio Pi
+  (`~/ondeck/bluetooth.json`), not in the cloud.
+- When connected, audio routes to the speaker's PipeWire sink; otherwise it uses
+  the Pi's default (3.5 mm / HDMI / USB).
+- The **cloud** portal can't reach the Audio Pi (NAT) — the Bluetooth page only
+  controls it from the field network. It shows "Audio Pi unreachable" elsewhere.
+
+---
+
+## 6. Services & logs
 
 | Service | Role | Purpose |
 |---------|------|---------|
@@ -114,7 +140,7 @@ journalctl -u ondeck-sync  -f     # cloud sync
 
 ---
 
-## 6. Updating
+## 7. Updating
 
 - **Config + audio** sync from the cloud automatically (every 5 min and on
   boot) — no reinstall needed.

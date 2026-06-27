@@ -1388,6 +1388,42 @@ def ondeck_api_volume():
 
 
 # ---------------------------------------------------------------------------
+# Bluetooth speaker — admin/editor manage the Audio Pi's A2DP speaker
+# ---------------------------------------------------------------------------
+# The portal cannot do Bluetooth itself; it proxies to the Audio Pi's
+# music_server (/bluetooth/*). This works from any browser that can reach the
+# Audio Pi — i.e. the Stream Deck Pi's portal on the field Wi-Fi. From the cloud
+# portal (which can't route to the Pi) the calls return 503 and the page shows
+# "Audio Pi unreachable".
+
+@app.get("/ondeck/bluetooth")
+def ondeck_bluetooth():
+    _check_auth(["admin", "editor"])
+    return render_template("bluetooth.html")
+
+
+@app.get("/ondeck/api/bluetooth/status")
+def ondeck_api_bt_status():
+    data, code = _proxy("GET", "/bluetooth/status")
+    return jsonify(data), code
+
+
+@app.post("/ondeck/api/bluetooth/scan")
+def ondeck_api_bt_scan():
+    data, code = _proxy("POST", "/bluetooth/scan", json=request.get_json(silent=True) or {})
+    return jsonify(data), code
+
+
+@app.post("/ondeck/api/bluetooth/<action>")
+def ondeck_api_bt_action(action: str):
+    if action not in {"pair", "connect", "disconnect", "forget", "preferred"}:
+        abort(404)
+    body = request.get_json(force=True, silent=True) or {}
+    data, code = _proxy("POST", f"/bluetooth/{action}", json=body)
+    return jsonify(data), code
+
+
+# ---------------------------------------------------------------------------
 # Lineup editor (admin + editor)
 # ---------------------------------------------------------------------------
 

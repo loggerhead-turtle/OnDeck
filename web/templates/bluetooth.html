@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Bluetooth{% endblock %}
+{% block content %}
+
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">Bluetooth Speaker</h1>
+  <button id="rescan" class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-medium">Scan for speakers</button>
+</div>
+
+<p id="banner" class="hidden mb-4 px-4 py-2 rounded-lg text-sm"></p>
+
+<div class="grid gap-6 lg:grid-cols-2">
+  <!-- Connection status -->
+  <div class="bg-gray-800 border border-gray-700/50 rounded-xl p-6">
+    <h2 class="text-lg font-semibold text-white mb-4">Status</h2>
+    <div id="status" class="space-y-2 text-sm text-gray-300">
+      <p class="text-gray-500">Checking the Audio Pi…</p>
+    </div>
+    <label class="flex items-center gap-2 mt-4 text-sm text-gray-300">
+      <input type="checkbox" id="autoconnect" class="accent-green-500">
+      Auto-connect to the preferred speaker when it powers on
+    </label>
+  </div>
+
+  <!-- Paired / discovered devices -->
+  <div class="bg-gray-800 border border-gray-700/50 rounded-xl p-6">
+    <h2 class="text-lg font-semibold text-white mb-4">Speakers</h2>
+    <div id="devices" class="space-y-2 text-sm text-gray-400">
+      <p class="text-gray-500">No devices yet.</p>
+    </div>
+    <p class="text-xs text-gray-500 mt-4">
+      Put the speaker (e.g. Bose S1 Pro+) in pairing mode, click <b>Scan</b>, then
+      <b>Pair</b>. Mark it the preferred speaker so the Audio Pi reconnects to it
+      automatically at the field.
+    </p>
+  </div>
+</div>
+
+<script>
+const BANNER = document.getElementById('banner');
+const STATUS = document.getElementById('status');
+const DEVICES = document.getElementById('devices');
+const AUTO = document.getElementById('autoconnect');
+let preferredMac = null;
+
+function banner(msg, kind){
+  BANNER.textContent = msg;
+  BANNER.className = 'mb-4 px-4 py-2 rounded-lg text-sm ' +
+    (kind === 'error' ? 'bg-red-900/40 text-red-200 border border-red-700/40'
+                      : 'bg-green-900/30 text-green-200 border border-green-700/40');
+  BANNER.classList.remove('hidden');
+  if (kind !== 'error') setTimeout(() => BANNER.classList.add('hidden'), 2500);
+}
+
+async function api(path, body){
+  const opt = { method: body === undefined ? 'GET' : 'POST',
+                headers: {'Content-Type': 'application/json'} };
+  if (body !== undefined) opt.body = JSON.stringify(body);
+  const r = await fetch(path, opt);
+  return { code: r.status, data: await r.json().catch(() => ({})) };
+}
+
+function deviceRow(d, st){
+  const connected = d.connected;
+  const isPref = d.mac === st.preferred_mac;
+  return `<div class="bg-gray-900 border border-gray-700/40 rounded-lg p-3 flex items-center justify-between gap-3">
+    <div class="min-w-0">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-gray-600'}"></span>
+        <span class="text-white">${d.name || d.mac}</span>
+        ${isPref ? '<span class="px-1.5 py-0.5 rounded text-[10px] bg-indigo-900/40 text-indigo-300 border border-indigo-700/40">preferred</span>' : ''}
+      </div>
+      <div class="text-[11px] text-gray-500 font-mono">${d.mac}</div>
+    </div>
+    <div class="flex flex-wrap gap-1.5 justify-end">
+      ${connected
+        ? `<button data-act="disconnect" data-mac="${d.mac}" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs">Disconnect</button>`
+        : `<button data-act="connect" data-mac="${d.mac}" class="px-2 py-1 rounded bg-green-700 hover:bg-green-600 text-white text-xs">Connect</button>`}
+      ${isPref
+        ? ''
+        : `<button data-act="prefer" data-mac="${d.mac}" data-name="${(d.name||'').replace(/"/g,'')}" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs">Set preferred</button>`}
+      <button data-act="forget" data-mac="${d.mac}" class="px-2 py-1 rounded bg-red-800/70 hover:bg-red-700 text-red-100 text-xs">Forget</button>
+    </div>
+  </div>`;
+}
+
+function discoveredRow(d){
+  return `<div class="bg-gray-900 border border-gray-700/40 rounded-lg p-3 flex items-center justify-between gap-3">
+    <div class="min-w-0">
+      <span class="text-white">${d.name || d.mac}</span>
+      <div class="text-[11px] text-gray-500 font-mono">${d.mac}</div>
+    </div>
+    <button data-act="pair" data-mac="${d.mac}" data-name="${(d.name||'').replace(/"/g,'')}" class="px-2 py-1 rounded bg-green-700 hover:bg-green-600 text-white text-xs">Pair</button>
+  </div>`;
+}
+
+async function refresh(){
+  const { code, data } = await api('/ondeck/api/bluetooth/status');
+  if (code !== 200 || !data.ok){
+    STATUS.innerHTML = '<p class="text-amber-400">Audio Pi unreachable. Open this page from a browser on the field Wi-Fi (the Stream Deck Pi portal).</p>';
+    DEVICES.innerHTML = '<p class="text-gray-500">—</p>';
+    return;
+  }
+  preferredMac = data.preferred_mac;
+  AUTO.checked = !!data.auto_connect;
+  const conn = data.connected_mac
+    ? `<span class="text-green-400">Connected</span> to <b>${data.connected_name || data.connected_mac}</b>`
+    : '<span class="text-gray-400">Not connected</span>';
+  STATUS.innerHTML =
+    `<p>Radio: ${data.powered ? '<span class="text-green-400">on</span>' : '<span class="text-gray-400">off</span>'}</p>` +
+    `<p>${conn}</p>` +
+    `<p>Preferred: ${data.preferred_name || data.preferred_mac || '<span class="text-gray-500">none set</span>'}</p>`;
+  const devs = data.devices || [];
+  DEVICES.innerHTML = devs.length ? devs.map(d => deviceRow(d, data)).join('')
+                                  : '<p class="text-gray-500">No paired speakers yet — scan to add one.</p>';
+}
+
+DEVICES.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const { act, mac, name } = btn.dataset;
+  btn.disabled = true; btn.textContent = '…';
+  let res;
+  if (act === 'prefer') {
+    res = await api('/ondeck/api/bluetooth/preferred', {mac, name, auto_connect: AUTO.checked});
+  } else if (act === 'pair') {
+    res = await api('/ondeck/api/bluetooth/pair', {mac});
+    // A freshly paired speaker becomes the preferred one by default.
+    if (res.data.ok) await api('/ondeck/api/bluetooth/preferred', {mac, name, auto_connect: true});
+  } else {
+    res = await api('/ondeck/api/bluetooth/' + act, {mac});
+  }
+  const ok = res.code === 200 && res.data.ok !== false;
+  banner(ok ? (act + ' ok') : (res.data.error || act + ' failed'), ok ? 'ok' : 'error');
+  await refresh();
+});
+
+document.getElementById('rescan').addEventListener('click', async function(){
+  this.disabled = true; this.textContent = 'Scanning…';
+  const { code, data } = await api('/ondeck/api/bluetooth/scan', {seconds: 8});
+  this.disabled = false; this.textContent = 'Scan for speakers';
+  if (code !== 200 || !data.ok){ banner('Scan failed (Audio Pi unreachable?)', 'error'); return; }
+  const found = (data.devices || []);
+  DEVICES.insertAdjacentHTML('afterbegin',
+    '<p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Discovered</p>' +
+    (found.length ? found.map(discoveredRow).join('') : '<p class="text-gray-500 mb-3">Nothing found. Make sure the speaker is in pairing mode.</p>'));
+});
+
+AUTO.addEventListener('change', async () => {
+  await api('/ondeck/api/bluetooth/preferred',
+            {mac: preferredMac, auto_connect: AUTO.checked});
+  banner('Auto-connect ' + (AUTO.checked ? 'on' : 'off'));
+});
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+
+{% endblock %}

@@ -36,10 +36,20 @@ from flask import Flask, jsonify, request
 
 from config_manager import MUSIC_DIR
 
+try:
+    from bluetooth_manager import BluetoothManager
+except Exception:  # pragma: no cover - missing optional deps must not stop audio
+    BluetoothManager = None  # type: ignore
+
 
 app = Flask(__name__)
 
 DEFAULT_FADE_MS = 1000
+
+# A2DP speaker control + audio routing. Disable on laptops/CI with
+# ONDECK_NO_BLUETOOTH=1 (then playback uses the ALSA default / override).
+bt = BluetoothManager() if (BluetoothManager and
+                            not os.environ.get("ONDECK_NO_BLUETOOTH")) else None
 
 
 class Player:
@@ -129,14 +139,17 @@ class Player:
         return cmd
 
     def _output_args(self) -> list[str]:
-        """ffmpeg output target — ALSA default sink on the Pi.
+        """ffmpeg output target.
 
-        Overridable via ONDECK_FFMPEG_OUT for laptops/testing (e.g. a file or
-        a different audio backend).
+        Priority: explicit ONDECK_FFMPEG_OUT override (laptops/testing) →
+        the connected Bluetooth speaker's PipeWire/Pulse sink → ALSA default.
         """
         override = os.environ.get("ONDECK_FFMPEG_OUT")
         if override:
             return shlex.split(override)
+        sink = bt.current_sink() if bt else None
+        if sink:
+            return ["-f", "pulse", sink]
         return ["-f", "alsa", "default"]
 
     # -- fade / stop ------------------------------------------------------
@@ -334,6 +347,80 @@ def http_import():
     return jsonify(ok=True, filename=Path(filepath).name if filepath else None)
 
 
+# -- Bluetooth speaker control -------------------------------------------
+# These run on the Audio Pi; the portal proxies to them so a coach can manage
+# the speaker from a browser on the field Wi-Fi. All are no-ops (503) when
+# Bluetooth is disabled (e.g. on a laptop with ONDECK_NO_BLUETOOTH=1).
+
+def _bt_or_503():
+    if bt is None:
+        return None, (jsonify(ok=False, error="bluetooth unavailable"), 503)
+    return bt, None
+
+
+@app.get("/bluetooth/status")
+def http_bt_status():
+    mgr, err = _bt_or_503()
+    if err:
+        return err
+    return jsonify(ok=True, **mgr.status())
+
+
+@app.post("/bluetooth/scan")
+def http_bt_scan():
+    mgr, err = _bt_or_503()
+    if err:
+        return err
+    secs = int((request.get_json(silent=True) or {}).get("seconds", 8))
+    return jsonify(ok=True, devices=mgr.scan(max(3, min(secs, 30))))
+
+
+def _bt_mac_action(method):
+    mgr, err = _bt_or_503()
+    if err:
+        return err
+    mac = (request.get_json(force=True, silent=True) or {}).get("mac", "").strip()
+    if not mac:
+        return jsonify(ok=False, error="mac required"), 400
+    return jsonify(ok=bool(method(mgr, mac)), status=mgr.status())
+
+
+@app.post("/bluetooth/pair")
+def http_bt_pair():
+    return _bt_mac_action(lambda m, mac: m.pair(mac))
+
+
+@app.post("/bluetooth/connect")
+def http_bt_connect():
+    return _bt_mac_action(lambda m, mac: m.connect(mac))
+
+
+@app.post("/bluetooth/disconnect")
+def http_bt_disconnect():
+    return _bt_mac_action(lambda m, mac: m.disconnect(mac))
+
+
+@app.post("/bluetooth/forget")
+def http_bt_forget():
+    return _bt_mac_action(lambda m, mac: m.forget(mac))
+
+
+@app.post("/bluetooth/preferred")
+def http_bt_preferred():
+    """Set (or clear) the remembered speaker + auto-connect flag."""
+    mgr, err = _bt_or_503()
+    if err:
+        return err
+    body = request.get_json(force=True, silent=True) or {}
+    mac = (body.get("mac") or "").strip() or None
+    mgr.set_preferred(mac, body.get("name", ""),
+                      bool(body.get("auto_connect", True)))
+    # Apply immediately if a speaker was just chosen.
+    if mac and body.get("auto_connect", True):
+        mgr.connect(mac)
+    return jsonify(ok=True, status=mgr.status())
+
+
 @app.get("/health")
 def http_health():
     return jsonify(ok=True, service="ondeck-audio")
@@ -341,6 +428,8 @@ def http_health():
 
 def main() -> None:
     port = int(os.environ.get("ONDECK_AUDIO_PORT", "5100"))
+    if bt is not None:
+        bt.start_autoconnect()
     app.run(host="0.0.0.0", port=port, threaded=True)
 
 

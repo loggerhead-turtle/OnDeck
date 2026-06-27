@@ -30,6 +30,8 @@ The cloud instance is the source of truth. The Pi polls `/sync/*` endpoints ever
 | `web/templates/deck_editor.html` | Stream Deck button editor (8×4 grid, per-key slots) |
 | `web/templates/devices.html` | Pi device pairing + management (codes, rename, revoke) |
 | `streamdeck_controller.py` | Stream Deck XL runtime (renders from `pages[].slots` or auto-layout) |
+| `bluetooth_manager.py` | Audio Pi BlueZ control (`bluetoothctl`) + preferred-speaker auto-connect + sink routing |
+| `web/templates/bluetooth.html` | Bluetooth speaker management page (proxied to the Audio Pi) |
 | `web/templates/login.html` | Standalone login page |
 | `web/templates/setup.html` | First-run account creation |
 | `web/templates/settings.html` | Settings + YouTube cookie upload |
@@ -140,6 +142,26 @@ owned by the controller.
 `install.sh` / `bootstrap.sh` take `ROLE=audio|deck|both` (`coach` == `deck`).
 **Both** roles install the `ondeck-setup` boot gate, so the Audio Pi and the
 Stream Deck Pi can each be onboarded headlessly over the `OnDeck-Setup` hotspot.
+
+## Bluetooth Speaker (Audio Pi)
+
+`bluetooth_manager.py` runs inside `music_server.py` on the Audio Pi. It wraps
+`bluetoothctl` to scan/pair/connect/forget an A2DP speaker (e.g. Bose S1 Pro+),
+remembers a **preferred speaker + auto-connect** flag in
+`$ONDECK_HOME/bluetooth.json` (local to the Audio Pi — not synced), and runs a
+~20s loop that reconnects the preferred speaker whenever it powers on (offline,
+no cloud needed). When a speaker is connected, `Player._output_args()` routes
+ffmpeg to its PipeWire/Pulse sink (`-f pulse <sink>`); otherwise ALSA `default`.
+`ONDECK_NO_BLUETOOTH=1` disables it (laptops/CI); `ONDECK_FFMPEG_OUT` still
+overrides output.
+
+Endpoints on the Audio Pi: `GET /bluetooth/status`, `POST /bluetooth/{scan,
+pair,connect,disconnect,forget,preferred}`. The portal page `/ondeck/bluetooth`
+manages it by **proxying** to the Audio Pi via `/ondeck/api/bluetooth/*` — so it
+works from any browser that can reach the Pi (the Stream Deck Pi's portal on the
+field Wi-Fi). The cloud portal can't route to the Pi, so there it shows "Audio Pi
+unreachable". Audio role installs PipeWire + `libspa-0.2-bluetooth` and enables
+user-session lingering so the bluez sink exists headless.
 
 ## Render Deployment
 

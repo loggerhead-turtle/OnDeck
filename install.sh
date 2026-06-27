@@ -42,8 +42,11 @@ echo "==> Installing system packages (sudo may prompt)..."
 sudo apt-get update -qq
 PKGS=(python3 python3-venv python3-pip ffmpeg)
 if [[ "$INSTALL_AUDIO" == 1 ]]; then
-  # Audio playback + YouTube import + Bluetooth.
-  PKGS+=(alsa-utils bluez)
+  # Audio playback + Bluetooth A2DP speaker output. PipeWire (the Bookworm
+  # default) provides the bluez audio sink ffmpeg plays into; pulseaudio-utils
+  # gives us `pactl` for sink discovery; bluez gives `bluetoothctl`.
+  PKGS+=(alsa-utils bluez pipewire pipewire-pulse wireplumber
+         libspa-0.2-bluetooth pulseaudio-utils)
 fi
 # Headless Wi-Fi onboarding (captive-portal hotspot + network tooling) runs on
 # EVERY role — both the Audio Pi and the Stream Deck Pi can be set up with no
@@ -70,13 +73,13 @@ echo "==> Runtime data dir: $ONDECK_HOME"
 
 # --- systemd services ----------------------------------------------------
 install_service() {
-  local name="$1" exec_line="$2" desc="$3"
+  local name="$1" exec_line="$2" desc="$3" extra_env="${4:-}"
   local unit="/etc/systemd/system/${name}.service"
   echo "==> Installing service: $name"
   sudo tee "$unit" >/dev/null <<EOF
 [Unit]
 Description=$desc
-After=network-online.target sound.target
+After=network-online.target sound.target bluetooth.target
 Wants=network-online.target
 
 [Service]
@@ -84,6 +87,7 @@ Type=simple
 User=$RUN_USER
 WorkingDirectory=$REPO_DIR
 Environment=ONDECK_HOME=$ONDECK_HOME
+${extra_env}
 ExecStart=$VENV/bin/python $exec_line
 Restart=on-failure
 RestartSec=3
@@ -97,7 +101,24 @@ EOF
 }
 
 if [[ "$INSTALL_AUDIO" == 1 ]]; then
-  install_service "ondeck-audio" "$REPO_DIR/music_server.py" "OnDeck Audio Pi server"
+  # --- Bluetooth A2DP speaker output -------------------------------------
+  # The audio server plays into the connected speaker's PipeWire sink. For a
+  # service (no login session) to reach PipeWire we (a) let the user's session
+  # manager linger so PipeWire/WirePlumber run at boot, (b) add the user to the
+  # audio/bluetooth groups, and (c) point the service at the user's runtime dir.
+  echo "==> Configuring Bluetooth audio for $RUN_USER"
+  sudo usermod -aG bluetooth,audio "$RUN_USER" 2>/dev/null || true
+  sudo loginctl enable-linger "$RUN_USER" 2>/dev/null || true
+  sudo systemctl enable bluetooth 2>/dev/null || true
+  sudo systemctl start bluetooth 2>/dev/null || true
+  # Enable the user PipeWire stack so the bluez sink exists headless.
+  sudo -u "$RUN_USER" XDG_RUNTIME_DIR="/run/user/$(id -u "$RUN_USER")" \
+    systemctl --user enable --now pipewire pipewire-pulse wireplumber 2>/dev/null || true
+
+  RUN_UID="$(id -u "$RUN_USER")"
+  install_service "ondeck-audio" "$REPO_DIR/music_server.py" \
+    "OnDeck Audio Pi server" \
+    "Environment=XDG_RUNTIME_DIR=/run/user/$RUN_UID"
 fi
 if [[ "$INSTALL_DECK" == 1 ]]; then
   install_service "ondeck-coach" "$REPO_DIR/main.py" "OnDeck Stream Deck Pi (Stream Deck + web portal)"
