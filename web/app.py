@@ -382,8 +382,15 @@ def _audio_pi_url(path: str) -> str:
 
 
 def _proxy(method: str, path: str, **kwargs):
+    # The cloud instance has no network route to the Audio Pi's LAN IP, so any
+    # attempt would hang until the connect timeout and tie up the worker. Fail
+    # fast instead of letting these requests block (see render single-worker).
+    if CLOUD_MODE:
+        return {"error": "Audio Pi unreachable"}, 503
     try:
-        r = rq.request(method, _audio_pi_url(path), timeout=15, **kwargs)
+        # (connect, read) timeouts: an unreachable Pi drops the SYN, so without a
+        # short connect timeout the request would block the worker for 15s.
+        r = rq.request(method, _audio_pi_url(path), timeout=(2, 15), **kwargs)
         return r.json(), r.status_code
     except rq.exceptions.ConnectionError:
         return {"error": "Audio Pi unreachable"}, 503
