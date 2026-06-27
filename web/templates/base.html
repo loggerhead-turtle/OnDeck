@@ -64,8 +64,11 @@
       {% if current_player %}
         <span class="text-xs text-gray-400 hidden sm:inline">{{ current_player.first_name }} {{ current_player.last_name }}</span>
         <a href="/ondeck/my-profile" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Profile</a>
+        <a href="/ondeck/team-roster" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Teammates</a>
+        <a href="/ondeck/music" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Rate Music</a>
         <a href="/ondeck/logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>
       {% elif current_user %}
+        <a href="/ondeck/music" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Music</a>
         <a href="/ondeck/settings-hub" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Settings</a>
         <span class="text-xs text-gray-400 hidden sm:inline">{{ current_user }}</span>
         <a href="/ondeck/logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>

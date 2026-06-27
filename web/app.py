@@ -7,10 +7,13 @@ Sync endpoints (/sync/*) are unchanged so the Pi agent keeps working.
 
 from __future__ import annotations
 
+import base64
 import functools
 import hashlib
 import json
+import re
 import sys
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -35,7 +38,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 import requests as rq
 
 from config_manager import (
-    ConfigManager, MUSIC_DIR, ONDECK_HOME, CONFIG_PATH,
+    ConfigManager, MUSIC_DIR, ONDECK_HOME, CONFIG_PATH, rating_summary,
     DECK_COLS, DECK_ROWS, DECK_FONTS, DECK_FONT_ORDER,
     DECK_DEFAULT_FONT, DECK_DEFAULT_FONT_SIZE,
 )
@@ -50,6 +53,10 @@ SYNC_TOKEN          = os.environ.get("ONDECK_SYNC_TOKEN", "")
 # these env vars act as fallbacks when the config fields are left blank.
 ELEVENLABS_API_KEY  = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "")
+# Spotify Web API (read-only playlist lookups). Configured in Settings or via
+# these env-var fallbacks. App-level credentials — no per-player Spotify login.
+SPOTIFY_CLIENT_ID     = os.environ.get("SPOTIFY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
 
 AUTH_FILE      = ONDECK_HOME / "auth.json"
 COOKIES_FILE   = ONDECK_HOME / "youtube_cookies.txt"
@@ -275,6 +282,8 @@ def _check_auth(allowed_roles=None):
             "ondeck_serve_audio",
             "ondeck_my_profile_change_password", "ondeck_my_profile_change_password_post",
             "ondeck_team_roster",
+            "ondeck_music", "ondeck_music_rate",
+            "ondeck_music_request", "ondeck_request_rate", "ondeck_request_delete",
             "ondeck_logout",
         }
         if request.endpoint not in player_ok:
@@ -314,6 +323,25 @@ def _inject_globals():
         "elevenlabs_ready": _elevenlabs_ready(),
         "unread_notifications": _unread_notification_count() if role in ("admin", "editor") else 0,
     }
+
+
+def _rater_identity() -> tuple[str | None, str | None]:
+    """A stable (rater_key, display_name) for whoever is logged in.
+
+    Players rate as ``p:<player_id>``, staff as ``u:<user_id>`` — distinct
+    namespaces so a player and an editor can never collide on a rating slot.
+    Returns ``(None, None)`` for an unauthenticated session.
+    """
+    role = session.get("role")
+    if role == "player":
+        pid = session.get("player_id")
+        p = cfg.players.get(pid)
+        if p:
+            name = f"#{p.get('jersey', '')} {p.get('first_name', '')} {p.get('last_name', '')}".strip()
+            return f"p:{pid}", name
+    elif role in ("admin", "editor"):
+        return f"u:{session.get('user_id')}", session.get("username") or "Staff"
+    return None, None
 
 
 def _bearer_token() -> str:
@@ -540,7 +568,21 @@ def player_signup_post(code: str):
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "")
     confirm  = request.form.get("confirm", "")
+    first_name = request.form.get("first_name", "").strip()
+    last_name  = request.form.get("last_name", "").strip()
+    jersey_raw = request.form.get("jersey", "").strip()
 
+    if not first_name or not last_name:
+        flash("First and last name are required.", "error")
+        return redirect(url_for("player_signup", code=code))
+    # Jersey is optional; accept a number or leave it unset for the coach.
+    jersey = None
+    if jersey_raw:
+        try:
+            jersey = int(jersey_raw)
+        except ValueError:
+            flash("Jersey number must be a number (or left blank).", "error")
+            return redirect(url_for("player_signup", code=code))
     if not username:
         flash("Username is required.", "error")
         return redirect(url_for("player_signup", code=code))
@@ -562,9 +604,9 @@ def player_signup_post(code: str):
     pid = uuid.uuid4().hex
     with cfg._lock:
         cfg.players[pid] = {
-            "jersey": None,  # Admin will set this later
-            "first_name": "",
-            "last_name": username,  # Use username as temporary display name
+            "jersey": jersey,  # optional; coach can fill/adjust later
+            "first_name": first_name,
+            "last_name": last_name,
             "player_username": username,
             "player_password_hash": password_hash,
             "team_ids": link["team_ids"],
@@ -731,7 +773,39 @@ def ondeck_dashboard():
 
 @app.get("/ondeck/library")
 def ondeck_library():
-    return render_template("library.html", songs=cfg.songs, cfg=cfg)
+    sort = request.args.get("sort", "rating")  # rating | name
+    # Group base songs with their per-player trim variants, attaching rating
+    # stats so editors can see at a glance which songs are hot or cold.
+    groups: dict[str, dict] = {}
+    for sid, song in cfg.songs.items():
+        base_id = song.get("base_song_id") or sid
+        g = groups.setdefault(base_id, {"base": None, "variants": []})
+        if song.get("base_song_id"):
+            g["variants"].append((sid, song))
+        else:
+            g["base"] = (sid, song)
+    rows = []
+    for base_id, g in groups.items():
+        if not g["base"]:
+            continue
+        sid, song = g["base"]
+        stats = rating_summary(song.get("ratings"))
+        rows.append({
+            "sid": sid,
+            "song": song,
+            "name": song.get("alias") or song.get("display_name") or song.get("filename"),
+            "avg": stats["avg"],
+            "count": stats["count"],
+            "variants": sorted(g["variants"], key=lambda v: v[1].get("created_by_player") or ""),
+        })
+    if sort == "name":
+        rows.sort(key=lambda r: r["name"].lower())
+    else:
+        # Highest-rated first; unrated songs sink to the bottom, then alpha.
+        rows.sort(key=lambda r: (-(r["avg"] if r["count"] else -1), r["name"].lower()))
+    open_requests = sum(1 for r in cfg.song_requests if r.get("status") == "open")
+    return render_template("library.html", rows=rows, cfg=cfg, sort=sort,
+                           song_count=len(rows), open_requests=open_requests)
 
 
 @app.post("/ondeck/library/upload")
@@ -824,6 +898,214 @@ def ondeck_library_delete(sid: str):
         (MUSIC_DIR / song["filename"]).unlink(missing_ok=True)
         flash(f"Deleted '{song['display_name']}'.", "success")
     return redirect(url_for("ondeck_library"))
+
+
+# ---------------------------------------------------------------------------
+# Music ratings + song requests (players, editors, admins)
+# ---------------------------------------------------------------------------
+
+def _song_entries_with_ratings(my_key: str | None) -> list[dict]:
+    """Mid-inning songs with rating stats + my vote.
+
+    Only the shared **mid-inning** pool is rateable — walk-up and pitcher
+    warm-up music belong to individual players, so they're deliberately left
+    out. The pool is whatever the coach assigned on the Sounds page.
+    """
+    entries = []
+    for sid, song in cfg.get_songs_for_page("mid_inning"):
+        if song.get("base_song_id"):
+            continue  # skip trimmed variants — rate the underlying song
+        stats = rating_summary(song.get("ratings"))
+        entries.append({
+            "sid": sid,
+            "song": song,
+            "name": song.get("alias") or song.get("display_name") or song.get("filename"),
+            "avg": stats["avg"],
+            "count": stats["count"],
+            "mine": (song.get("ratings") or {}).get(my_key, 0) if my_key else 0,
+        })
+    entries.sort(key=lambda e: e["name"].lower())
+    return entries
+
+
+def _request_entries(my_key: str | None) -> list[dict]:
+    out = []
+    for req in cfg.song_requests:
+        stats = rating_summary(req.get("ratings"))
+        out.append({
+            "req": req,
+            "avg": stats["avg"],
+            "count": stats["count"],
+            "mine": (req.get("ratings") or {}).get(my_key, 0) if my_key else 0,
+        })
+    return out
+
+
+@app.get("/ondeck/music")
+def ondeck_music():
+    """Player/staff page to star-rate library songs and suggest new ones."""
+    my_key, _ = _rater_identity()
+    return render_template(
+        "music.html",
+        songs=_song_entries_with_ratings(my_key),
+        requests=_request_entries(my_key),
+    )
+
+
+@app.post("/ondeck/music/<sid>/rate")
+def ondeck_music_rate(sid: str):
+    my_key, _ = _rater_identity()
+    if not my_key:
+        abort(403)
+    try:
+        stars = int(request.form.get("stars", 0))
+    except (TypeError, ValueError):
+        stars = 0
+    if not cfg.set_song_rating(sid, my_key, stars):
+        abort(404)
+    if request.headers.get("X-Requested-With") == "fetch":
+        song = cfg.songs.get(sid, {})
+        return jsonify(ok=True, mine=stars, **rating_summary(song.get("ratings")))
+    flash("Rating saved." if stars else "Rating cleared.", "success")
+    return redirect(url_for("ondeck_music"))
+
+
+@app.post("/ondeck/music/request")
+def ondeck_music_request():
+    my_key, my_name = _rater_identity()
+    if not my_key:
+        abort(403)
+    title = request.form.get("title", "").strip()
+    link = request.form.get("spotify_url", "").strip()
+    # Players may optionally attach an audio file with their suggestion.
+    uploaded = ""
+    f = request.files.get("file")
+    if f and f.filename:
+        name = Path(f.filename).name
+        MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+        f.save(str(MUSIC_DIR / name))
+        uploaded = name
+    if not title and not link and not uploaded:
+        flash("Add a song title, a link, or an audio file.", "error")
+        return redirect(request.referrer or url_for("ondeck_music"))
+    cfg.add_song_request(
+        my_key, my_name,
+        title=title or (uploaded and Path(uploaded).stem.replace("_", " ")) or "(from link)",
+        artist=request.form.get("artist", "").strip(),
+        spotify_url=link,
+        note=request.form.get("note", "").strip(),
+        uploaded_file=uploaded,
+    )
+    flash("Song suggestion submitted — an editor will review it.", "success")
+    return redirect(request.referrer or url_for("ondeck_music"))
+
+
+@app.post("/ondeck/music/request/<rid>/rate")
+def ondeck_request_rate(rid: str):
+    my_key, _ = _rater_identity()
+    if not my_key:
+        abort(403)
+    try:
+        stars = int(request.form.get("stars", 0))
+    except (TypeError, ValueError):
+        stars = 0
+    if not cfg.set_request_rating(rid, my_key, stars):
+        abort(404)
+    return redirect(url_for("ondeck_music"))
+
+
+@app.post("/ondeck/music/request/<rid>/status")
+def ondeck_request_status(rid: str):
+    # Staff-only (not in the player allow-list in _check_auth).
+    status = request.form.get("status", "")
+    if not cfg.set_request_status(rid, status):
+        abort(400)
+    flash(f"Request marked {status}.", "success")
+    return redirect(request.referrer or url_for("ondeck_music"))
+
+
+@app.post("/ondeck/music/request/<rid>/delete")
+def ondeck_request_delete(rid: str):
+    my_key, _ = _rater_identity()
+    role = session.get("role")
+    req = cfg._request(rid)
+    # A player may delete only their own request; staff may delete any.
+    if req and role not in ("admin", "editor") and req.get("requested_by") != my_key:
+        abort(403)
+    cfg.delete_song_request(rid)
+    flash("Request removed.", "success")
+    return redirect(request.referrer or url_for("ondeck_music"))
+
+
+@app.get("/ondeck/spotify-import")
+def ondeck_spotify_import():
+    """Admin page: paste a shared playlist link; manage the pending queue."""
+    my_key, _ = _rater_identity()
+    pending = [r for r in _request_entries(my_key)
+               if r["req"].get("status") != "dismissed"]
+    return render_template("spotify_import.html", requests=pending,
+                           spotify_ready=_spotify_ready())
+
+
+@app.post("/ondeck/spotify-import")
+def ondeck_spotify_import_post():
+    """Read a shared playlist and add its tracks to the pending queue."""
+    url = request.form.get("playlist_url", "").strip()
+    tracks, err = _spotify_playlist_tracks(url)
+    if err:
+        flash(err, "error")
+        return redirect(url_for("ondeck_spotify_import"))
+    # Skip tracks already pending or already in the library (by Spotify URL).
+    seen = {r.get("spotify_url") for r in cfg.song_requests if r.get("spotify_url")}
+    seen |= {s.get("spotify_url") for s in cfg.songs.values() if s.get("spotify_url")}
+    added = skipped = 0
+    for t in tracks:
+        if t["spotify_url"] and t["spotify_url"] in seen:
+            skipped += 1
+            continue
+        cfg.add_song_request("spotify:import", "Spotify playlist",
+                             title=t["title"], artist=t["artist"],
+                             spotify_url=t["spotify_url"],
+                             source="spotify_import", album_art=t["album_art"])
+        if t["spotify_url"]:
+            seen.add(t["spotify_url"])
+        added += 1
+    msg = f"Imported {added} song{'s' if added != 1 else ''} from Spotify."
+    if skipped:
+        msg = (f"Imported {added}, skipped {skipped} already pending or in the "
+               f"library.")
+    flash(msg, "success")
+    return redirect(url_for("ondeck_spotify_import"))
+
+
+@app.post("/ondeck/music/request/<rid>/promote")
+def ondeck_request_promote(rid: str):
+    """Staff-only: upload the purchased audio; promote the pending song to the
+    library, carrying its player rating over verbatim."""
+    req = cfg._request(rid)
+    if not req:
+        abort(404)
+    f = request.files.get("file")
+    if f and f.filename:
+        name = Path(f.filename).name
+        MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+        f.save(str(MUSIC_DIR / name))
+    elif req.get("uploaded_file"):
+        # The player already attached the audio — just approve it.
+        name = req["uploaded_file"]
+    else:
+        flash("Choose an audio file to upload for this song.", "error")
+        return redirect(request.referrer or url_for("ondeck_spotify_import"))
+    sid = cfg.promote_request_to_song(rid, name)
+    # Mirror to the Audio Pi just like a normal library upload.
+    try:
+        with open(str(MUSIC_DIR / name), "rb") as fh:
+            rq.post(_audio_pi_url("/upload"), files={"file": (name, fh)}, timeout=30)
+    except Exception:
+        pass
+    if sid:
+        flash(f'Added "{req.get("title")}" to the library with its rating.', "success")
+    return redirect(request.referrer or url_for("ondeck_spotify_import"))
 
 
 # ---------------------------------------------------------------------------
@@ -1098,10 +1380,15 @@ def ondeck_my_profile():
     player_teams = [cfg.teams.get(tid) for tid in player.get("team_ids", [])]
     player_teams = [t for t in player_teams if t]  # Filter out None values
 
+    # Mid-inning songs the player can rate (the shared pool the coach curates).
+    my_key, _ = _rater_identity()
+    midinning_songs = _song_entries_with_ratings(my_key)
+
     return render_template("my_profile.html", pid=pid, player=player,
                           walkup_song=walkup_song, warmup_song=warmup_song,
                           midgame_song=midgame_song, songs=cfg.songs,
-                          player_teams=player_teams)
+                          player_teams=player_teams,
+                          midinning_songs=midinning_songs)
 
 
 @app.post("/ondeck/my-profile/upload")
@@ -1991,7 +2278,9 @@ def ondeck_settings_hub():
 def ondeck_settings():
     return render_template("settings.html", system=cfg.system,
                            has_yt_cookies=COOKIES_FILE.exists(),
-                           elevenlabs_key_set=bool(_elevenlabs_key()))
+                           elevenlabs_key_set=bool(_elevenlabs_key()),
+                           spotify_ready=_spotify_ready(),
+                           spotify_secret_set=bool(_spotify_creds()[1]))
 
 
 @app.post("/ondeck/settings/save")
@@ -2021,6 +2310,15 @@ def ondeck_settings_save():
             s["elevenlabs_api_key"] = new_key
         elif request.form.get("clear_elevenlabs_key") == "on":
             s["elevenlabs_api_key"] = ""
+
+        # Spotify Web API credentials (read-only playlist import).
+        s["spotify_client_id"] = request.form.get("spotify_client_id",
+                                                  s.get("spotify_client_id", "")).strip()
+        new_secret = request.form.get("spotify_client_secret", "").strip()
+        if new_secret:
+            s["spotify_client_secret"] = new_secret
+        elif request.form.get("clear_spotify_secret") == "on":
+            s["spotify_client_secret"] = ""
 
         cfg.save(mark_dirty=False)
     flash("Settings saved.", "success")
@@ -2130,6 +2428,122 @@ def sync_pair():
 def _elevenlabs_key() -> str:
     """API key from config, falling back to the ELEVENLABS_API_KEY env var."""
     return (cfg.system.get("elevenlabs_api_key") or ELEVENLABS_API_KEY).strip()
+
+
+# -- Spotify (read-only playlist lookups) -----------------------------------
+
+_spotify_tok = {"token": "", "exp": 0.0}  # cached client-credentials token
+
+
+def _spotify_creds() -> tuple[str, str]:
+    cid = (cfg.system.get("spotify_client_id") or SPOTIFY_CLIENT_ID).strip()
+    secret = (cfg.system.get("spotify_client_secret") or SPOTIFY_CLIENT_SECRET).strip()
+    return cid, secret
+
+
+def _spotify_ready() -> bool:
+    cid, secret = _spotify_creds()
+    return bool(cid and secret)
+
+
+def _spotify_token() -> str | None:
+    """A cached client-credentials access token, or None if unconfigured/failed."""
+    cid, secret = _spotify_creds()
+    if not (cid and secret):
+        return None
+    if _spotify_tok["token"] and _spotify_tok["exp"] - 30 > time.time():
+        return _spotify_tok["token"]
+    auth = base64.b64encode(f"{cid}:{secret}".encode()).decode()
+    try:
+        r = rq.post("https://accounts.spotify.com/api/token",
+                    data={"grant_type": "client_credentials"},
+                    headers={"Authorization": f"Basic {auth}"}, timeout=15)
+    except rq.RequestException:
+        return None
+    if r.status_code != 200:
+        return None
+    d = r.json()
+    _spotify_tok["token"] = d.get("access_token", "")
+    _spotify_tok["exp"] = time.time() + int(d.get("expires_in", 3600))
+    return _spotify_tok["token"] or None
+
+
+def _spotify_playlist_id(url: str) -> str | None:
+    """Pull the base-62 playlist id out of any Spotify playlist link/URI."""
+    m = re.search(r"playlist[:/]([A-Za-z0-9]+)", url or "")
+    return m.group(1) if m else None
+
+
+def _spotify_playlist_tracks(url: str) -> tuple[list[dict] | None, str | None]:
+    """Return (tracks, None) or (None, error_message) for a playlist link.
+
+    Each track: {title, artist, spotify_url, album_art}. Pages through the
+    whole playlist. Read-only — no audio is fetched, just the metadata + link.
+    """
+    pid = _spotify_playlist_id(url)
+    if not pid:
+        return None, "That doesn't look like a Spotify playlist link."
+    tok = _spotify_token()
+    if not tok:
+        return None, "Spotify isn't connected — add your API credentials in Settings."
+    fields = "next,items(track(name,artists(name),external_urls(spotify),album(images)))"
+    next_url = (f"https://api.spotify.com/v1/playlists/{pid}/tracks"
+                f"?limit=100&fields={fields}")
+    out: list[dict] = []
+    while next_url:
+        try:
+            r = rq.get(next_url, headers={"Authorization": f"Bearer {tok}"}, timeout=20)
+        except rq.RequestException:
+            return None, "Couldn't reach Spotify. Try again in a moment."
+        if r.status_code == 404:
+            return None, "Playlist not found — make sure it's public or shared by link."
+        if r.status_code == 401:
+            _spotify_tok["token"] = ""  # force refresh next time
+            return None, "Spotify rejected the credentials. Check them in Settings."
+        if r.status_code != 200:
+            return None, f"Spotify returned an error ({r.status_code})."
+        d = r.json()
+        for item in d.get("items", []):
+            t = item.get("track") or {}
+            if not t.get("name"):
+                continue
+            artists = ", ".join(a.get("name", "") for a in t.get("artists", []) if a.get("name"))
+            imgs = (t.get("album") or {}).get("images") or []
+            out.append({
+                "title": t["name"],
+                "artist": artists,
+                "spotify_url": (t.get("external_urls") or {}).get("spotify", ""),
+                "album_art": imgs[-1]["url"] if imgs else "",
+            })
+        next_url = d.get("next")
+    return out, None
+
+
+_LINK_PLATFORMS = [
+    ("spotify", ("open.spotify.com", "spotify:")),
+    ("youtube", ("youtube.com", "youtu.be")),
+    ("apple", ("music.apple.com", "itunes.apple.com")),
+    ("soundcloud", ("soundcloud.com",)),
+    ("amazon", ("music.amazon.",)),
+    ("tidal", ("tidal.com",)),
+    ("bandcamp", ("bandcamp.com",)),
+]
+
+
+@app.template_filter("link_platform")
+def _link_platform(url: str) -> str:
+    """Best-guess music platform for a URL — drives the logo shown beside it.
+
+    Returns a short key ('spotify', 'youtube', 'apple', …) or 'link' for an
+    unrecognized host, or '' when there's no URL at all.
+    """
+    u = (url or "").strip().lower()
+    if not u:
+        return ""
+    for key, needles in _LINK_PLATFORMS:
+        if any(n in u for n in needles):
+            return key
+    return "link"
 
 
 def _elevenlabs_voice() -> str:
