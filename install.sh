@@ -16,7 +16,7 @@
 set -euo pipefail
 
 # --- who and where -------------------------------------------------------
-RUN_USER="${SUDO_USER:-$USER}"
+RUN_USER="${ONDECK_USER:-${SUDO_USER:-$USER}}"
 RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROLE="${ROLE:-both}"          # audio | deck | coach | both  (coach == deck)

@@ -59,4 +59,4 @@ fi
 chown -R "$USER_NAME:$USER_NAME" "$REPO_DIR"
 
 # Hand off to the repo's installer as the service user.
-exec sudo -u "$USER_NAME" ROLE="$ROLE" bash "$REPO_DIR/install.sh"
+exec sudo -u "$USER_NAME" ONDECK_USER="$USER_NAME" ROLE="$ROLE" bash "$REPO_DIR/install.sh"
