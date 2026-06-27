@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+
+<div class="max-w-4xl mx-auto">
+  <h1 class="text-3xl font-bold mb-8">Settings & Tools</h1>
+
+  <!-- Grid of settings cards -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+    <!-- Home / Dashboard -->
+    <a href="/ondeck/dashboard"
+       class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 hover:border-gray-600 hover:bg-gray-750 transition-colors">
+      <div class="text-3xl mb-2">🏠</div>
+      <h2 class="text-lg font-semibold text-white mb-1">Dashboard</h2>
+      <p class="text-sm text-gray-400">Game day overview and playback controls</p>
+    </a>
+
+    <!-- Players -->
+    <a href="/ondeck/players"
+       class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 hover:border-gray-600 hover:bg-gray-750 transition-colors">
+      <div class="text-3xl mb-2">👥</div>
+      <h2 class="text-lg font-semibold text-white mb-1">Players</h2>
+      <p class="text-sm text-gray-400">Manage player profiles and assignments</p>
+    </a>
+
+    <!-- Lineup -->
+    <a href="/ondeck/lineup"
+       class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 hover:border-gray-600 hover:bg-gray-750 transition-colors">
+      <div class="text-3xl mb-2">📋</div>
+      <h2 class="text-lg font-semibold text-white mb-1">Lineup</h2>
+      <p class="text-sm text-gray-400">Set batting order and game-day roster</p>
+    </a>
+
+    <!-- Sounds -->
+    <a href="/ondeck/sounds"
+       class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 hover:border-gray-600 hover:bg-gray-750 transition-colors">
+      <div class="text-3xl mb-2">🔊</div>
+      <h2 class="text-lg font-semibold text-white mb-1">Sounds</h2>
+      <p class="text-sm text-gray-400">Manage celebration and game sounds</p>
+    </a>
+
+    <!-- Bluetooth -->
+    <a href="/ondeck/bluetooth"
+       class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 hover:border-gray-600 hover:bg-gray-750 transition-colors">
+      <div class="text-3xl mb-2">🔗</div>
+      <h2 class="text-lg font-semibold text-white mb-1">Bluetooth</h2>
+      <p class="text-sm text-gray-400">Connect and manage audio speakers</p>
+    </a>
+
+    <!-- Activity / Notifications -->
+    <a href="/ondeck/notifications"
+       class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 hover:border-gray-600 hover:bg-gray-750 transition-colors relative">
+      <div class="text-3xl mb-2">🔔</div>
+      <h2 class="text-lg font-semibold text-white mb-1">Activity</h2>
+      <p class="text-sm text-gray-400">Player activity and change log</p>
+      {% if unread_notifications %}
+      <span class="absolute top-4 right-4 min-w-[1.5rem] h-[1.5rem] px-1.5 flex items-center justify-center rounded-full bg-red-600 text-white text-xs font-bold">{{ unread_notifications }}</span>
+      {% endif %}
+    </a>
+
+    <!-- Signup Links (admin only) -->
+    {% if current_role == 'admin' %}
+    <a href="/ondeck/signup-links"
+       class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 hover:border-gray-600 hover:bg-gray-750 transition-colors">
+      <div class="text-3xl mb-2">🔗</div>
+      <h2 class="text-lg font-semibold text-white mb-1">Signup Links</h2>
+      <p class="text-sm text-gray-400">Create team signup codes for players</p>
+    </a>
+
+    <!-- Teams (admin only) -->
+    <a href="/ondeck/teams"
+       class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 hover:border-gray-600 hover:bg-gray-750 transition-colors">
+      <div class="text-3xl mb-2">⚾</div>
+      <h2 class="text-lg font-semibold text-white mb-1">Teams</h2>
+      <p class="text-sm text-gray-400">Manage teams and assignments</p>
+    </a>
+
+    <!-- Devices (admin only) -->
+    <a href="/ondeck/devices"
+       class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 hover:border-gray-600 hover:bg-gray-750 transition-colors">
+      <div class="text-3xl mb-2">📱</div>
+      <h2 class="text-lg font-semibold text-white mb-1">Devices</h2>
+      <p class="text-sm text-gray-400">Pair and manage Raspberry Pis</p>
+    </a>
+
+    <!-- System Settings (admin only) -->
+    <a href="/ondeck/settings"
+       class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 hover:border-gray-600 hover:bg-gray-750 transition-colors">
+      <div class="text-3xl mb-2">⚙️</div>
+      <h2 class="text-lg font-semibold text-white mb-1">System Settings</h2>
+      <p class="text-sm text-gray-400">Audio Pi, volume, ElevenLabs config</p>
+    </a>
+
+    <!-- Admin Panel (admin only) -->
+    {% if current_role == 'admin' %}
+    <a href="/admin"
+       class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 hover:border-gray-600 hover:bg-gray-750 transition-colors">
+      <div class="text-3xl mb-2">🛡️</div>
+      <h2 class="text-lg font-semibold text-white mb-1">Admin Panel</h2>
+      <p class="text-sm text-gray-400">User management and access control</p>
+    </a>
+    {% endif %}
+
+  </div>
+</div>
+
+{% endblock %}

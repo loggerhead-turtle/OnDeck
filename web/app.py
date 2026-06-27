@@ -1885,6 +1885,14 @@ def ondeck_team_roster():
 # Settings (admin only — enforced in _check_auth)
 # ---------------------------------------------------------------------------
 
+@app.get("/ondeck/settings-hub")
+def ondeck_settings_hub():
+    """Settings hub page - consolidates all admin/editor settings and tools."""
+    unread = _unread_notification_count()
+    return render_template("settings_hub.html", unread_notifications=unread,
+                          current_role=session.get("role"))
+
+
 @app.get("/ondeck/settings")
 def ondeck_settings():
     return render_template("settings.html", system=cfg.system,
