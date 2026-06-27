@@ -470,7 +470,7 @@ def main() -> None:
         # preferred speaker exists — the auto-connect loop only powers on when
         # one is already set.
         try:
-            bt.power_on()
+            bt.ensure_powered()
         except Exception as exc:
             log.warning("Bluetooth power-on at startup failed: %s", exc)
         bt.start_autoconnect()

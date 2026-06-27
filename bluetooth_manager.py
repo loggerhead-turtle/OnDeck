@@ -150,6 +150,22 @@ class BluetoothManager:
         self._unblock_radio()
         self._ctl("power", "on", timeout=8)
 
+    def ensure_powered(self, retries: int = 5, delay: float = 2.0) -> bool:
+        """Unblock + power the radio on, retrying a transient Busy error.
+
+        Right after an rfkill unblock, BlueZ is still initialising the
+        controller and a ``power on`` can fail with
+        ``org.bluez.Error.Busy``. Retrying past that settles it without a
+        reboot.
+        """
+        self._unblock_radio()
+        for _ in range(max(1, retries)):
+            self._ctl("power", "on", timeout=8)
+            if self.powered():
+                return True
+            time.sleep(delay)
+        return self.powered()
+
     def powered(self) -> bool:
         _, out = self._ctl("show", timeout=8)
         return "powered: yes" in out.lower()
