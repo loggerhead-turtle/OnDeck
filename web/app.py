@@ -345,9 +345,7 @@ def _require_sync_token(f):
 # ---------------------------------------------------------------------------
 
 def _audio_pi_url(path: str) -> str:
-    s = cfg.system
-    ip = s.get("audio_pi_ip") or "127.0.0.1"
-    port = s.get("audio_pi_port", 5100)
+    ip, port = cfg.audio_pi_endpoint()
     return f"http://{ip}:{port}{path}"
 
 

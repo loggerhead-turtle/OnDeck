@@ -736,6 +736,30 @@ class ConfigManager:
             self.save()
             return device_id, token, entry["name"]
 
+    def discovered_audio_ip(self) -> str | None:
+        """LAN IP of the most-recently-seen, non-revoked audio-role device.
+
+        Populated from `/sync/ping` (the Audio Pi reports its own IP), so the
+        Stream Deck Pi can reach the Audio Pi without anyone hand-entering an IP.
+        """
+        best = None
+        for d in self.devices.values():
+            if d.get("role") == "audio" and not d.get("revoked") and d.get("ip"):
+                if best is None or d.get("last_seen", "") > best.get("last_seen", ""):
+                    best = d
+        return best.get("ip") if best else None
+
+    def audio_pi_endpoint(self) -> tuple[str, int]:
+        """(ip, port) of the Audio Pi: explicit `audio_pi_ip` setting first, then
+        the auto-discovered audio device, then localhost."""
+        s = self.system
+        try:
+            port = int(s.get("audio_pi_port", 5100) or 5100)
+        except (TypeError, ValueError):
+            port = 5100
+        ip = s.get("audio_pi_ip") or self.discovered_audio_ip() or "127.0.0.1"
+        return ip, port
+
     def device_for_token(self, token: str) -> dict[str, Any] | None:
         """The (non-revoked) device that owns a sync token, if any."""
         if not token:

@@ -36,9 +36,7 @@ class MusicClient:
     # -- target resolution ------------------------------------------------
 
     def _base_url(self) -> str:
-        s = self.config.system
-        ip = s.get("audio_pi_ip") or "127.0.0.1"
-        port = s.get("audio_pi_port", 5100)
+        ip, port = self.config.audio_pi_endpoint()
         return f"http://{ip}:{port}"
 
     def _post(self, path: str, payload: dict | None = None) -> dict | None:
