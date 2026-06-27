@@ -209,6 +209,9 @@ def _check_auth(allowed_roles=None):
         "public_home", "static",
         "ondeck_login", "ondeck_login_post", "ondeck_logout",
         "ondeck_setup", "ondeck_setup_post", "player_signup", "player_signup_post",
+        # Pi-only cloud-link page — reachable before the device has any account
+        # (these endpoints exist only on the deck Pi, registered by main.py).
+        "pi_cloud_settings", "pi_cloud_settings_post",
     }
     if request.endpoint in always_ok:
         return

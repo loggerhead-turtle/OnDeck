@@ -56,6 +56,16 @@
       <p class="text-sm text-gray-400">Connect and manage audio speakers</p>
     </a>
 
+    {% if not cloud_mode %}
+    <!-- Link to Cloud (Pi portal only) -->
+    <a href="/cloud-settings"
+       class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 hover:border-gray-600 hover:bg-gray-750 transition-colors">
+      <div class="text-3xl mb-2">☁️</div>
+      <h2 class="text-lg font-semibold text-white mb-1">Link to Cloud</h2>
+      <p class="text-sm text-gray-400">Connect this Pi to your cloud account</p>
+    </a>
+    {% endif %}
+
     <!-- Activity / Notifications -->
     <a href="/ondeck/notifications"
        class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 hover:border-gray-600 hover:bg-gray-750 transition-colors relative">

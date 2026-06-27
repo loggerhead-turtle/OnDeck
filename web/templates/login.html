@@ -69,6 +69,14 @@
       Players use the username and password set by your coach.
     </p>
 
+    {% if not cloud_mode %}
+    <p class="text-center mt-4">
+      <a href="/cloud-settings" class="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+        Link this device to the cloud →
+      </a>
+    </p>
+    {% endif %}
+
   </div>
 
 </body>

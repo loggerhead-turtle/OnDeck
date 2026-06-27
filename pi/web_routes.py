@@ -131,9 +131,14 @@ def register(app) -> None:
         env = read_sync_env()
         msg = request.args.get("ok", "")
         err = request.args.get("err", "")
+        linked = bool(env.get("ONDECK_SYNC_TOKEN"))
+        status = (f"<div class='ok'>&#10003; Linked to {env.get('ONDECK_CLOUD_URL','the cloud')}</div>"
+                  if linked else
+                  "<div class='err'>Not linked yet — enter your Cloud URL and pairing code below.</div>")
         body = (
             (f"<div class='card'><div class='ok'>{msg}</div></div>" if msg else "")
             + (f"<div class='card'><div class='err'>{err}</div></div>" if err else "")
+            + f"<div class='card'>{status}</div>"
             + "<div class='card'><h2>Cloud link</h2>"
             + "<div class='small'>Generate a pairing code in the cloud portal under "
               "<b>Devices</b>, then enter it here. (Or paste a raw sync token instead.)</div>"
@@ -146,7 +151,7 @@ def register(app) -> None:
             + f"<input name='sync_token' value=\"{env.get('ONDECK_SYNC_TOKEN','')}\" "
               "placeholder='Paste a raw token instead' autocomplete='off'>"
             + "<button class='btn' type='submit'>Save</button></form></div>"
-            + "<a href='/'>&#8592; Back</a>"
+            + "<a href='/ondeck/login'>&#8592; Back to sign in</a>"
         )
         return _shell("Cloud Settings", body)
 
