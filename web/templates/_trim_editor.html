@@ -31,26 +31,15 @@
     </div>
   </div>
 
-  <!-- Timeline scrubber: drag this to move the playhead with a finger on
-       mobile without nudging the trim region or the cue marker. -->
-  <div class="px-4 pt-4 pb-1 bg-gray-950">
-    <div class="flex items-center gap-2">
-      <span class="text-xs text-gray-500 shrink-0">⏵</span>
-      <input type="range" id="{{ editor_id }}-scrub" min="0" max="1000" value="0" step="1"
-             aria-label="Scrub timeline"
-             class="flex-1 min-w-0 accent-white cursor-pointer h-2">
-    </div>
-  </div>
-
   <!-- Waveform -->
-  <div class="px-4 pt-1 pb-2 bg-gray-950">
+  <div class="px-4 pt-4 pb-2 bg-gray-950">
     <div id="{{ editor_id }}-waveform" class="rounded" style="min-height:100px;"></div>
     <!-- Legend so the on-waveform markers are self-explanatory -->
     <div class="flex flex-wrap items-center gap-x-4 gap-y-1 pt-2 text-xs text-gray-500">
       {% if show_trim %}
       <span class="flex items-center gap-1.5">
-        <span class="inline-block w-3 h-3 rounded-sm" style="background:rgba(74,222,128,0.35)"></span>
-        Green band = the part that plays (drag its edges)
+        <span class="inline-block w-3 h-3 rounded-sm" style="background:rgba(34,197,94,0.6)"></span>
+        Green band = the part that plays (use slider below to adjust)
       </span>
       {% endif %}
       {% if show_cue %}
@@ -61,6 +50,29 @@
       {% endif %}
     </div>
   </div>
+
+  <!-- Trim slider (bottom) - controls intro/outro -->
+  {% if show_trim %}
+  <div class="px-4 py-3 bg-gray-950 border-t border-gray-700/50">
+    <div class="space-y-2">
+      <label class="text-xs font-semibold text-gray-300">Trim Boundaries (Intro / Outro)</label>
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-gray-500 shrink-0">Intro</span>
+        <input type="range" id="{{ editor_id }}-trim-start" min="0" max="1000" value="0" step="1"
+               aria-label="Intro trim point"
+               class="flex-1 min-w-0 accent-green-500 cursor-pointer h-3">
+        <span class="text-xs text-gray-500 shrink-0">Outro</span>
+        <input type="range" id="{{ editor_id }}-trim-end" min="0" max="1000" value="1000" step="1"
+               aria-label="Outro trim point"
+               class="flex-1 min-w-0 accent-green-500 cursor-pointer h-3">
+      </div>
+      <div class="flex justify-between text-xs text-gray-500 font-mono">
+        <span id="{{ editor_id }}-trim-start-time">0:00.00</span>
+        <span id="{{ editor_id }}-trim-end-time">0:00.00</span>
+      </div>
+    </div>
+  </div>
+  {% endif %}
 
   <!-- Time ruler -->
   <div class="flex justify-between px-4 pb-2 text-xs font-mono text-gray-600">
@@ -220,14 +232,28 @@ class TrimEditor {
       plugins: [regions],
     })
 
-    // Finger-friendly scrubber: seek without disturbing region/cue.
-    this._scrub = this.$('scrub')
-    if (this._scrub) {
-      this._scrub.addEventListener('input', e => {
-        this._scrubbing = true
-        this._onScrub(Number(e.target.value))
+    // Trim sliders for intro/outro adjustment
+    this._trimStartSlider = this.$('trim-start')
+    this._trimEndSlider = this.$('trim-end')
+    if (this._trimStartSlider) {
+      this._trimStartSlider.addEventListener('input', e => {
+        const val = Number(e.target.value)
+        const endVal = Number(this._trimEndSlider.value)
+        if (val < endVal) {
+          const newStartS = (val / 1000) * this._maxTime()
+          this._moveRegion(newStartS, this._region.end)
+        }
       })
-      this._scrub.addEventListener('change', () => { this._scrubbing = false })
+    }
+    if (this._trimEndSlider) {
+      this._trimEndSlider.addEventListener('input', e => {
+        const val = Number(e.target.value)
+        const startVal = Number(this._trimStartSlider.value)
+        if (val > startVal) {
+          const newEndS = (val / 1000) * this._maxTime()
+          this._moveRegion(this._region.start, newEndS)
+        }
+      })
     }
 
     this._ws.on('ready', () => {
@@ -247,14 +273,16 @@ class TrimEditor {
         this._region = regions.addRegion({
           start: startS,
           end:   endS,
-          color: 'rgba(74, 222, 128, 0.12)',
-          drag:  true,
-          resize: true,
+          color: 'rgba(34, 197, 94, 0.35)',  // more visible green
+          drag:  false,  // disable drag — use slider instead
+          resize: false,  // disable resize — use slider instead
           minLength: 0.02,
         })
         this._updateHandles()
+        this._updateTrimSliders()
         this._region.on('update-end', () => {
           this._updateHandles()
+          this._updateTrimSliders()
           this._notifyUpdate()
         })
         // Attach any pending callbacks that were registered before the region existed
@@ -293,15 +321,8 @@ class TrimEditor {
     // Playback runs on the streaming <audio> element, not WaveSurfer.
     this._audio.addEventListener('timeupdate', () => {
       const t = this._audio.currentTime
-      this.$('tcur').textContent = this._fmt(t)
       // Mirror the cursor on the waveform (WaveSurfer stays paused).
       if (this._ready) { try { this._ws.setTime(t) } catch {} }
-      // Keep the scrubber thumb in step with playback (unless the user is
-      // actively dragging it).
-      const max = this._maxTime()
-      if (this._scrub && !this._scrubbing && isFinite(max) && max > 0) {
-        this._scrub.value = Math.round((t / max) * 1000)
-      }
       // Stop at the end of the trim window and reset to its start.
       if (this._playing && t >= this._bounds().end) {
         this._audio.pause()
@@ -498,6 +519,23 @@ class TrimEditor {
     if (inStart) inStart.value = this._fmt(startS)
     if (inEnd)   inEnd.value   = this._fmt(endS)
     this.$('t0').textContent = this._fmt(startS)
+  }
+
+  _updateTrimSliders() {
+    if (!this._region || !this._trimStartSlider || !this._trimEndSlider) return
+    const maxTime = this._maxTime()
+    if (!isFinite(maxTime) || maxTime <= 0) return
+
+    const startVal = Math.round((this._region.start / maxTime) * 1000)
+    const endVal = Math.round((this._region.end / maxTime) * 1000)
+
+    this._trimStartSlider.value = startVal
+    this._trimEndSlider.value = endVal
+
+    const trimStartTime = this.$('trim-start-time')
+    const trimEndTime = this.$('trim-end-time')
+    if (trimStartTime) trimStartTime.textContent = this._fmt(this._region.start)
+    if (trimEndTime) trimEndTime.textContent = this._fmt(this._region.end)
   }
 
   _updateCueDisplay() {
