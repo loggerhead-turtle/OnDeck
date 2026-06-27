@@ -48,6 +48,10 @@ if [[ "$INSTALL_AUDIO" == 1 ]]; then
   PKGS+=(alsa-utils bluez pipewire pipewire-pulse wireplumber
          libspa-0.2-bluetooth pulseaudio-utils)
 fi
+if [[ "$INSTALL_DECK" == 1 ]]; then
+  # HID backend the Python `streamdeck` library dlopen's to talk to the deck.
+  PKGS+=(libhidapi-libusb0)
+fi
 # Headless Wi-Fi onboarding (captive-portal hotspot + network tooling) runs on
 # EVERY role — both the Audio Pi and the Stream Deck Pi can be set up with no
 # pre-configured Wi-Fi.
@@ -121,6 +125,23 @@ if [[ "$INSTALL_AUDIO" == 1 ]]; then
     "Environment=XDG_RUNTIME_DIR=/run/user/$RUN_UID"
 fi
 if [[ "$INSTALL_DECK" == 1 ]]; then
+  # --- Stream Deck USB access --------------------------------------------
+  # The Python `streamdeck` library (libusb backend) must be able to open the
+  # Elgato device as the service user. A udev rule + plugdev membership grants
+  # that headlessly (the `uaccess` tag only covers an interactive seat, which a
+  # systemd service doesn't have). Done before install_service so the service
+  # starts with access.
+  echo "==> Installing Stream Deck udev rule"
+  sudo tee /etc/udev/rules.d/99-ondeck-streamdeck.rules >/dev/null <<'EOF'
+# Elgato Stream Deck (idVendor 0fd9) — let the OnDeck service user (plugdev) open it.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", GROUP="plugdev", MODE="0660"
+KERNEL=="hidraw*", ATTRS{idVendor}=="0fd9", GROUP="plugdev", MODE="0660"
+EOF
+  sudo groupadd -f plugdev 2>/dev/null || true
+  sudo usermod -aG plugdev "$RUN_USER" 2>/dev/null || true
+  sudo udevadm control --reload-rules 2>/dev/null || true
+  sudo udevadm trigger 2>/dev/null || true
+
   install_service "ondeck-coach" "$REPO_DIR/main.py" "OnDeck Stream Deck Pi (Stream Deck + web portal)"
 
   # Let the web portal (service user) manage Wi-Fi via the helper without a

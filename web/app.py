@@ -34,7 +34,7 @@ from flask import (
 from werkzeug.security import check_password_hash, generate_password_hash
 import requests as rq
 
-from config_manager import ConfigManager, MUSIC_DIR, ONDECK_HOME
+from config_manager import ConfigManager, MUSIC_DIR, ONDECK_HOME, CONFIG_PATH
 
 # ---------------------------------------------------------------------------
 # Mode detection
@@ -198,6 +198,28 @@ def _check_song_duplicates(pid: str, song_id: str, song_type: str) -> tuple[list
 # ---------------------------------------------------------------------------
 # Access control
 # ---------------------------------------------------------------------------
+
+_last_cfg_mtime = [0.0]
+
+
+@app.before_request
+def _reload_pi_config():
+    """On the field Pi, pick up config.json that the out-of-process sync agent
+    rewrote, so the portal shows synced players/songs without a restart.
+
+    On the cloud, ``cfg`` is the in-process source of truth (routes mutate then
+    save it), so we never reload there.
+    """
+    if CLOUD_MODE:
+        return
+    try:
+        mtime = CONFIG_PATH.stat().st_mtime
+    except OSError:
+        return
+    if mtime != _last_cfg_mtime[0]:
+        cfg.load()
+        _last_cfg_mtime[0] = mtime
+
 
 @app.before_request
 def _check_auth(allowed_roles=None):
