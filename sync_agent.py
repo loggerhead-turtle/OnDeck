@@ -83,6 +83,31 @@ def sync() -> bool:
     print("  Config synced.", flush=True)
 
     # ------------------------------------------------------------------ #
+    # 1b. Pull staff accounts so the same login works on the field Pi.    #
+    #     (Player accounts already ride along inside config.json.)        #
+    # ------------------------------------------------------------------ #
+    try:
+        ra = requests.get(f"{CLOUD_URL}/sync/auth",
+                          headers=_headers(), timeout=REQUEST_TIMEOUT)
+        if ra.status_code == 200:
+            users = ra.json().get("users")
+            # Only overwrite when the cloud actually has staff users, so a
+            # transient empty response can't lock the Pi out.
+            if isinstance(users, list) and users:
+                auth_path = ONDECK_HOME / "auth.json"
+                fd, tmp = tempfile.mkstemp(dir=str(ONDECK_HOME), suffix=".tmp")
+                try:
+                    with os.fdopen(fd, "w") as fh:
+                        json.dump({"users": users}, fh, indent=2)
+                    os.replace(tmp, auth_path)
+                finally:
+                    if os.path.exists(tmp):
+                        os.unlink(tmp)
+                print(f"  Auth synced ({len(users)} account(s)).", flush=True)
+    except requests.exceptions.RequestException as exc:
+        print(f"  Auth sync skipped: {exc}", flush=True)
+
+    # ------------------------------------------------------------------ #
     # 2. Sync audio files — download anything new or changed.             #
     # ------------------------------------------------------------------ #
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)

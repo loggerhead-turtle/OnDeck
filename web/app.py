@@ -1982,6 +1982,18 @@ def sync_config():
     return jsonify(cfg.data)
 
 
+@app.get("/sync/auth")
+@_require_sync_token
+def sync_auth():
+    """Staff accounts (admin/editor) so the same login works on the field Pi.
+
+    Player accounts already ride along in config.json; this carries the
+    bcrypt-hashed staff users that live in auth.json. Bearer-protected like the
+    rest of the sync API.
+    """
+    return jsonify(users=_load_users())
+
+
 @app.get("/sync/files")
 @_require_sync_token
 def sync_list_files():
