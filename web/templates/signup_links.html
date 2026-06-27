@@ -68,7 +68,7 @@
           {% endfor %}
         </div>
         <p class="text-xs text-gray-500 mt-2">
-          Expires {{ (link['expires_at'] / 1000)|datetime }}
+          Expires {{ link['expires_at']|datetime }} UTC
         </p>
       </div>
       {% endfor %}
