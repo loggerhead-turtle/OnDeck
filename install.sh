@@ -154,6 +154,22 @@ WantedBy=multi-user.target
 EOF
   sudo systemctl daemon-reload
   sudo systemctl enable --now ondeck-bt-radio.service 2>/dev/null || true
+  # WirePlumber gates its Bluetooth monitor on an active logind *seat* by
+  # default. A headless Pi has lingering (above) but no seat, so the monitor
+  # never registers an A2DP endpoint and `connect` fails with
+  # org.bluez.Error.Failed br-connection-profile-unavailable. Disable seat
+  # monitoring so the speaker can connect headless.
+  sudo mkdir -p /etc/wireplumber/wireplumber.conf.d
+  sudo tee /etc/wireplumber/wireplumber.conf.d/50-ondeck-bluez-no-seat.conf >/dev/null <<'EOF'
+# OnDeck Audio Pi runs headless with no active logind seat, so the default
+# seat-gated Bluetooth monitor never activates. Disable seat monitoring so
+# A2DP endpoints register and speakers can connect.
+wireplumber.profiles = {
+  main = {
+    monitor.bluez.seat-monitoring = disabled
+  }
+}
+EOF
   # Enable the user PipeWire stack so the bluez sink exists headless.
   sudo -u "$RUN_USER" XDG_RUNTIME_DIR="/run/user/$(id -u "$RUN_USER")" \
     systemctl --user enable --now pipewire pipewire-pulse wireplumber 2>/dev/null || true
