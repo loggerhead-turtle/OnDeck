@@ -16,6 +16,36 @@
 
   <form method="POST" action="/admin/homepage/save" class="space-y-5">
 
+    <!-- Identity -->
+    <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-300 mb-1">Identity</label>
+        <p class="text-xs text-gray-500">Your name and contact, shown across the homepage. Leave a field blank to hide it.</p>
+      </div>
+      <div class="grid sm:grid-cols-2 gap-4">
+        <div>
+          <label class="block text-xs text-gray-400 mb-1.5 font-medium">Name</label>
+          <input type="text" name="name" value="{{ hp.name }}" placeholder="Your Name"
+                 class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1.5 font-medium">Initials (logo)</label>
+          <input type="text" name="initials" value="{{ hp.initials }}" placeholder="auto from name" maxlength="3"
+                 class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1.5 font-medium">Contact email</label>
+          <input type="email" name="email" value="{{ hp.email }}" placeholder="you@example.com"
+                 class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1.5 font-medium">Site (footer)</label>
+          <input type="text" name="site" value="{{ hp.site }}" placeholder="yoursite.com"
+                 class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30">
+        </div>
+      </div>
+    </div>
+
     <!-- Tagline -->
     <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
       <label class="block text-sm font-semibold text-gray-300 mb-1.5">Hero Tagline</label>

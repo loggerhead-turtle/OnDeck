@@ -52,6 +52,12 @@ COOKIES_FILE   = ONDECK_HOME / "youtube_cookies.txt"
 HOMEPAGE_FILE  = ONDECK_HOME / "homepage.json"
 
 _HOMEPAGE_DEFAULTS: dict = {
+    # Identity is editable via Admin → Homepage and stored in homepage.json at
+    # runtime — never hardcode personal details in the repo. Neutral defaults:
+    "name":        "Your Name",
+    "initials":    "",
+    "email":       "",
+    "site":        "",
     "tagline":     "Builder, coach, and creator. I make tools that solve real problems.",
     "bio_1":       "",
     "bio_2":       "",
@@ -651,6 +657,10 @@ def admin_homepage():
 @app.post("/admin/homepage/save")
 def admin_homepage_save():
     hp = {
+        "name":        request.form.get("name", "").strip(),
+        "initials":    request.form.get("initials", "").strip(),
+        "email":       request.form.get("email", "").strip(),
+        "site":        request.form.get("site", "").strip(),
         "tagline":     request.form.get("tagline", "").strip(),
         "bio_1":       request.form.get("bio_1", "").strip(),
         "bio_2":       request.form.get("bio_2", "").strip(),

@@ -171,7 +171,8 @@ user-session lingering so the bluez sink exists headless.
 - Current buildCommand: `pip install --upgrade -r requirements.txt && pip install nodeenv && nodeenv --prebuilt /opt/render/project/src/.node`
 - On first deploy: visit `/setup` to create account
 
-Firebase redirect: `example.com/ondeck` → `https://ondeck-43di.onrender.com` (302, configured in `firebase.json`)
+Optional: a custom domain can 302-redirect `your-domain.com/ondeck` → the Render
+service URL (e.g. via a `firebase.json` redirect, kept out of the repo).
 
 ## Tech Stack
 
