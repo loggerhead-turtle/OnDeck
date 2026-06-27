@@ -478,21 +478,42 @@ def player_signup_post(code: str):
         flash("Passwords do not match.", "error")
         return redirect(url_for("player_signup", code=code))
 
-    users = _load_users()
-    if any(u["username"].lower() == username.lower() for u in users):
-        flash(f"Username '{username}' already exists.", "error")
-        return redirect(url_for("player_signup", code=code))
+    # Check if username already exists (in players)
+    password_hash = generate_password_hash(password)
+    for player in cfg.players.values():
+        if (player.get("player_username") or "").lower() == username.lower():
+            flash(f"Username '{username}' already exists.", "error")
+            return redirect(url_for("player_signup", code=code))
 
-    new_user = {"id": str(uuid.uuid4()), "username": username,
-                "password_hash": generate_password_hash(password), "role": "player"}
-    _save_users(users + [new_user])
+    # Create a new player entry with the username/password
+    pid = uuid.uuid4().hex
+    with cfg._lock:
+        cfg.players[pid] = {
+            "jersey": None,  # Admin will set this later
+            "first_name": "",
+            "last_name": username,  # Use username as temporary display name
+            "player_username": username,
+            "player_password_hash": password_hash,
+            "team_ids": link["team_ids"],
+            "announcement_file": None,
+            "announcement_text": "",
+            "announcement_start_ms": 0,
+            "announcement_end_ms": None,
+            "walkup_song_id": None,
+            "music_cue_ms": 0,
+            "pitching_warmup_song_id": None,
+            "midgame_song_id": None,
+            "walkup_songs": [],
+            "warmup_songs": [],
+        }
+        cfg.save()
 
+    # Log them in
     session.permanent = True
-    session["user_id"] = new_user["id"]
     session["role"] = "player"
-    session["username"] = username
+    session["player_id"] = pid
     flash("Account created. Welcome to the team!", "success")
-    return redirect(url_for("ondeck_dashboard"))
+    return redirect(url_for("ondeck_my_profile"))
 
 
 # ---------------------------------------------------------------------------
