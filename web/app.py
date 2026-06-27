@@ -373,7 +373,7 @@ def ondeck_login_post():
 
     # Try admin/editor users first.
     user = _find_user(username)
-    if user and check_password_hash(user["password_hash"], password):
+    if user and user.get("role") != "player" and check_password_hash(user["password_hash"], password):
         session.permanent = remember
         session["user_id"] = user["id"]
         session["role"] = user["role"]
@@ -383,7 +383,7 @@ def ondeck_login_post():
             next_url = url_for("ondeck_dashboard")
         return redirect(next_url)
 
-    # Try player credentials.
+    # Try player credentials in cfg.players.
     for pid, player in cfg.players.items():
         pu = (player.get("player_username") or "").lower()
         if pu == username.lower() and player.get("player_password_hash"):
@@ -392,6 +392,46 @@ def ondeck_login_post():
                 session["role"] = "player"
                 session["player_id"] = pid
                 return redirect(url_for("ondeck_my_profile"))
+
+    # Try legacy player accounts created in auth.json (before the fix).
+    # If found, create/find a matching player entry in cfg.players.
+    user = _find_user(username)
+    if user and user.get("role") == "player" and check_password_hash(user["password_hash"], password):
+        # Find or create a player entry for this legacy user
+        legacy_player_id = None
+        for pid, player in cfg.players.items():
+            if (player.get("player_username") or "").lower() == username.lower():
+                legacy_player_id = pid
+                break
+
+        # If no player entry exists, create one
+        if not legacy_player_id:
+            legacy_player_id = uuid.uuid4().hex
+            with cfg._lock:
+                cfg.players[legacy_player_id] = {
+                    "jersey": None,
+                    "first_name": "",
+                    "last_name": username,
+                    "player_username": username,
+                    "player_password_hash": user["password_hash"],
+                    "team_ids": [],
+                    "announcement_file": None,
+                    "announcement_text": "",
+                    "announcement_start_ms": 0,
+                    "announcement_end_ms": None,
+                    "walkup_song_id": None,
+                    "music_cue_ms": 0,
+                    "pitching_warmup_song_id": None,
+                    "midgame_song_id": None,
+                    "walkup_songs": [],
+                    "warmup_songs": [],
+                }
+                cfg.save()
+
+        session.permanent = True
+        session["role"] = "player"
+        session["player_id"] = legacy_player_id
+        return redirect(url_for("ondeck_my_profile"))
 
     flash("Incorrect username or password.", "error")
     return redirect(url_for("ondeck_login"))
