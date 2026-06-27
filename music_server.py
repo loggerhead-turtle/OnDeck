@@ -24,6 +24,7 @@ Endpoints (all JSON):
 
 from __future__ import annotations
 
+import logging
 import os
 import shlex
 import signal
@@ -35,6 +36,8 @@ from pathlib import Path
 from flask import Flask, jsonify, request
 
 from config_manager import MUSIC_DIR
+
+log = logging.getLogger("ondeck-audio")
 
 try:
     from bluetooth_manager import BluetoothManager
@@ -426,8 +429,41 @@ def http_health():
     return jsonify(ok=True, service="ondeck-audio")
 
 
+@app.get("/")
+def http_landing():
+    """A tiny page so a coach can link/manage the Audio Pi from a browser on the
+    field Wi-Fi — no SSH, no login (the cloud-link + Wi-Fi pages are served by
+    pi.web_routes, registered in main())."""
+    try:
+        from pi.netconfig import read_sync_env
+        env = read_sync_env()
+    except Exception:
+        env = {}
+    linked = bool(env.get("ONDECK_SYNC_TOKEN"))
+    status = (f"&#10003; Linked to {env.get('ONDECK_CLOUD_URL', 'the cloud')}"
+              if linked else "Not linked yet — add your cloud code below.")
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OnDeck Audio Pi</title></head>
+<body style="font-family:system-ui,sans-serif;background:#0b1622;color:#eee;
+ min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1rem;padding:2rem;text-align:center">
+<h1 style="color:#3aa0ff;margin:0">OnDeck Audio Pi</h1>
+<p style="color:#8ab">{status}</p>
+<a href="/cloud-settings" style="display:block;background:#3aa0ff;color:#012;padding:.7rem 1.4rem;
+ border-radius:8px;font-weight:700;text-decoration:none">Link to cloud</a>
+<a href="/wifi" style="color:#3aa0ff;text-decoration:none">Wi-Fi networks &rarr;</a>
+</body></html>"""
+
+
 def main() -> None:
     port = int(os.environ.get("ONDECK_AUDIO_PORT", "5100"))
+    # Cloud-link + Wi-Fi pages (same ones the deck portal uses) so the Audio Pi
+    # can be linked/managed from a browser on the field Wi-Fi without SSH.
+    try:
+        from pi.web_routes import register as register_pi_routes
+        register_pi_routes(app)
+    except Exception as exc:  # optional — must not stop audio playback
+        log.warning("Pi web routes not registered: %s", exc)
     if bt is not None:
         bt.start_autoconnect()
     app.run(host="0.0.0.0", port=port, threaded=True)

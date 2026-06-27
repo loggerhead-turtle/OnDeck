@@ -151,7 +151,7 @@ def register(app) -> None:
             + f"<input name='sync_token' value=\"{env.get('ONDECK_SYNC_TOKEN','')}\" "
               "placeholder='Paste a raw token instead' autocomplete='off'>"
             + "<button class='btn' type='submit'>Save</button></form></div>"
-            + "<a href='/ondeck/login'>&#8592; Back to sign in</a>"
+            + "<a href='/'>&#8592; Back</a>"
         )
         return _shell("Cloud Settings", body)
 

@@ -143,15 +143,15 @@ EOF
   sudo udevadm trigger 2>/dev/null || true
 
   install_service "ondeck-coach" "$REPO_DIR/main.py" "OnDeck Stream Deck Pi (Stream Deck + web portal)"
+fi
 
-  # Let the web portal (service user) manage Wi-Fi via the helper without a
-  # password prompt — used by the deck portal's /wifi page.
-  echo "==> Installing sudoers rule for Wi-Fi management"
-  sudo tee /etc/sudoers.d/ondeck-wifi >/dev/null <<EOF
+# Let the service user manage Wi-Fi via the helper without a password prompt —
+# used by the /wifi page on BOTH the deck portal and the Audio Pi's :5100 server.
+echo "==> Installing sudoers rule for Wi-Fi management"
+sudo tee /etc/sudoers.d/ondeck-wifi >/dev/null <<EOF
 $RUN_USER ALL=(root) NOPASSWD: $VENV/bin/python $REPO_DIR/pi/add_wifi.py, /sbin/wpa_cli -i wlan0 reconfigure, /usr/sbin/wpa_cli -i wlan0 reconfigure
 EOF
-  sudo chmod 0440 /etc/sudoers.d/ondeck-wifi
-fi
+sudo chmod 0440 /etc/sudoers.d/ondeck-wifi
 
 # --- headless network onboarding (boot gate + captive portal) ------------
 # A oneshot that runs BEFORE the main service on EVERY role: applies
