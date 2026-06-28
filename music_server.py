@@ -434,6 +434,13 @@ def http_bt_preferred():
 
 SPOTIFY_SERVICE = os.environ.get("ONDECK_SPOTIFY_SERVICE", "raspotify")
 SPOTIFY_ENABLED = not os.environ.get("ONDECK_NO_SPOTIFY")
+SPOTIFY_NAME    = os.environ.get("ONDECK_SPOTIFY_NAME", "OnDeck Field Speaker")
+# Same cache dir install.sh points raspotify at; this server runs as that user.
+SPOTIFY_CACHE   = os.path.expanduser("~/.cache/librespot")
+
+# Tracks the one-shot `librespot --enable-oauth` login subprocess between the
+# /spotify/login/start and /complete calls (the portal "Connect account" flow).
+_sp_login: dict = {"proc": None, "url": None}
 
 
 def _systemctl(*args: str) -> tuple[bool, str]:
@@ -448,14 +455,54 @@ def _systemctl(*args: str) -> tuple[bool, str]:
         return False, str(exc)
 
 
+def _librespot_bin() -> str | None:
+    for p in ("/usr/bin/librespot", "/usr/local/bin/librespot"):
+        if os.path.exists(p):
+            return p
+    from shutil import which
+    return which("librespot")
+
+
+def _spotify_connected() -> bool:
+    """True once a Spotify account token has been cached (login completed)."""
+    return os.path.exists(os.path.join(SPOTIFY_CACHE, "credentials.json"))
+
+
+def _spotify_login_cleanup() -> None:
+    proc = _sp_login.get("proc")
+    if proc and proc.poll() is None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    _sp_login.update(proc=None, url=None)
+
+
+def _sp_login_reader(proc) -> None:
+    """Drain librespot output, capturing the Spotify authorize URL it prints."""
+    import re as _re
+    try:
+        for line in proc.stdout:
+            m = _re.search(r"https://accounts\.spotify\.com/authorize\S+", line)
+            if m and not _sp_login.get("url"):
+                _sp_login["url"] = m.group(0)
+    except Exception:
+        pass
+
+
 def _spotify_status() -> dict:
     if not SPOTIFY_ENABLED:
         return {"ok": False, "error": "spotify control disabled"}
     active_ok, active = _systemctl("is-active", SPOTIFY_SERVICE)
     # is-enabled is informational; an unknown unit reports "not-found".
     _, enabled = _systemctl("is-enabled", SPOTIFY_SERVICE)
-    installed = enabled != "not-found" or active in ("active", "inactive", "failed")
-    return {"ok": True, "installed": installed,
+    installed = (enabled != "not-found" or active in ("active", "inactive", "failed")
+                 or _librespot_bin() is not None)
+    return {"ok": True, "installed": installed, "connected": _spotify_connected(),
             "active": active_ok, "state": active, "enabled": enabled}
 
 
@@ -481,6 +528,66 @@ def http_spotify_enable():
         return jsonify(ok=False, error="spotify control disabled"), 503
     ok, msg = _systemctl("enable", "--now", SPOTIFY_SERVICE)
     return jsonify(ok=ok, message=msg, status=_spotify_status())
+
+
+# -- One-time Spotify account login, driven from the portal -----------------
+# So a coach can connect their Spotify account from the OnDeck website (phone)
+# instead of SSHing in. librespot's OAuth must redirect to 127.0.0.1, which a
+# phone can't reach — so the portal collects the redirect URL the phone lands
+# on and we relay it to librespot's local callback here on the Pi.
+
+@app.post("/spotify/login/start")
+def http_spotify_login_start():
+    if not SPOTIFY_ENABLED:
+        return jsonify(ok=False, error="spotify control disabled"), 503
+    binp = _librespot_bin()
+    if not binp:
+        return jsonify(ok=False, error="librespot is not installed on the Audio Pi yet"), 400
+    _spotify_login_cleanup()
+    os.makedirs(SPOTIFY_CACHE, exist_ok=True)
+    proc = subprocess.Popen(
+        [binp, "--enable-oauth", "--disable-discovery",
+         "--cache", SPOTIFY_CACHE, "--name", SPOTIFY_NAME],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    _sp_login.update(proc=proc, url=None)
+    threading.Thread(target=_sp_login_reader, args=(proc,), daemon=True).start()
+    # Wait (under the portal's 15s read timeout) for librespot to print the URL.
+    deadline = time.time() + 12
+    while time.time() < deadline:
+        if _sp_login.get("url"):
+            return jsonify(ok=True, auth_url=_sp_login["url"])
+        if proc.poll() is not None:
+            break
+        time.sleep(0.3)
+    _spotify_login_cleanup()
+    return jsonify(ok=False, error="Spotify login didn't start (no URL from librespot)"), 500
+
+
+@app.post("/spotify/login/complete")
+def http_spotify_login_complete():
+    if not SPOTIFY_ENABLED:
+        return jsonify(ok=False, error="spotify control disabled"), 503
+    body = request.get_json(force=True, silent=True) or {}
+    redirect_url = (body.get("redirect_url") or "").strip()
+    if not redirect_url.startswith("http://127.0.0.1"):
+        return jsonify(ok=False,
+                       error="Paste the full http://127.0.0.1:5588/login?... address."), 400
+    # Hand the authorization code to librespot's waiting local callback server.
+    import urllib.request
+    try:
+        urllib.request.urlopen(redirect_url, timeout=6).read()
+    except Exception:
+        pass  # librespot often drops the connection right after grabbing the code
+    # Wait briefly for the credentials cache to land.
+    for _ in range(16):
+        if _spotify_connected():
+            break
+        time.sleep(0.3)
+    ok = _spotify_connected()
+    _spotify_login_cleanup()
+    return jsonify(ok=ok, connected=ok,
+                   error=None if ok else "Login didn't complete — start again and retry.")
 
 
 @app.get("/health")

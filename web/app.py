@@ -1972,6 +1972,16 @@ def ondeck_api_spotify_action(action: str):
     return jsonify(data), code
 
 
+@app.post("/ondeck/api/spotify/login/<step>")
+def ondeck_api_spotify_login(step: str):
+    """One-time 'Connect Spotify account' flow, proxied to the Audio Pi."""
+    if step not in {"start", "complete"}:
+        abort(404)
+    body = request.get_json(silent=True) or {}
+    data, code = _proxy("POST", f"/spotify/login/{step}", json=body)
+    return jsonify(data), code
+
+
 # ---------------------------------------------------------------------------
 # Lineup editor (admin + editor)
 # ---------------------------------------------------------------------------

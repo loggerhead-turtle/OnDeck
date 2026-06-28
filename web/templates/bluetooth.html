@@ -59,10 +59,40 @@
         is here, on purpose.
       </p>
       <p id="sp-status" class="text-sm mt-3 text-gray-500">Checking the Audio Pi…</p>
+      <p id="sp-account" class="text-sm mt-1 text-gray-500"></p>
     </div>
     <div class="flex flex-col gap-2 shrink-0">
       <button id="sp-enable" class="px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold disabled:opacity-40">Enable</button>
       <button id="sp-disable" class="px-4 py-2 rounded-lg bg-red-800/80 hover:bg-red-700 text-red-100 text-sm font-semibold disabled:opacity-40">Disable (kill)</button>
+    </div>
+  </div>
+
+  <!-- Connect Spotify account (one-time OAuth, phone-friendly) -->
+  <div class="mt-5 pt-5 border-t border-gray-700/50">
+    <div class="flex items-center justify-between gap-3">
+      <p class="text-sm text-gray-400">Connect the Spotify account that's allowed to cast (one-time login).</p>
+      <button id="sp-login" class="px-3 py-2 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white text-sm font-semibold shrink-0">Connect account</button>
+    </div>
+
+    <div id="sp-login-panel" class="hidden mt-4 bg-gray-900 border border-gray-700/50 rounded-lg p-4 space-y-3">
+      <div>
+        <p class="text-sm text-gray-300 mb-1"><b>1.</b> Tap to approve in Spotify (use your Premium account):</p>
+        <a id="sp-auth-link" href="#" target="_blank" rel="noopener"
+           class="inline-block px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold">Authorize in Spotify ↗</a>
+      </div>
+      <div>
+        <p class="text-sm text-gray-300 mb-1">
+          <b>2.</b> Spotify will bounce you to a page that says <i>"site can't be reached"</i> —
+          that's expected. Copy that page's full address and paste it here:
+        </p>
+        <input id="sp-redirect" type="text" inputmode="url" autocomplete="off"
+               placeholder="http://127.0.0.1:5588/login?code=…"
+               class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-green-500">
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="sp-finish" class="px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold disabled:opacity-40">Finish</button>
+        <button id="sp-cancel" class="px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm">Cancel</button>
+      </div>
     </div>
   </div>
 </div>
@@ -214,27 +244,42 @@ AUTO.addEventListener('change', async () => {
 
 // ── Spotify Connect control ─────────────────────────────────────────────
 const SP_STATUS  = document.getElementById('sp-status');
+const SP_ACCOUNT = document.getElementById('sp-account');
 const SP_ENABLE  = document.getElementById('sp-enable');
 const SP_DISABLE = document.getElementById('sp-disable');
+const SP_LOGIN   = document.getElementById('sp-login');
+const SP_PANEL   = document.getElementById('sp-login-panel');
+const SP_LINK    = document.getElementById('sp-auth-link');
+const SP_REDIR   = document.getElementById('sp-redirect');
+const SP_FINISH  = document.getElementById('sp-finish');
+const SP_CANCEL  = document.getElementById('sp-cancel');
 
 function renderSpotify(data){
   if (!data || data.ok === false){
     const msg = (data && data.error) ? data.error : 'Audio Pi unreachable';
     SP_STATUS.innerHTML = `<span class="text-amber-400">${msg}. Open this page on the field Wi-Fi.</span>`;
-    SP_ENABLE.disabled = true; SP_DISABLE.disabled = true;
+    SP_ACCOUNT.textContent = '';
+    SP_ENABLE.disabled = true; SP_DISABLE.disabled = true; SP_LOGIN.disabled = true;
     return;
   }
   if (!data.installed){
     SP_STATUS.innerHTML = '<span class="text-amber-400">raspotify is not installed on the Audio Pi yet.</span>';
-    SP_ENABLE.disabled = true; SP_DISABLE.disabled = true;
+    SP_ACCOUNT.textContent = '';
+    SP_ENABLE.disabled = true; SP_DISABLE.disabled = true; SP_LOGIN.disabled = true;
     return;
   }
+  SP_LOGIN.disabled = false;
+  SP_LOGIN.textContent = data.connected ? 'Reconnect account' : 'Connect account';
+  SP_ACCOUNT.innerHTML = data.connected
+    ? '<span class="text-green-400">✓ Spotify account connected.</span>'
+    : '<span class="text-amber-400">No Spotify account connected yet — tap "Connect account".</span>';
   if (data.active){
     SP_STATUS.innerHTML = '<span class="text-green-400">● Running</span> — the Pi is available in your Spotify app.';
     SP_ENABLE.disabled = true; SP_DISABLE.disabled = false;
   } else {
     SP_STATUS.innerHTML = '<span class="text-gray-400">○ Stopped</span> — the Pi is hidden from Spotify.';
-    SP_ENABLE.disabled = false; SP_DISABLE.disabled = true;
+    // Can't usefully run without a connected account (discovery is off).
+    SP_ENABLE.disabled = !data.connected; SP_DISABLE.disabled = true;
   }
 }
 
@@ -254,6 +299,42 @@ async function spotifyAction(act){
 
 SP_ENABLE.addEventListener('click', () => spotifyAction('enable'));
 SP_DISABLE.addEventListener('click', () => spotifyAction('disable'));
+
+// One-time account login flow.
+SP_LOGIN.addEventListener('click', async () => {
+  SP_LOGIN.disabled = true; SP_LOGIN.textContent = 'Starting…';
+  const { code, data } = await api('/ondeck/api/spotify/login/start', {});
+  SP_LOGIN.disabled = false; SP_LOGIN.textContent = 'Connect account';
+  if (code !== 200 || !data.ok || !data.auth_url){
+    banner(data.error || 'Could not start Spotify login', 'error');
+    return;
+  }
+  SP_LINK.href = data.auth_url;
+  SP_REDIR.value = '';
+  SP_PANEL.classList.remove('hidden');
+  SP_PANEL.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+});
+
+SP_CANCEL.addEventListener('click', () => SP_PANEL.classList.add('hidden'));
+
+SP_FINISH.addEventListener('click', async () => {
+  const url = SP_REDIR.value.trim();
+  if (!url.startsWith('http://127.0.0.1')){
+    banner('Paste the full http://127.0.0.1:5588/login?… address.', 'error');
+    return;
+  }
+  SP_FINISH.disabled = true; SP_FINISH.textContent = 'Finishing…';
+  const { code, data } = await api('/ondeck/api/spotify/login/complete', {redirect_url: url});
+  SP_FINISH.disabled = false; SP_FINISH.textContent = 'Finish';
+  const ok = code === 200 && data.ok !== false && data.connected;
+  if (ok){
+    banner('Spotify account connected!', 'ok');
+    SP_PANEL.classList.add('hidden');
+    refreshSpotify();
+  } else {
+    banner(data.error || 'Login did not complete — try again', 'error');
+  }
+});
 
 refresh();
 refreshSpotify();

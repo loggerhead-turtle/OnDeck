@@ -175,19 +175,29 @@ installs it **account-bound with discovery OFF** (`LIBRESPOT_DISABLE_DISCOVERY`)
 so only the coach's own Spotify account ever sees the device — nobody else on
 the field Wi-Fi can grab it. raspotify runs as the OnDeck run-user (drop-in
 `raspotify.service.d/10-ondeck.conf`) so it shares that user's PipeWire session
-and lands on the same Bluetooth speaker sink. It ships **disabled**; after a
-one-time OAuth login (`librespot --enable-oauth --disable-discovery --cache
-~/.cache/librespot`) the coach turns it on from the portal.
+and lands on the same Bluetooth speaker sink. It ships **disabled**.
+
+The one-time account login is done **from the portal** (phone-friendly) rather
+than the terminal. librespot's OAuth must redirect to `127.0.0.1`, which a phone
+can't reach, so the flow bridges it: the portal starts `librespot
+--enable-oauth` on the Pi, shows the Spotify authorize link, the coach approves
+and copies the `http://127.0.0.1:5588/login?...` address the phone lands on, and
+the portal relays it to librespot's local callback on the Pi (token cached to
+`~/.cache/librespot/credentials.json`). The terminal flow (`librespot
+--enable-oauth --disable-discovery --cache ~/.cache/librespot`) still works.
 
 Control is deliberately **asymmetric — off everywhere, on only in the portal**,
 so nobody can start music mid-game:
-- Audio Pi endpoints: `GET /spotify/status`, `POST /spotify/{enable,disable}`.
-  `disable` is a hard kill (`systemctl disable --now raspotify`) — the device
-  disappears from Spotify. Driven via `sudo -n systemctl` (sudoers drop-in
-  `/etc/sudoers.d/ondeck-spotify`). `ONDECK_SPOTIFY_SERVICE` overrides the unit
-  name; `ONDECK_NO_SPOTIFY=1` disables control (laptops/CI → 503).
-- Portal: enable/disable card on `/ondeck/bluetooth`, proxied via
-  `/ondeck/api/spotify/*` (503 from the cloud portal, like Bluetooth).
+- Audio Pi endpoints: `GET /spotify/status` (reports `installed`, `connected`,
+  `active`), `POST /spotify/{enable,disable}`, and the login bridge
+  `POST /spotify/login/{start,complete}`. `disable` is a hard kill
+  (`systemctl disable --now raspotify`) — the device disappears from Spotify.
+  Driven via `sudo -n systemctl` (sudoers drop-in `/etc/sudoers.d/ondeck-spotify`).
+  `ONDECK_SPOTIFY_SERVICE` overrides the unit name; `ONDECK_SPOTIFY_NAME` the
+  device name; `ONDECK_NO_SPOTIFY=1` disables control (laptops/CI → 503).
+- Portal: enable/disable + "Connect account" card on `/ondeck/bluetooth`,
+  proxied via `/ondeck/api/spotify/*` (503 from the cloud portal, like
+  Bluetooth — do the login from the field portal that can reach the Pi).
 - Stream Deck: an `action` slot with `ref="spotify_off"` ("Stop Spotify") — an
   **off-only** kill key. There is no on-action by design.
 
