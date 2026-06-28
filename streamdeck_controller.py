@@ -396,7 +396,8 @@ class StreamDeckController:
         if kind == "nav":
             return (self.config.pages.get(ref, {}).get("name", ref) or "")[:10]
         if kind == "action":
-            return {"play": "Play", "stop": "Stop", "fade": "Fade"}.get(ref, ref)
+            return {"play": "Play", "stop": "Stop", "fade": "Fade",
+                    "spotify_off": "Stop\nSpotify"}.get(ref, ref)
         if kind == "edit_lineup":
             return "Edit\nLineup"
         if kind == "lineup_slot":
@@ -489,6 +490,10 @@ class StreamDeckController:
                 ok = self.music.stop()
             elif ref == "fade":
                 ok = self.music.fade(int(slot.get("fade_ms") or 1000))
+            elif ref == "spotify_off":
+                # Off-only kill switch: stop Spotify on the Audio Pi. There is no
+                # matching "on" action — re-enabling is portal-only by design.
+                ok = self.music.spotify_off()
         if ok:
             self._flash(btn_idx)
 

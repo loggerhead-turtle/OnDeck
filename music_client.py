@@ -69,6 +69,10 @@ class MusicClient:
     def fade(self, ms: int = 1000) -> bool:
         return self._post("/fade", {"ms": ms}) is not None
 
+    def spotify_off(self) -> bool:
+        """Hard-kill the Audio Pi's Spotify Connect service (off-only)."""
+        return self._post("/spotify/disable") is not None
+
     def set_volume(self, level: int) -> bool:
         return self._post("/volume", {"level": int(level)}) is not None
 

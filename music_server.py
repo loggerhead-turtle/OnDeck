@@ -424,6 +424,65 @@ def http_bt_preferred():
     return jsonify(ok=True, status=mgr.status())
 
 
+# -- Spotify Connect (raspotify) control -----------------------------------
+# The Audio Pi can run raspotify (librespot) so a coach casts Spotify to the
+# field speaker from their phone. Control is *off-only* from the field: these
+# endpoints hard-kill the service (it vanishes from the Spotify device list) so
+# nobody can start music mid-game. Re-enabling is a deliberate action from the
+# authenticated portal. ONDECK_SPOTIFY_SERVICE overrides the unit name;
+# ONDECK_NO_SPOTIFY=1 disables control on laptops/CI.
+
+SPOTIFY_SERVICE = os.environ.get("ONDECK_SPOTIFY_SERVICE", "raspotify")
+SPOTIFY_ENABLED = not os.environ.get("ONDECK_NO_SPOTIFY")
+
+
+def _systemctl(*args: str) -> tuple[bool, str]:
+    """Run `sudo -n systemctl <args>`; returns (ok, stripped-stdout-or-error)."""
+    try:
+        r = subprocess.run(
+            ["sudo", "-n", "systemctl", *args],
+            capture_output=True, text=True, timeout=10,
+        )
+        return r.returncode == 0, (r.stdout or r.stderr).strip()
+    except Exception as exc:  # systemctl/sudo missing, timeout, etc.
+        return False, str(exc)
+
+
+def _spotify_status() -> dict:
+    if not SPOTIFY_ENABLED:
+        return {"ok": False, "error": "spotify control disabled"}
+    active_ok, active = _systemctl("is-active", SPOTIFY_SERVICE)
+    # is-enabled is informational; an unknown unit reports "not-found".
+    _, enabled = _systemctl("is-enabled", SPOTIFY_SERVICE)
+    installed = enabled != "not-found" or active in ("active", "inactive", "failed")
+    return {"ok": True, "installed": installed,
+            "active": active_ok, "state": active, "enabled": enabled}
+
+
+@app.get("/spotify/status")
+def http_spotify_status():
+    return jsonify(**_spotify_status())
+
+
+@app.post("/spotify/disable")
+def http_spotify_disable():
+    """Hard kill: stop the service AND disable it so a reboot can't revive it."""
+    if not SPOTIFY_ENABLED:
+        return jsonify(ok=False, error="spotify control disabled"), 503
+    # `disable --now` stops the unit and clears its boot enablement in one call.
+    ok, msg = _systemctl("disable", "--now", SPOTIFY_SERVICE)
+    return jsonify(ok=ok, message=msg, status=_spotify_status())
+
+
+@app.post("/spotify/enable")
+def http_spotify_enable():
+    """Deliberate re-enable from the portal: start the service and re-enable it."""
+    if not SPOTIFY_ENABLED:
+        return jsonify(ok=False, error="spotify control disabled"), 503
+    ok, msg = _systemctl("enable", "--now", SPOTIFY_SERVICE)
+    return jsonify(ok=ok, message=msg, status=_spotify_status())
+
+
 @app.get("/health")
 def http_health():
     return jsonify(ok=True, service="ondeck-audio")

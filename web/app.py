@@ -1950,6 +1950,29 @@ def ondeck_api_bt_action(action: str):
 
 
 # ---------------------------------------------------------------------------
+# Spotify Connect (raspotify) — admin/editor enable/disable on the Audio Pi
+# ---------------------------------------------------------------------------
+# Coaches cast Spotify to the field speaker from their phone. Turning it OFF is
+# available from the portal AND the Stream Deck (a hard kill). Turning it back
+# ON is portal-only and behind login — there is deliberately no "on" control on
+# the Stream Deck, so nobody can start music mid-game. Proxied to the Audio Pi
+# like Bluetooth; 503 from the cloud portal (no route to the Pi).
+
+@app.get("/ondeck/api/spotify/status")
+def ondeck_api_spotify_status():
+    data, code = _proxy("GET", "/spotify/status")
+    return jsonify(data), code
+
+
+@app.post("/ondeck/api/spotify/<action>")
+def ondeck_api_spotify_action(action: str):
+    if action not in {"enable", "disable"}:
+        abort(404)
+    data, code = _proxy("POST", f"/spotify/{action}")
+    return jsonify(data), code
+
+
+# ---------------------------------------------------------------------------
 # Lineup editor (admin + editor)
 # ---------------------------------------------------------------------------
 

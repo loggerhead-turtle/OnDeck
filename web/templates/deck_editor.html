@@ -168,6 +168,7 @@
             <option value="play">Transport: Play</option>
             <option value="stop">Transport: Stop</option>
             <option value="fade">Transport: Fade out</option>
+            <option value="spotify_off">Stop Spotify (kill switch)</option>
           </select>
         </div>
 
@@ -279,7 +280,7 @@ function defaultLabel(slot) {
   if (t === 'nav') return (DECK.navPages.find(n => n.id === slot.ref) || {}).label || 'Page';
   if (t === 'edit_lineup') return 'Edit\nLineup';
   if (t === 'lineup_slot') return 'Spot ' + (slot.ref || '?');
-  if (t === 'action') return { play: 'Play', stop: 'Stop', fade: 'Fade' }[slot.ref] || slot.ref;
+  if (t === 'action') return { play: 'Play', stop: 'Stop', fade: 'Fade', spotify_off: 'Stop\nSpotify' }[slot.ref] || slot.ref;
   return '';   // text-only: falls back to its own label
 }
 
@@ -332,7 +333,7 @@ const ACTION_PARAMS = {
   nav: ['p-nav'],
   lineup_slot: ['p-lineup_slot'],
   fade: ['p-fade'],
-  text: [], edit_lineup: [], play: [], stop: [], blank: [],
+  text: [], edit_lineup: [], play: [], stop: [], blank: [], spotify_off: [],
 };
 
 function showParams(action) {

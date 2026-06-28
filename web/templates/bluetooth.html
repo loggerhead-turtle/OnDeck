@@ -46,6 +46,27 @@
   </div>
 </div>
 
+<!-- Spotify Connect (raspotify) — enable/disable the field "cast from phone" -->
+<div class="bg-gray-800 border border-gray-700/50 rounded-xl p-6 mt-6">
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h2 class="text-lg font-semibold text-white mb-1">Spotify (cast from your phone)</h2>
+      <p class="text-sm text-gray-400 max-w-2xl">
+        When enabled, the Audio Pi shows up as a Spotify Connect device in your
+        Spotify app so you can play through the field speaker during warm-ups.
+        <b>Disable</b> hard-kills it — the device disappears so nothing can start
+        mid-game. The Stream Deck can only turn it <b>off</b>; turning it back on
+        is here, on purpose.
+      </p>
+      <p id="sp-status" class="text-sm mt-3 text-gray-500">Checking the Audio Pi…</p>
+    </div>
+    <div class="flex flex-col gap-2 shrink-0">
+      <button id="sp-enable" class="px-4 py-2 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold disabled:opacity-40">Enable</button>
+      <button id="sp-disable" class="px-4 py-2 rounded-lg bg-red-800/80 hover:bg-red-700 text-red-100 text-sm font-semibold disabled:opacity-40">Disable (kill)</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const BANNER = document.getElementById('banner');
 const STATUS = document.getElementById('status');
@@ -191,8 +212,53 @@ AUTO.addEventListener('change', async () => {
   banner('Auto-connect ' + (AUTO.checked ? 'on' : 'off'));
 });
 
+// ── Spotify Connect control ─────────────────────────────────────────────
+const SP_STATUS  = document.getElementById('sp-status');
+const SP_ENABLE  = document.getElementById('sp-enable');
+const SP_DISABLE = document.getElementById('sp-disable');
+
+function renderSpotify(data){
+  if (!data || data.ok === false){
+    const msg = (data && data.error) ? data.error : 'Audio Pi unreachable';
+    SP_STATUS.innerHTML = `<span class="text-amber-400">${msg}. Open this page on the field Wi-Fi.</span>`;
+    SP_ENABLE.disabled = true; SP_DISABLE.disabled = true;
+    return;
+  }
+  if (!data.installed){
+    SP_STATUS.innerHTML = '<span class="text-amber-400">raspotify is not installed on the Audio Pi yet.</span>';
+    SP_ENABLE.disabled = true; SP_DISABLE.disabled = true;
+    return;
+  }
+  if (data.active){
+    SP_STATUS.innerHTML = '<span class="text-green-400">● Running</span> — the Pi is available in your Spotify app.';
+    SP_ENABLE.disabled = true; SP_DISABLE.disabled = false;
+  } else {
+    SP_STATUS.innerHTML = '<span class="text-gray-400">○ Stopped</span> — the Pi is hidden from Spotify.';
+    SP_ENABLE.disabled = false; SP_DISABLE.disabled = true;
+  }
+}
+
+async function refreshSpotify(){
+  const { code, data } = await api('/ondeck/api/spotify/status');
+  renderSpotify(code === 200 ? data : null);
+}
+
+async function spotifyAction(act){
+  SP_ENABLE.disabled = true; SP_DISABLE.disabled = true;
+  const { code, data } = await api('/ondeck/api/spotify/' + act, {});
+  const ok = code === 200 && data.ok !== false;
+  banner(ok ? ('Spotify ' + (act === 'enable' ? 'enabled' : 'disabled'))
+            : (data.error || data.message || (act + ' failed')), ok ? 'ok' : 'error');
+  renderSpotify(ok ? data.status : null);
+}
+
+SP_ENABLE.addEventListener('click', () => spotifyAction('enable'));
+SP_DISABLE.addEventListener('click', () => spotifyAction('disable'));
+
 refresh();
+refreshSpotify();
 setInterval(refresh, 5000);
+setInterval(refreshSpotify, 5000);
 </script>
 
 {% endblock %}

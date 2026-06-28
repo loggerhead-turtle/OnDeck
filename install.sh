@@ -175,6 +175,57 @@ EOF
     systemctl --user enable --now pipewire pipewire-pulse wireplumber 2>/dev/null || true
 
   RUN_UID="$(id -u "$RUN_USER")"
+
+  # --- Spotify Connect (raspotify) ---------------------------------------
+  # Lets a coach cast Spotify to the field speaker from their phone. We run
+  # librespot bound to the coach's account with discovery DISABLED, so only
+  # that account ever sees the device — nobody on the field Wi-Fi can grab it.
+  # The OnDeck portal/Stream Deck start & stop the service (see music_server's
+  # /spotify/* endpoints); the sudoers drop-in below lets the service user do
+  # that without a password. Best-effort: a Pi with no network to the apt repo
+  # just skips this and the portal shows "not installed".
+  echo "==> Installing raspotify (Spotify Connect)"
+  if ! command -v librespot >/dev/null 2>&1 && ! dpkg -s raspotify >/dev/null 2>&1; then
+    curl -sSL https://dtcooper.github.io/raspotify/install.sh | sudo sh 2>/dev/null || \
+      echo "   (skipped — raspotify repo unreachable; install later with the same one-liner)"
+  fi
+  if dpkg -s raspotify >/dev/null 2>&1; then
+    # Account-bound, discovery off, 320kbps, into the same PipeWire/Pulse sink
+    # the Bose already uses. The OAuth token is cached under the run user's home
+    # so it survives reboots (one-time login — see below).
+    sudo tee /etc/raspotify/conf >/dev/null <<EOF
+LIBRESPOT_NAME="OnDeck Field Speaker"
+LIBRESPOT_DISABLE_DISCOVERY="true"
+LIBRESPOT_BITRATE="320"
+LIBRESPOT_INITIAL_VOLUME="60"
+LIBRESPOT_BACKEND="pulseaudio"
+LIBRESPOT_CACHE="/home/$RUN_USER/.cache/librespot"
+EOF
+    # Run raspotify as the OnDeck user so it shares that user's PipeWire session
+    # (and thus the connected Bluetooth speaker sink).
+    sudo mkdir -p /etc/systemd/system/raspotify.service.d
+    sudo tee /etc/systemd/system/raspotify.service.d/10-ondeck.conf >/dev/null <<EOF
+[Service]
+User=$RUN_USER
+Group=$RUN_USER
+Environment=XDG_RUNTIME_DIR=/run/user/$RUN_UID
+Environment=PULSE_SERVER=unix:/run/user/$RUN_UID/pulse/native
+EOF
+    sudo mkdir -p "/home/$RUN_USER/.cache/librespot"
+    sudo chown -R "$RUN_USER:$RUN_USER" "/home/$RUN_USER/.cache/librespot"
+    sudo systemctl daemon-reload
+    # Ship it OFF (and not boot-enabled): the coach does the one-time OAuth
+    # login, then turns it on from the portal. This guarantees no stray casting
+    # device exists until explicitly enabled.
+    sudo systemctl disable --now raspotify 2>/dev/null || true
+  fi
+  # Let the service user start/stop/inspect raspotify without a password — this
+  # is what the portal toggle and the Stream Deck kill key drive.
+  sudo tee /etc/sudoers.d/ondeck-spotify >/dev/null <<EOF
+$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl enable --now raspotify, /usr/bin/systemctl disable --now raspotify, /usr/bin/systemctl start raspotify, /usr/bin/systemctl stop raspotify, /usr/bin/systemctl is-active raspotify, /usr/bin/systemctl is-enabled raspotify, /bin/systemctl enable --now raspotify, /bin/systemctl disable --now raspotify, /bin/systemctl start raspotify, /bin/systemctl stop raspotify, /bin/systemctl is-active raspotify, /bin/systemctl is-enabled raspotify
+EOF
+  sudo chmod 0440 /etc/sudoers.d/ondeck-spotify
+
   install_service "ondeck-audio" "$REPO_DIR/music_server.py" \
     "OnDeck Audio Pi server" \
     "Environment=XDG_RUNTIME_DIR=/run/user/$RUN_UID"
