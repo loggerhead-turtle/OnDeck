@@ -3,15 +3,28 @@
 {% block content %}
 
 <div class="flex items-center justify-between mb-6">
-  <h1 class="text-2xl font-bold">Admin</h1>
+  <h1 class="text-2xl font-bold">User Administration</h1>
   <a href="/admin/homepage"
      class="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-sm font-medium transition-colors">
     ✏ Edit Homepage
   </a>
 </div>
 
-<!-- User table -->
+{% if collisions %}
+<div class="bg-amber-900/30 border border-amber-700/50 rounded-lg px-4 py-3 mb-6 text-sm text-amber-200">
+  ⚠ The username{{ 's' if collisions|length > 1 else '' }}
+  {% for c in collisions %}<span class="font-mono">{{ c }}</span>{{ ', ' if not loop.last }}{% endfor %}
+  appear in more than one account. Logins go to a staff account first, then players —
+  rename or remove the duplicate to avoid confusion.
+</div>
+{% endif %}
+
+<!-- ===================== Staff accounts ===================== -->
 <div class="bg-gray-800 rounded-xl border border-gray-700/50 overflow-hidden mb-8">
+  <div class="px-4 py-3 border-b border-gray-700">
+    <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Staff Accounts</h2>
+    <p class="text-xs text-gray-500 mt-0.5">Admins and editors who manage the portal.</p>
+  </div>
   <table class="w-full text-sm">
     <thead>
       <tr class="border-b border-gray-700 text-xs text-gray-400 uppercase tracking-wider">
@@ -21,8 +34,8 @@
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-700/50">
-      {% for user in users %}
-      <tr class="hover:bg-gray-750 transition-colors">
+      {% for user in staff %}
+      <tr class="hover:bg-gray-750 transition-colors align-top">
         <td class="px-4 py-3">
           <span class="font-medium text-white">{{ user.username }}</span>
           {% if user.id == session.get('user_id') %}
@@ -37,30 +50,44 @@
           {% endif %}
         </td>
         <td class="px-4 py-3">
-          <div class="flex items-center justify-end gap-2">
+          <div class="flex flex-col items-end gap-2">
+            <div class="flex items-center justify-end gap-2">
+              {% if user.id != session.get('user_id') %}
+              <form method="POST" action="/admin/users/{{ user.id }}/role">
+                <input type="hidden" name="role" value="{{ 'editor' if user.role == 'admin' else 'admin' }}">
+                <button type="submit"
+                        class="px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-xs font-medium transition-colors">
+                  Make {{ 'editor' if user.role == 'admin' else 'admin' }}
+                </button>
+              </form>
+              {% endif %}
 
-            <!-- Change role -->
-            {% if user.id != session.get('user_id') %}
-            <form method="POST" action="/admin/users/{{ user.id }}/role">
-              <input type="hidden" name="role" value="{{ 'editor' if user.role == 'admin' else 'admin' }}">
-              <button type="submit"
-                      class="px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-xs font-medium transition-colors">
-                Make {{ 'editor' if user.role == 'admin' else 'admin' }}
-              </button>
-            </form>
-            {% endif %}
+              <details class="relative">
+                <summary class="list-none cursor-pointer px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-xs font-medium transition-colors">
+                  Reset password
+                </summary>
+                <form method="POST" action="/admin/users/{{ user.id }}/password"
+                      class="absolute right-0 mt-2 z-10 w-64 bg-gray-900 border border-gray-700 rounded-lg p-3 shadow-xl">
+                  <label class="block text-xs text-gray-400 mb-1.5">New password (min 8)</label>
+                  <input type="password" name="password" required minlength="8" autocomplete="new-password"
+                         class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm mb-2 focus:outline-none focus:border-green-500">
+                  <button type="submit"
+                          class="w-full px-3 py-1.5 rounded bg-green-700 hover:bg-green-600 text-white text-xs font-semibold">
+                    Set password
+                  </button>
+                </form>
+              </details>
 
-            <!-- Delete -->
-            {% if user.id != session.get('user_id') %}
-            <form method="POST" action="/admin/users/{{ user.id }}/delete"
-                  onsubmit="return confirm('Delete user {{ user.username }}?')">
-              <button type="submit"
-                      class="px-2.5 py-1 rounded bg-gray-700 hover:bg-red-800 text-gray-400 hover:text-red-200 text-xs font-medium transition-colors">
-                ✕
-              </button>
-            </form>
-            {% endif %}
-
+              {% if user.id != session.get('user_id') %}
+              <form method="POST" action="/admin/users/{{ user.id }}/delete"
+                    onsubmit="return confirm('Delete staff account {{ user.username }}?')">
+                <button type="submit"
+                        class="px-2.5 py-1 rounded bg-gray-700 hover:bg-red-800 text-gray-400 hover:text-red-200 text-xs font-medium transition-colors">
+                  ✕ Delete
+                </button>
+              </form>
+              {% endif %}
+            </div>
           </div>
         </td>
       </tr>
@@ -69,17 +96,150 @@
   </table>
 </div>
 
-<!-- Player accounts section -->
-<div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-8">
-  <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Player Accounts</h2>
-  <p class="text-sm text-gray-500">
-    Player login credentials are managed from each player's edit page under
-    <a href="/ondeck/players" class="text-indigo-400 hover:text-indigo-300">Players</a>.
-    Players log in at <span class="font-mono text-gray-300">/ondeck/login</span> with the same login page.
-  </p>
+<!-- ===================== Player logins ===================== -->
+<div class="bg-gray-800 rounded-xl border border-gray-700/50 overflow-hidden mb-8">
+  <div class="px-4 py-3 border-b border-gray-700">
+    <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Player Logins</h2>
+    <p class="text-xs text-gray-500 mt-0.5">
+      Every player and their sign-in credentials. Reset a password, rename or remove a login,
+      or delete the player entirely.
+    </p>
+  </div>
+  {% if players %}
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="border-b border-gray-700 text-xs text-gray-400 uppercase tracking-wider">
+        <th class="text-left px-4 py-3 font-medium">Player</th>
+        <th class="text-left px-4 py-3 font-medium">Username</th>
+        <th class="text-left px-4 py-3 font-medium">Login</th>
+        <th class="text-right px-4 py-3 font-medium">Actions</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-700/50">
+      {% for pid, player in players %}
+      <tr class="hover:bg-gray-750 transition-colors align-top">
+        <td class="px-4 py-3">
+          <span class="text-white font-semibold">#{{ player.jersey }} {{ player.first_name }} {{ player.last_name }}</span>
+        </td>
+        <td class="px-4 py-3 font-mono text-gray-300">
+          {% if player.player_username %}@{{ player.player_username }}{% else %}<span class="text-gray-600 italic font-sans">none</span>{% endif %}
+        </td>
+        <td class="px-4 py-3">
+          {% if player.player_password_hash %}
+            <span class="px-2 py-0.5 rounded text-xs bg-green-900/50 text-green-400 border border-green-700/40">can sign in</span>
+            {% if player.force_reset %}
+              <span class="px-2 py-0.5 rounded text-xs bg-amber-900/50 text-amber-400 border border-amber-700/40">must reset</span>
+            {% endif %}
+          {% else %}
+            <span class="px-2 py-0.5 rounded text-xs bg-gray-700 text-gray-400 border border-gray-600">no password</span>
+          {% endif %}
+        </td>
+        <td class="px-4 py-3">
+          <div class="flex items-center justify-end gap-2 flex-wrap">
+
+            <!-- Set / change username -->
+            <details class="relative">
+              <summary class="list-none cursor-pointer px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-xs font-medium transition-colors">
+                Username
+              </summary>
+              <form method="POST" action="/admin/players/{{ pid }}/username"
+                    class="absolute right-0 mt-2 z-10 w-64 bg-gray-900 border border-gray-700 rounded-lg p-3 shadow-xl">
+                <label class="block text-xs text-gray-400 mb-1.5">Username</label>
+                <input type="text" name="player_username" value="{{ player.player_username or '' }}"
+                       autocomplete="off"
+                       class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm font-mono mb-2 focus:outline-none focus:border-green-500">
+                <p class="text-xs text-gray-600 mb-2">Leave blank to remove this player's login.</p>
+                <button type="submit"
+                        class="w-full px-3 py-1.5 rounded bg-green-700 hover:bg-green-600 text-white text-xs font-semibold">
+                  Save username
+                </button>
+              </form>
+            </details>
+
+            <!-- Reset password -->
+            <details class="relative">
+              <summary class="list-none cursor-pointer px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-xs font-medium transition-colors">
+                Password
+              </summary>
+              <form method="POST" action="/admin/players/{{ pid }}/password"
+                    class="absolute right-0 mt-2 z-10 w-64 bg-gray-900 border border-gray-700 rounded-lg p-3 shadow-xl">
+                <label class="block text-xs text-gray-400 mb-1.5">New password (min 6)</label>
+                <input type="password" name="password" required minlength="6" autocomplete="new-password"
+                       class="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-white text-sm mb-2 focus:outline-none focus:border-green-500">
+                <label class="flex items-center gap-2 text-xs text-gray-400 mb-2">
+                  <input type="checkbox" name="force_reset" class="accent-green-500">
+                  Require change at next login
+                </label>
+                <button type="submit"
+                        class="w-full px-3 py-1.5 rounded bg-green-700 hover:bg-green-600 text-white text-xs font-semibold">
+                  Set password
+                </button>
+              </form>
+            </details>
+
+            <!-- Remove login -->
+            {% if player.player_username or player.player_password_hash %}
+            <form method="POST" action="/admin/players/{{ pid }}/username"
+                  onsubmit="return confirm('Remove the login (username + password) for this player?')">
+              <input type="hidden" name="player_username" value="">
+              <button type="submit"
+                      class="px-2.5 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-medium transition-colors">
+                Remove login
+              </button>
+            </form>
+            {% endif %}
+
+            <!-- Delete player -->
+            <form method="POST" action="/admin/players/{{ pid }}/delete"
+                  onsubmit="return confirm('Delete player #{{ player.jersey }} {{ player.first_name }} {{ player.last_name }} entirely? This cannot be undone.')">
+              <button type="submit"
+                      class="px-2.5 py-1 rounded bg-gray-700 hover:bg-red-800 text-gray-400 hover:text-red-200 text-xs font-medium transition-colors">
+                ✕ Delete player
+              </button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-sm text-gray-500 px-4 py-4">No players yet.</p>
+  {% endif %}
 </div>
 
-<!-- Team assignments section -->
+<!-- ===================== Legacy / orphan accounts ===================== -->
+{% if ghosts %}
+<div class="bg-gray-800 rounded-xl border border-amber-700/40 overflow-hidden mb-8">
+  <div class="px-4 py-3 border-b border-gray-700">
+    <h2 class="text-sm font-semibold text-amber-300 uppercase tracking-wider">Legacy Player Accounts</h2>
+    <p class="text-xs text-gray-500 mt-0.5">
+      Old player rows stored in <span class="font-mono">auth.json</span>. These can recreate a
+      deleted player on next login — delete any you don't recognize.
+    </p>
+  </div>
+  <table class="w-full text-sm">
+    <tbody class="divide-y divide-gray-700/50">
+      {% for user in ghosts %}
+      <tr class="hover:bg-gray-750 transition-colors">
+        <td class="px-4 py-3 font-mono text-gray-300">{{ user.username }}</td>
+        <td class="px-4 py-3 text-right">
+          <form method="POST" action="/admin/users/{{ user.id }}/delete"
+                onsubmit="return confirm('Delete legacy account {{ user.username }}?')">
+            <button type="submit"
+                    class="px-2.5 py-1 rounded bg-gray-700 hover:bg-red-800 text-gray-400 hover:text-red-200 text-xs font-medium transition-colors">
+              ✕ Delete
+            </button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- ===================== Team assignments ===================== -->
 <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-8">
   <div class="flex items-center justify-between mb-4">
     <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Team Assignments</h2>
@@ -120,7 +280,7 @@
   {% endif %}
 </div>
 
-<!-- Add user form -->
+<!-- ===================== Add staff account ===================== -->
 <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
   <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Add Staff Account</h2>
   <form method="POST" action="/admin/users/add">
@@ -166,18 +326,22 @@ function updatePlayerTeams(playerId, form) {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return r.json();
   }).then(() => {
-    // Show brief success indicator
     const el = form.closest('.bg-gray-900');
     if (el) {
       el.style.borderColor = '#4ade80';
-      setTimeout(() => {
-        el.style.borderColor = '';
-      }, 1500);
+      setTimeout(() => { el.style.borderColor = ''; }, 1500);
     }
   }).catch(err => {
     alert(`Error updating teams: ${err.message}`);
   });
 }
+
+// Close any open reset/username popovers when clicking elsewhere.
+document.addEventListener('click', (e) => {
+  document.querySelectorAll('details[open]').forEach(d => {
+    if (!d.contains(e.target)) d.removeAttribute('open');
+  });
+});
 </script>
 
 {% endblock %}
