@@ -70,6 +70,30 @@ VENV="$REPO_DIR/.venv"
 "$VENV/bin/pip" install --quiet --upgrade pip
 "$VENV/bin/pip" install --quiet -r "$REPO_DIR/requirements.txt"
 
+# Shared Stream Deck runtime (pideck) — one library for all deck products.
+# Only the deck role needs it. Falls back to a sibling checkout at
+# ~/pi-deck (streamdeck_controller.py auto-imports from there).
+if [[ "$INSTALL_DECK" == 1 ]]; then
+  PIDECK_SLUG="${PIDECK_REPO_SLUG:-loggerhead-turtle/pi-deck}"
+  PIDECK_URL="https://github.com/${PIDECK_SLUG}.git"
+  [[ -n "${ONDECK_GIT_TOKEN:-}" ]] && PIDECK_URL="https://${ONDECK_GIT_TOKEN}@github.com/${PIDECK_SLUG}.git"
+  if "$VENV/bin/pip" install --quiet "git+${PIDECK_URL}" 2>/dev/null; then
+    echo "==> pideck installed from GitHub"
+  else
+    echo "==> pip install of pideck failed — cloning sibling checkout instead"
+    PIDECK_DIR="$RUN_HOME/pi-deck"
+    if [ -d "$PIDECK_DIR/.git" ]; then
+      git -C "$PIDECK_DIR" pull --ff-only 2>/dev/null || true
+    else
+      git clone --depth 1 "$PIDECK_URL" "$PIDECK_DIR" 2>/dev/null || \
+        { rm -rf "$PIDECK_DIR.tmp"; mkdir -p "$PIDECK_DIR.tmp"; \
+          curl -fsSL "https://codeload.github.com/${PIDECK_SLUG}/tar.gz/refs/heads/main" \
+            | tar xz -C "$PIDECK_DIR.tmp" --strip-components=1 && \
+          rm -rf "$PIDECK_DIR" && mv "$PIDECK_DIR.tmp" "$PIDECK_DIR"; }
+    fi
+  fi
+fi
+
 # --- runtime data dir ----------------------------------------------------
 ONDECK_HOME="$RUN_HOME/ondeck"
 mkdir -p "$ONDECK_HOME/music"

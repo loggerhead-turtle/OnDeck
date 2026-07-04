@@ -29,7 +29,7 @@ The cloud instance is the source of truth. The Pi polls `/sync/*` endpoints ever
 | `web/templates/library_edit.html` | Song editor with trim editor |
 | `web/templates/deck_editor.html` | Stream Deck button editor (8×4 grid, per-key slots) |
 | `web/templates/devices.html` | Pi device pairing + management (codes, rename, revoke) |
-| `streamdeck_controller.py` | Stream Deck XL runtime (renders from `pages[].slots` or auto-layout) |
+| `streamdeck_controller.py` | Stream Deck XL runtime — OnDeck-specific pages/actions on the shared `pideck` library (github.com/loggerhead-turtle/pi-deck; installed by `install.sh`, sibling-checkout fallback) |
 | `bluetooth_manager.py` | Audio Pi BlueZ control (`bluetoothctl`) + preferred-speaker auto-connect + sink routing |
 | `web/templates/bluetooth.html` | Bluetooth speaker management page (proxied to the Audio Pi) |
 | `web/templates/login.html` | Standalone login page |
