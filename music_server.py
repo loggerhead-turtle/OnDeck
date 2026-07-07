@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -49,6 +50,44 @@ except Exception:  # pragma: no cover - missing optional deps must not stop audi
 app = Flask(__name__)
 
 DEFAULT_FADE_MS = 1000
+
+# path -> (mtime, duration_s). Probing runs ffmpeg once per file version.
+_dur_cache: dict[str, tuple[float, float]] = {}
+
+
+def _ffmpeg_exe() -> str:
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
+
+
+def _media_duration_s(path: str) -> float | None:
+    """Duration of an audio file in seconds, via ffmpeg's banner (cached).
+
+    Needed to place an end-of-song fade when no end trim is set. ffprobe isn't
+    guaranteed to exist (imageio-ffmpeg ships only ffmpeg), so parse the
+    ``Duration: HH:MM:SS.cc`` line ffmpeg prints for any input.
+    """
+    try:
+        mtime = os.stat(path).st_mtime
+    except OSError:
+        return None
+    cached = _dur_cache.get(path)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        r = subprocess.run([_ffmpeg_exe(), "-hide_banner", "-i", path],
+                           capture_output=True, text=True, timeout=15)
+    except Exception:
+        return None
+    m = re.search(r"Duration:\s*(\d+):(\d\d):(\d\d(?:\.\d+)?)", r.stderr or "")
+    if not m:
+        return None
+    dur = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    _dur_cache[path] = (mtime, dur)
+    return dur
 
 # A2DP speaker control + audio routing. Disable on laptops/CI with
 # ONDECK_NO_BLUETOOTH=1 (then playback uses the ALSA default / override).
@@ -103,6 +142,20 @@ class Player:
         start_s = (clip.get("start_ms") or 0) / 1000.0
         end_ms = clip.get("end_ms")
 
+        # Editor-set fade-out: fade the last N seconds of the clip instead of
+        # cutting. The fade needs to know where the clip ends — the end trim
+        # when set, otherwise the file's real duration.
+        fade_s = max(0, int(clip.get("fade_out_ms") or 0)) / 1000.0
+        song_len_s = None                     # trimmed song length, if known
+        if fade_s:
+            end_s = (end_ms / 1000.0) if end_ms is not None \
+                else _media_duration_s(song)
+            if end_s is not None and end_s > start_s:
+                song_len_s = end_s - start_s
+                fade_s = min(fade_s, song_len_s)
+            else:
+                fade_s = 0                     # unknown duration — skip fade
+
         # Build the main (song) input with its trim window.
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin"]
         cmd += ["-ss", f"{start_s:.3f}"]
@@ -126,18 +179,29 @@ class Player:
                 cmd += ["-to", f"{(end_ms / 1000.0):.3f}"]
             cmd += ["-i", song]
             # Delay the song by cue_s, fade it in over 0.75s, mix under the
-            # announcement, then apply master volume.
+            # announcement, then apply master volume. The editor fade-out (if
+            # set) lands on the song stream, whose timeline is shifted by cue.
             delay_ms = int(cue_s * 1000)
+            mus = f"[1:a]adelay={delay_ms}|{delay_ms},afade=t=in:st={cue_s:.3f}:d=0.75"
+            if fade_s and song_len_s is not None:
+                fade_st = cue_s + song_len_s - fade_s
+                mus += f",afade=t=out:st={fade_st:.3f}:d={fade_s:.3f}"
             filt = (
-                f"[1:a]adelay={delay_ms}|{delay_ms},afade=t=in:st={cue_s:.3f}:d=0.75[mus];"
+                mus + "[mus];"
                 f"[0:a][mus]amix=inputs=2:duration=longest:dropout_transition=0,"
                 f"volume={gain:.3f}[out]"
             )
             cmd += ["-filter_complex", filt, "-map", "[out]"]
         else:
-            # Plain song: master volume only. (End-of-song fade is applied by
-            # the editor when it sets end_ms; live fade is the /fade endpoint.)
-            cmd += ["-af", f"volume={gain:.3f}"]
+            # Plain song: master volume, plus the editor fade-out when set
+            # (live fade remains the /fade endpoint). Output timestamps start
+            # at 0 because -ss precedes -i, so the fade starts at
+            # clip-length − fade.
+            af = f"volume={gain:.3f}"
+            if fade_s and song_len_s is not None:
+                af = (f"afade=t=out:st={song_len_s - fade_s:.3f}:d={fade_s:.3f},"
+                      + af)
+            cmd += ["-af", af]
 
         cmd += self._output_args()
         return cmd

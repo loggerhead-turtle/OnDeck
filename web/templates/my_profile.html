@@ -85,6 +85,8 @@
                 end_ms      = active_song.end_ms,
                 start_field = 'walkup_start_ms',
                 end_field   = 'walkup_end_ms',
+                fade_field  = 'walkup_fade_ms',
+                fade_ms     = active_song.fade_out_ms or 0,
                 label       = 'Set start and end of your walk-up'
             ) }}
           </div>
@@ -200,6 +202,8 @@
                 end_ms      = active_song.end_ms,
                 start_field = 'warmup_start_ms',
                 end_field   = 'warmup_end_ms',
+                fade_field  = 'warmup_fade_ms',
+                fade_ms     = active_song.fade_out_ms or 0,
                 label       = 'Set intro and outro'
             ) }}
           </div>
@@ -279,6 +283,15 @@ function watchTrimEditor(editorId, songType) {
   });
 }
 
+// Changing the fade-out dropdown counts as an unsaved trim change too.
+document.addEventListener('trim-fade-change', (e) => {
+  const songType = e.detail && e.detail.editor;
+  if (songType && document.getElementById(`${songType}-trim-save`)) {
+    trimEditorChanges[songType] = true;
+    updateTrimSaveButton(songType);
+  }
+});
+
 function updateTrimSaveButton(songType) {
   const btn = document.getElementById(`${songType}-trim-save`);
   if (!btn) return;
@@ -303,12 +316,13 @@ async function saveTrimEditor(songType, songId) {
 
   const startMs = Math.round(bounds.start * 1000);
   const endMs = Math.round(bounds.end * 1000);
+  const fadeMs = parseInt(document.getElementById(`${songType}-fade`)?.value) || 0;
 
   try {
     const response = await fetch(`/ondeck/trim-save/${songType}/${songId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `start_ms=${startMs}&end_ms=${endMs}`
+      body: `start_ms=${startMs}&end_ms=${endMs}&fade_out_ms=${fadeMs}`
     });
 
     if (!response.ok) throw new Error(`HTTP ${response.status}`);

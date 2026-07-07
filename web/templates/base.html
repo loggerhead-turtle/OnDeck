@@ -300,9 +300,21 @@
             if (i >= steps) { clearInterval(fadeTimer); fadeTimer = null; }
           }, step);
         }
-        if (end != null) {
+        const fadeOutS = (clip.fade_out_ms || 0) / 1000;
+        if (end != null || fadeOutS > 0) {
           endWatch = function () {
-            if (a.currentTime >= end) { a.pause(); a.removeEventListener('timeupdate', endWatch); endWatch = null; log('demo music reached end'); }
+            // Clip end: the end trim when set, else the file's natural end.
+            const stopAt = end != null ? end : (isFinite(a.duration) ? a.duration : null);
+            if (stopAt == null) return;
+            // Editor fade-out (skip while the walk-up fade-IN timer runs).
+            if (fadeOutS > 0 && !fadeTimer && a.currentTime > stopAt - fadeOutS) {
+              a.volume = Math.max(0, Math.min(1, (stopAt - a.currentTime) / fadeOutS));
+            }
+            if (end != null && a.currentTime >= end) {
+              a.pause(); a.volume = 1;
+              a.removeEventListener('timeupdate', endWatch); endWatch = null;
+              log('demo music reached end');
+            }
           };
           a.addEventListener('timeupdate', endWatch);
         }

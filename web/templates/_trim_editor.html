@@ -16,11 +16,15 @@
     show_trim   : whether to render the start/end (green) trim handles. Set
                   False for a cue-only editor (e.g. players placing the music
                   cue on an announcement they're not allowed to trim).
+    fade_field  : name of the form field for the fade-out duration (ms). Pass
+                  None to hide the fade-out control.
+    fade_ms     : initial fade-out duration in ms (0 = hard stop)
 #}
 {% macro trim_editor(editor_id, audio_url, start_ms=0, end_ms=None,
                      start_field='start_ms', end_field='end_ms',
                      label='Trim', show_cue=False, cue_ms=0,
-                     cue_field='music_cue_ms', show_trim=True) %}
+                     cue_field='music_cue_ms', show_trim=True,
+                     fade_field=None, fade_ms=0) %}
 <div class="bg-gray-900 rounded-xl border border-gray-700/50 overflow-hidden" id="{{ editor_id }}-wrap">
 
   <!-- Header -->
@@ -138,6 +142,24 @@
       <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end', 0.01)">+0.01</button>
       <button type="button" class="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 hover:text-white text-xs font-mono transition-colors select-none" onclick="editors['{{ editor_id }}'].nudge('end', 0.1)">+0.1</button>
     </div>
+
+    {% if fade_field %}
+    <!-- Fade-out -->
+    <div class="flex items-center gap-1.5">
+      <span class="text-xs text-amber-400/90 w-10 shrink-0">Fade</span>
+      <select name="{{ fade_field }}" id="{{ editor_id }}-fade"
+              onchange="document.dispatchEvent(new CustomEvent('trim-fade-change', {detail: {editor: '{{ editor_id }}'}}))"
+              class="flex-1 min-w-0 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-amber-200 focus:outline-none focus:border-amber-500">
+        {% for ms, name in [(0, 'No fade — hard stop'), (500, 'Fade out 0.5 s'),
+                            (1000, 'Fade out 1 s'), (1500, 'Fade out 1.5 s'),
+                            (2000, 'Fade out 2 s'), (3000, 'Fade out 3 s'),
+                            (5000, 'Fade out 5 s')] %}
+        <option value="{{ ms }}" {{ 'selected' if (fade_ms or 0) == ms }}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <p class="text-xs text-gray-600 pl-[3.25rem]">Eases the music out at the end point instead of cutting.</p>
+    {% endif %}
     {% endif %}
 
     {% if show_cue %}
@@ -323,10 +345,19 @@ class TrimEditor {
       const t = this._audio.currentTime
       // Mirror the cursor on the waveform (WaveSurfer stays paused).
       if (this._ready) { try { this._ws.setTime(t) } catch {} }
+      if (!this._playing) return
+      const end = this._bounds().end
+      // Preview the configured fade-out (no-op on iOS, which locks volume).
+      const fadeEl = this.$('fade')
+      const fadeS = fadeEl ? (parseInt(fadeEl.value) || 0) / 1000 : 0
+      if (fadeS > 0 && t > end - fadeS) {
+        try { this._audio.volume = Math.max(0, Math.min(1, (end - t) / fadeS)) } catch {}
+      }
       // Stop at the end of the trim window and reset to its start.
-      if (this._playing && t >= this._bounds().end) {
+      if (t >= end) {
         this._audio.pause()
         this._audio.currentTime = this._bounds().start
+        try { this._audio.volume = 1 } catch {}
         this._playing = false
         this._setPlayBtn(false)
       }
@@ -377,6 +408,7 @@ class TrimEditor {
       // Start from the trim-window start. Set currentTime *before* play() so
       // the play() call stays inside the user gesture (required on mobile).
       this._audio.currentTime = this._bounds().start
+      try { this._audio.volume = 1 } catch {}
       this._playing = true
       this._setPlayBtn(true)
       this._audio.play().catch(() => {
@@ -390,6 +422,7 @@ class TrimEditor {
     if (!this._audio) return
     this._audio.pause()
     this._audio.currentTime = this._bounds().start
+    try { this._audio.volume = 1 } catch {}
     this._playing = false
     this._setPlayBtn(false)
   }

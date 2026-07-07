@@ -122,6 +122,28 @@ YouTube import is broken on Render due to bot detection + n-challenge JS obfusca
 
 The cookie upload UI is in Settings (cloud mode only). User exports Netscape-format cookies from youtube.com using the "Get cookies.txt LOCALLY" Chrome extension.
 
+## Deck Lineup Flow (built-in lineup page)
+
+Live: press a batter key → cues their walk-up; **Play** runs it; natural end
+**or Stop** advances + re-cues the next hitter (wraps at the end). Celebrations
+(`note_external_playback`) never move the order. Reserved keys: **↻ Replay**
+(re-runs the last walk-up via `LineupManager.replay()`; also a deck `action`
+ref) and **✎ Edit**. Edit mode: every spot 1..size shown (incl. Empty), press a
+spot → players page to pick (roster pages via a **More ▶** key when > 1 screen;
+paging never disarms the pick), pick bounces back still in edit; **Size −/+**
+and **✓ Done** keys. Current batter is in-memory (`LineupManager._index`).
+
+## Song Fade-Out (`song.fade_out_ms`)
+
+Per-song fade at the end of the clip (0 = hard cut). Set in every trim editor
+(`fade_field`/`fade_ms` macro params; field names: `fade_out_ms` (library),
+`song_fade_ms`/`warmup_fade_ms`/`midgame_fade_ms` (player editor),
+`walkup_fade_ms`/`warmup_fade_ms` (my-profile), `fade_out_ms` in trim-save
+AJAX). Carried in clip payloads; `music_server` applies `afade=t=out` before
+the end trim — or before the *probed* file duration (`_media_duration_s`,
+ffmpeg-banner parse, cached) when no end trim is set. Editor preview + demo
+playback honor it (iOS ignores element volume, so no preview fade there).
+
 ## Trim Editor
 
 WaveSurfer.js v7 ESM + RegionsPlugin. Implemented as a Jinja2 macro in `_trim_editor.html`. Features:

@@ -49,6 +49,7 @@ class LineupManager:
         self._armed = False             # auto-advance when this playback ends
         self._was_playing = False       # for edge detection in the poller
         self._poller_started = False
+        self._last_played: int | None = None  # slot of the last walk-up run
 
     # -- order helpers ----------------------------------------------------
 
@@ -104,7 +105,21 @@ class LineupManager:
         with self._lock:
             if ok and self._queued_batter:
                 self._armed = True
+                self._last_played = self._index
         return ok
+
+    def replay(self) -> bool:
+        """Run the most recent walk-up again.
+
+        After a walk-up ends the order has already advanced to the next hitter,
+        so "replay" jumps back to whoever just played, cues them, and plays
+        immediately. When it finishes, auto-advance resumes from there as
+        normal. Before anything has played, it just runs the current batter.
+        """
+        with self._lock:
+            target = self._last_played if self._last_played is not None else self._index
+        self.set_current(target)
+        return self.cue_current() and self.play()
 
     def note_external_playback(self) -> None:
         """Coach played non-lineup audio — don't auto-advance the order for it."""

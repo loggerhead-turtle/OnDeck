@@ -91,6 +91,9 @@ class StreamDeckController(BaseDeckController):
         self._edit_lineup = False
         self._lineup_assign_pos = None   # 1-based position awaiting a player
         self._lineup_return_page = None  # page to bounce back to after picking
+        # Roster paging on the players page — big rosters span multiple deck
+        # screens; "More ▶" cycles without disturbing an armed lineup pick.
+        self._roster_offset = 0
 
         # Repaint the deck whenever the lineup auto-advances.
         self.lineup.on_change = self.refresh
@@ -143,24 +146,10 @@ class StreamDeckController(BaseDeckController):
                 self.go_to_page(order[slot])
 
         elif kind == "lineup":
-            # Cue (queue) this batter; the coach presses Play to run it.
-            filled = [i for i, pid in enumerate(self.config.lineup) if pid]
-            if slot < len(filled):
-                self.lineup.set_current(filled[slot])
-                if self.lineup.cue_current():
-                    self.flash(btn_idx)
+            self._press_builtin_lineup(btn_idx, slot)
 
         elif kind == "players":
-            players = self.config.players_by_jersey()
-            if slot < len(players):
-                pid, _ = players[slot]
-                # Edit-lineup mode: fill the armed batting spot instead of playing.
-                if self._edit_lineup and self._lineup_assign_pos is not None:
-                    self._assign_player_to_lineup(pid, btn_idx)
-                    return
-                self.lineup.note_external_playback()
-                if self.music.play_walkup(pid):
-                    self.flash(btn_idx)
+            self._press_builtin_players(btn_idx, slot)
 
         elif kind == "celebrations":
             if slot < len(CELEBRATIONS):
@@ -213,12 +202,48 @@ class StreamDeckController(BaseDeckController):
             else:
                 self.blank(btn_idx)
 
+    # The built-in lineup page reserves its last content keys for controls:
+    # live mode = Replay + Edit; edit mode = Size − / Size + / Done.
+    _LINEUP_LIVE_CONTROLS = 2
+    _LINEUP_EDIT_CONTROLS = 3
+
     def _render_lineup_page(self) -> None:
-        """Batting order — one button per filled slot, current batter glows."""
+        """Batting order.
+
+        Live: one key per filled slot (press = cue, then Play), plus Replay and
+        Edit keys. Edit: every position 1..size — including empty ones — so any
+        spot can be (re)assigned, plus Size −/+ and Done keys.
+        """
         lineup = self.config.lineup
+        if self._edit_lineup:
+            size = self.config.data.get("lineup_size", 9)
+            area = self.content_slots[:-self._LINEUP_EDIT_CONTROLS]
+            for i, btn_idx in enumerate(area):
+                if i < size:
+                    pid = lineup[i] if i < len(lineup) else None
+                    armed = (i + 1 == self._lineup_assign_pos)
+                    if pid:
+                        label = f"{i + 1}. " + self._player_label(pid)
+                        bg = self.PAGE_BG["lineup"]
+                    else:
+                        label = f"{i + 1}.\nEmpty"
+                        bg = (35, 35, 35)
+                    if armed:
+                        bg = self.ACTIVE_COLOR
+                    fg = (0, 0, 0) if armed else (255, 255, 255)
+                    self.btn(btn_idx, label, bg, fg)
+                else:
+                    self.blank(btn_idx)
+            minus, plus, done = self.content_slots[-self._LINEUP_EDIT_CONTROLS:]
+            self.btn(minus, f"Size −\n({size})", (80, 45, 45))
+            self.btn(plus, f"Size +\n({size})", (45, 80, 45))
+            self.btn(done, "✓ Done", self.ACTIVE_COLOR, (0, 0, 0))
+            return
+
         filled = [i for i, pid in enumerate(lineup) if pid]
         cur = self.lineup.current_index
-        for i, btn_idx in enumerate(self.content_slots):
+        area = self.content_slots[:-self._LINEUP_LIVE_CONTROLS]
+        for i, btn_idx in enumerate(area):
             if i < len(filled):
                 slot_idx = filled[i]
                 player = self.config.players.get(lineup[slot_idx], {})
@@ -230,20 +255,113 @@ class StreamDeckController(BaseDeckController):
                 self.btn(btn_idx, f"{i + 1}. #{jersey}\n{first}", bg, fg)
             else:
                 self.blank(btn_idx)
+        replay_key, edit_key = self.content_slots[-self._LINEUP_LIVE_CONTROLS:]
+        self.btn(replay_key, "↻\nReplay", (60, 45, 90))
+        self.btn(edit_key, "✎ Edit\nLineup", (55, 55, 65))
+
+    def _press_builtin_lineup(self, btn_idx: int, slot: int) -> None:
+        if self._edit_lineup:
+            minus, plus, done = self.content_slots[-self._LINEUP_EDIT_CONTROLS:]
+            size = self.config.data.get("lineup_size", 9)
+            if btn_idx == done:
+                self._toggle_edit_lineup(btn_idx)   # back to live
+                self.render_all()
+            elif btn_idx == minus:
+                self.config.set_lineup_size(size - 1)
+                self.render_all()
+            elif btn_idx == plus:
+                self.config.set_lineup_size(size + 1)
+                self.render_all()
+            elif slot < size:
+                # Arm this spot; pick the player on the (possibly multi-screen)
+                # players page. No bounce-back until a player is chosen.
+                self._lineup_assign_pos = slot + 1
+                self._lineup_return_page = self.current_page_id
+                players_page = self._players_page_id()
+                if players_page:
+                    self.go_to_page(players_page)
+                else:
+                    self.render_all()
+            return
+
+        replay_key, edit_key = self.content_slots[-self._LINEUP_LIVE_CONTROLS:]
+        if btn_idx == edit_key:
+            self._toggle_edit_lineup(btn_idx)
+            self.render_all()
+            return
+        if btn_idx == replay_key:
+            if self.lineup.replay():
+                self.flash(btn_idx)
+            return
+        # Cue (queue) this batter; the coach presses Play to run it.
+        filled = [i for i, pid in enumerate(self.config.lineup) if pid]
+        if slot < len(filled):
+            self.lineup.set_current(filled[slot])
+            if self.lineup.cue_current():
+                self.flash(btn_idx)
+
+    def _roster_layout(self) -> tuple[list, list[int], int | None, int]:
+        """(players, player_keys, more_key, offset) for the players page.
+
+        Rosters larger than one screen give up the last content key to a
+        "More ▶" pager that cycles screens; paging never disturbs an armed
+        edit-lineup pick, so the coach can browse to the right screen first.
+        """
+        players = self.config.players_by_jersey()
+        keys = list(self.content_slots)
+        more_key = None
+        if len(players) > len(keys):
+            more_key = keys[-1]
+            keys = keys[:-1]
+        offset = self._roster_offset
+        if offset >= len(players):
+            offset = self._roster_offset = 0
+        return players, keys, more_key, offset
 
     def _render_players_page(self) -> None:
-        """Every player, by jersey number — a press plays their walk-up."""
-        players = self.config.players_by_jersey()
-        for i, btn_idx in enumerate(self.content_slots):
-            if i < len(players):
-                _pid, p = players[i]
+        """Every player, by jersey number, paged when the roster overflows."""
+        players, keys, more_key, offset = self._roster_layout()
+        visible = players[offset:offset + len(keys)]
+        for i, btn_idx in enumerate(keys):
+            if i < len(visible):
+                _pid, p = visible[i]
                 jersey = p.get("jersey", "")
                 first = (p.get("first_name", "") or "")[:8]
                 has_walkup = bool(p.get("walkup_song_id"))
                 bg = self.PAGE_BG["players"] if has_walkup else (35, 35, 35)
+                # Picking for an armed lineup spot: tint so the coach knows a
+                # press assigns rather than plays.
+                if self._edit_lineup and self._lineup_assign_pos is not None:
+                    bg = (90, 80, 20)
                 self.btn(btn_idx, f"#{jersey}\n{first}", bg, (255, 255, 255))
             else:
                 self.blank(btn_idx)
+        if more_key is not None:
+            page_no = offset // len(keys) + 1
+            pages = (len(players) + len(keys) - 1) // len(keys)
+            self.btn(more_key, f"More ▶\n{page_no}/{pages}", (50, 50, 70))
+
+    def _press_builtin_players(self, btn_idx: int, slot: int) -> None:
+        players, keys, more_key, offset = self._roster_layout()
+        if more_key is not None and btn_idx == more_key:
+            # Next roster screen (wraps). An armed lineup pick stays armed.
+            next_off = offset + len(keys)
+            self._roster_offset = next_off if next_off < len(players) else 0
+            self.render_all()
+            return
+        if btn_idx not in keys:
+            return
+        i = offset + keys.index(btn_idx)
+        if i >= len(players):
+            return
+        pid, _ = players[i]
+        # Edit-lineup mode: fill the armed batting spot instead of playing.
+        if self._edit_lineup and self._lineup_assign_pos is not None:
+            self._assign_player_to_lineup(pid, btn_idx)
+            return
+        self.lineup.note_external_playback()
+        if self.music.play_walkup(pid):
+            self.flash(btn_idx)
 
     def _render_celebrations_page(self) -> None:
         """Four stingers — dim if no song is assigned yet."""
@@ -329,7 +447,8 @@ class StreamDeckController(BaseDeckController):
         if kind == "nav":
             return (self.config.pages.get(ref, {}).get("name", ref) or "")[:10]
         if kind == "action":
-            return {"play": "Play", "stop": "Stop", "fade": "Fade"}.get(ref, ref)
+            return {"play": "Play", "stop": "Stop", "fade": "Fade",
+                    "replay": "↻ Replay"}.get(ref, ref)
         if kind == "stats":
             return self._stats_label()
         if kind == "edit_lineup":
@@ -432,6 +551,8 @@ class StreamDeckController(BaseDeckController):
                 ok = self.music.stop()
             elif ref == "fade":
                 ok = self.music.fade(int(slot.get("fade_ms") or 1000))
+            elif ref == "replay":
+                ok = self.lineup.replay()
         if ok:
             self.flash(btn_idx)
 

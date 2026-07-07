@@ -246,6 +246,7 @@ class ConfigManager:
         # Ensure all songs have alias and variant fields.
         for song in self._data.get("songs", {}).values():
             song.setdefault("alias", "")
+            song.setdefault("fade_out_ms", 0)  # 0 = hard stop at the end trim
             song.setdefault("base_song_id", None)  # null for originals; song_id for variants
             song.setdefault("created_by_player", None)  # player_id who created this variant
             song.setdefault("ratings", {})  # rater_key -> stars (1..5)
@@ -356,6 +357,7 @@ class ConfigManager:
             "file": song["filename"],
             "start_ms": song.get("start_ms", 0),
             "end_ms": song.get("end_ms"),
+            "fade_out_ms": song.get("fade_out_ms", 0),
         }
         ann = player.get("announcement_file")
         if ann:
@@ -372,6 +374,7 @@ class ConfigManager:
             "file": song["filename"],
             "start_ms": song.get("start_ms", 0),
             "end_ms": song.get("end_ms"),
+            "fade_out_ms": song.get("fade_out_ms", 0),
         }
 
     def get_player_pitching_warmup(self, player_id: str) -> dict[str, Any] | None:
@@ -387,6 +390,7 @@ class ConfigManager:
             "file": song["filename"],
             "start_ms": song.get("start_ms", 0),
             "end_ms": song.get("end_ms"),
+            "fade_out_ms": song.get("fade_out_ms", 0),
         }
 
     def get_player_midgame_song(self, player_id: str) -> dict[str, Any] | None:
@@ -402,6 +406,7 @@ class ConfigManager:
             "file": song["filename"],
             "start_ms": song.get("start_ms", 0),
             "end_ms": song.get("end_ms"),
+            "fade_out_ms": song.get("fade_out_ms", 0),
         }
 
     # -- mutations --------------------------------------------------------
@@ -434,6 +439,7 @@ class ConfigManager:
                 "display_name": display_name,
                 "start_ms": 0,
                 "end_ms": None,
+                "fade_out_ms": 0,
                 "alias": "",  # User-friendly name override
                 "ratings": {},  # rater_key -> stars (1..5)
                 "spotify_url": "",
@@ -593,6 +599,7 @@ class ConfigManager:
                 "display_name": base_song["display_name"],
                 "start_ms": base_song.get("start_ms", 0),
                 "end_ms": base_song.get("end_ms"),
+                "fade_out_ms": base_song.get("fade_out_ms", 0),
                 "alias": base_song.get("alias", ""),
                 "base_song_id": base_song_id,
                 "created_by_player": player_id,

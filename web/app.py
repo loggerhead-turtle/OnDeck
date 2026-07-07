@@ -1131,6 +1131,7 @@ def ondeck_library_save(sid: str):
                                 or song["display_name"])
         song["start_ms"] = _form_ms("start_ms", 0)
         song["end_ms"] = _form_ms_or_none("end_ms")
+        song["fade_out_ms"] = _form_ms("fade_out_ms", 0)
         cfg.save()
     flash("Saved.", "success")
     return redirect(url_for("ondeck_library_edit", sid=sid))
@@ -1443,18 +1444,24 @@ def ondeck_players_save(pid: str):
         if sid and sid in cfg.songs:
             cfg.songs[sid]["start_ms"] = _form_ms("song_start_ms", 0)
             cfg.songs[sid]["end_ms"]   = _form_ms_or_none("song_end_ms")
+            if "song_fade_ms" in request.form:
+                cfg.songs[sid]["fade_out_ms"] = _form_ms("song_fade_ms", 0)
 
         # Update pitching warm-up song trim
         warmup_id = player.get("pitching_warmup_song_id")
         if warmup_id and warmup_id in cfg.songs:
             cfg.songs[warmup_id]["start_ms"] = _form_ms("warmup_start_ms", 0)
             cfg.songs[warmup_id]["end_ms"]   = _form_ms_or_none("warmup_end_ms")
+            if "warmup_fade_ms" in request.form:
+                cfg.songs[warmup_id]["fade_out_ms"] = _form_ms("warmup_fade_ms", 0)
 
         # Update mid-game song trim
         midgame_id = player.get("midgame_song_id")
         if midgame_id and midgame_id in cfg.songs:
             cfg.songs[midgame_id]["start_ms"] = _form_ms("midgame_start_ms", 0)
             cfg.songs[midgame_id]["end_ms"]   = _form_ms_or_none("midgame_end_ms")
+            if "midgame_fade_ms" in request.form:
+                cfg.songs[midgame_id]["fade_out_ms"] = _form_ms("midgame_fade_ms", 0)
 
         cfg.save()
 
@@ -1717,6 +1724,8 @@ def ondeck_my_profile_save():
         if sid and sid in cfg.songs:
             cfg.songs[sid]["start_ms"] = _form_ms("walkup_start_ms", 0)
             cfg.songs[sid]["end_ms"]   = _form_ms_or_none("walkup_end_ms")
+            if "walkup_fade_ms" in request.form:
+                cfg.songs[sid]["fade_out_ms"] = _form_ms("walkup_fade_ms", 0)
 
         # Update warm-up song selection and trim
         new_warmup = request.form.get("warmup_song_id")
@@ -1737,6 +1746,8 @@ def ondeck_my_profile_save():
         if warmup_id and warmup_id in cfg.songs:
             cfg.songs[warmup_id]["start_ms"] = _form_ms("warmup_start_ms", 0)
             cfg.songs[warmup_id]["end_ms"]   = _form_ms_or_none("warmup_end_ms")
+            if "warmup_fade_ms" in request.form:
+                cfg.songs[warmup_id]["fade_out_ms"] = _form_ms("warmup_fade_ms", 0)
 
         # Update mid-game song selection and trim
         new_midgame = request.form.get("midgame_song_id")
@@ -1965,6 +1976,7 @@ def ondeck_trim_save(song_type: str, song_id: str):
 
     start_ms = request.form.get("start_ms")
     end_ms = request.form.get("end_ms")
+    fade_ms = request.form.get("fade_out_ms")
 
     with cfg._lock:
         variant = cfg.songs[variant_id]
@@ -1972,6 +1984,8 @@ def ondeck_trim_save(song_type: str, song_id: str):
             variant["start_ms"] = int(start_ms) if start_ms else 0
         if end_ms is not None:
             variant["end_ms"] = int(end_ms) if end_ms else None
+        if fade_ms is not None:
+            variant["fade_out_ms"] = int(fade_ms) if fade_ms else 0
         cfg.save()
 
     return {"success": True, "variant_id": variant_id}

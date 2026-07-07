@@ -169,6 +169,8 @@
         end_ms      = sel_song.end_ms,
         start_field = 'song_start_ms',
         end_field   = 'song_end_ms',
+        fade_field  = 'song_fade_ms',
+        fade_ms     = sel_song.fade_out_ms or 0,
         label       = 'Song Trim'
     ) }}
     {% else %}
@@ -223,6 +225,8 @@
         end_ms      = warmup_song.end_ms,
         start_field = 'warmup_start_ms',
         end_field   = 'warmup_end_ms',
+        fade_field  = 'warmup_fade_ms',
+        fade_ms     = warmup_song.fade_out_ms or 0,
         label       = 'Warm-Up Song Trim'
     ) }}
     {% else %}
@@ -266,6 +270,8 @@
         end_ms      = midgame_song.end_ms,
         start_field = 'midgame_start_ms',
         end_field   = 'midgame_end_ms',
+        fade_field  = 'midgame_fade_ms',
+        fade_ms     = midgame_song.fade_out_ms or 0,
         label       = 'Mid-Inning Song Trim'
     ) }}
     {% else %}
@@ -443,6 +449,7 @@ function previewCombined() {
     file:     '{{ songs[player.walkup_song_id].filename if player.walkup_song_id and songs.get(player.walkup_song_id) else "" }}',
     start_ms: parseInt(document.getElementById('song-h-start')?.value) || 0,
     end_ms:   document.getElementById('song-h-end')?.value ? parseInt(document.getElementById('song-h-end').value) : null,
+    fade_out_ms: parseInt(document.getElementById('song-fade')?.value) || 0,
     announcement: '{{ player.announcement_file }}',
     cue_ms:   parseInt(document.getElementById('ann-h-cue')?.value) || 0,
   }

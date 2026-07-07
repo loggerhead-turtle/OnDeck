@@ -27,6 +27,8 @@
       end_ms     = song.end_ms,
       start_field = 'start_ms',
       end_field   = 'end_ms',
+      fade_field  = 'fade_out_ms',
+      fade_ms     = song.fade_out_ms or 0,
       label      = 'Trim Playback Window'
   ) }}
 
@@ -60,7 +62,9 @@
     const startMs = parseInt(document.getElementById('song-h-start').value) || 0
     const endVal  = document.getElementById('song-h-end').value
     const endMs   = endVal ? parseInt(endVal) : null
-    OnDeck.preview({ file: '{{ song.filename }}', start_ms: startMs, end_ms: endMs })
+    const fadeMs  = parseInt(document.getElementById('song-fade')?.value) || 0
+    OnDeck.preview({ file: '{{ song.filename }}', start_ms: startMs, end_ms: endMs,
+                     fade_out_ms: fadeMs })
   }
 </script>
 {% endblock %}
