@@ -270,6 +270,14 @@ $RUN_USER ALL=(root) NOPASSWD: $VENV/bin/python $REPO_DIR/pi/add_wifi.py, /sbin/
 EOF
 sudo chmod 0440 /etc/sudoers.d/ondeck-wifi
 
+# Power/maintenance actions for the no-login /pi-settings page (service
+# restart, reboot, shutdown) — used by both the deck portal and the Audio Pi.
+echo "==> Installing sudoers rule for Pi maintenance actions"
+sudo tee /etc/sudoers.d/ondeck-power >/dev/null <<EOF
+$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart ondeck-coach, /usr/bin/systemctl restart ondeck-audio, /usr/bin/systemctl reboot, /usr/bin/systemctl poweroff, /bin/systemctl restart ondeck-coach, /bin/systemctl restart ondeck-audio, /bin/systemctl reboot, /bin/systemctl poweroff
+EOF
+sudo chmod 0440 /etc/sudoers.d/ondeck-power
+
 # --- headless network onboarding (boot gate + captive portal) ------------
 # A oneshot that runs BEFORE the main service on EVERY role: applies
 # boot-partition Wi-Fi, links via a dropped ondeck.json / pending pairing code,

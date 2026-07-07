@@ -13,6 +13,7 @@ Design goals:
 Endpoints (all JSON):
   POST /queue    {file, start_ms, end_ms, announcement?, cue_ms?}
   POST /play
+  POST /replay                   -> re-run the last clip that played
   POST /stop
   POST /fade     {ms?}            -> fade out over ms (default 1000)
   POST /volume   {level}          -> 0..100
@@ -68,6 +69,7 @@ class Player:
         self._lock = threading.RLock()
         self._proc: subprocess.Popen | None = None
         self._queued: dict | None = None
+        self._last_played: dict | None = None   # last clip that ran (for /replay)
         self._state = "stopped"          # stopped | queued | playing
         self._started_at: float | None = None
         self._volume = 80                # 0..100, applied as ffmpeg gain
@@ -89,7 +91,19 @@ class Player:
             self._spawn(cmd)
             self._state = "playing"
             self._started_at = time.monotonic()
+            # Remembered across stop/fade/natural end so /replay can re-run
+            # the last walk-up ("the ump missed it — run it again").
+            self._last_played = dict(self._queued)
             return True
+
+    def replay(self) -> bool:
+        """Re-queue and play the last clip that ran (walk-up, song, stinger)."""
+        with self._lock:
+            last = self._last_played
+            if not last:
+                return False
+            self.queue(dict(last))
+            return self.play()
 
     def _build_command(self, clip: dict) -> list[str]:
         """Compose the ffmpeg invocation for a clip.
@@ -259,6 +273,7 @@ class Player:
                 "position_ms": pos_ms,
                 "volume": self._volume,
                 "queued": self._queued,
+                "last_played": self._last_played,
             }
 
 
@@ -286,6 +301,13 @@ def http_play():
 def http_stop():
     player.stop()
     return jsonify(ok=True, status=player.status())
+
+
+@app.post("/replay")
+def http_replay():
+    """Re-run the last clip that played (e.g. replay the last walk-up)."""
+    ok = player.replay()
+    return jsonify(ok=ok, status=player.status())
 
 
 @app.post("/fade")
@@ -464,6 +486,12 @@ def main() -> None:
         register_pi_routes(app)
     except Exception as exc:  # optional — must not stop audio playback
         log.warning("Pi web routes not registered: %s", exc)
+    # No-login Pi maintenance page (sync now / restart / reboot / shutdown).
+    try:
+        from pi.kiosk_routes import register_pi_settings
+        register_pi_settings(app)
+    except Exception as exc:
+        log.warning("Pi settings page not registered: %s", exc)
     if bt is not None:
         # Power the radio on at boot (clearing any rfkill soft-block) so the
         # speaker page shows "radio on" and scanning works even before a

@@ -69,6 +69,10 @@ def _default_config() -> dict[str, Any]:
             "signup_link_expires_hours": 168,  # 1 week
             # Deck button editor presentation: "sidebar" (docked) or "modal".
             "deck_editor_mode": "sidebar",
+            # Physical Stream Deck model (drives the editor grid + key roles).
+            # One of DECK_MODELS; the controller follows real hardware if it
+            # reports a different grid.
+            "deck_model": "xl",
         },
         "players": {},          # player_id -> player dict
         "songs": {},            # song_id -> song dict
@@ -110,6 +114,11 @@ def _default_config() -> dict[str, Any]:
         # Each entry: {id, created_at, requested_by, requester_name, title,
         #              artist, spotify_url, note, status, ratings:{rater:stars}}.
         "song_requests": [],
+        # "What's new" feed for the admin: songs uploaded/imported and where
+        # they were auto-placed on the deck. Persists until the admin clears
+        # it (unlike notifications, entries are never auto-marked seen).
+        # Each entry: {id, ts, kind, name, detail, by}.
+        "recent_additions": [],
     }
 
 
@@ -138,12 +147,70 @@ def _default_pages() -> dict[str, Any]:
     return pages
 
 
-# Stream Deck XL fixed/content key indices (module level so the class body can
-# reference them — a class-scope comprehension can't see sibling class vars).
-_DECK_FIXED_SLOTS = {0, 8, 16, 24, 25, 26, 27, 28, 29, 30, 31}
-_DECK_CONTENT_SLOTS = [i for i in range(32) if i not in _DECK_FIXED_SLOTS]
+# --- Stream Deck geometry ---------------------------------------------------
+# Supported physical deck models. The web editor grid and the controller's key
+# roles both derive from the selected model (system["deck_model"]). The role
+# rules mirror pideck.layout (the cloud portal has no pideck install, so the
+# small computation is duplicated here on purpose — keep the two in step).
+DECK_MODELS: dict[str, dict[str, Any]] = {
+    "mini":     {"label": "Stream Deck Mini (2×3)",       "rows": 2, "cols": 3,  "dials": 0},
+    "original": {"label": "Stream Deck / Mk.2 (3×5)",     "rows": 3, "cols": 5,  "dials": 0},
+    "neo":      {"label": "Stream Deck Neo (2×4)",        "rows": 2, "cols": 4,  "dials": 0},
+    "plus":     {"label": "Stream Deck + (2×4 + dials)",  "rows": 2, "cols": 4,  "dials": 4},
+    "xl":       {"label": "Stream Deck XL (4×8)",         "rows": 4, "cols": 8,  "dials": 0},
+    "studio":   {"label": "Stream Deck Studio (2×16)",    "rows": 2, "cols": 16, "dials": 2},
+}
+DECK_DEFAULT_MODEL = "xl"
 
-# Stream Deck XL grid geometry (used to label blank keys "page.col.row").
+
+def compute_deck_layout(rows: int, cols: int) -> dict[str, Any]:
+    """Key roles for a rows×cols deck.
+
+    Returns {rows, cols, key_count, prev, home, next, transport, shortcuts,
+    fixed (set of indices), fixed_labels (idx→label for the editor), content}.
+    Same rules as pideck.layout.compute_layout:
+      rows>=4 — nav col 0 rows 0-2; bottom row = 3 transport keys + shortcuts
+      rows==3 — nav col 0; transport on the bottom row after Next; rest shortcuts
+      rows==2 — Prev/Next only (small decks keep transport as button slots)
+    """
+    rows, cols = int(rows), int(cols)
+    key_count = rows * cols
+    prev, home, nxt = 0, (cols if rows >= 3 else None), (2 * cols if rows >= 3 else cols)
+    transport: list[int] = []
+    shortcuts: list[int] = []
+    if rows >= 4:
+        bottom = list(range((rows - 1) * cols, rows * cols))
+        transport, shortcuts = bottom[:3], bottom[3:]
+    elif rows == 3:
+        bottom = list(range(2 * cols, 3 * cols))
+        transport, shortcuts = bottom[1:4], bottom[4:]
+    fixed = {prev, nxt} | set(transport) | set(shortcuts)
+    if home is not None:
+        fixed.add(home)
+    labels: dict[int, str] = {prev: "▲ Prev", nxt: "▼ Next"}
+    if home is not None:
+        labels[home] = "⌂ Home"
+    for idx, name in zip(transport, ("▶ Play", "■ Stop", "↘ Fade")):
+        labels[idx] = name
+    for idx in shortcuts:
+        labels[idx] = "Page"
+    return {
+        "rows": rows, "cols": cols, "key_count": key_count,
+        "prev": prev, "home": home, "next": nxt,
+        "transport": transport, "shortcuts": shortcuts,
+        "fixed": fixed, "fixed_labels": labels,
+        "content": [i for i in range(key_count) if i not in fixed],
+    }
+
+
+# Stream Deck XL fixed/content key indices — module-level defaults kept for
+# back-compat; per-model values come from ConfigManager.deck_layout().
+_XL_LAYOUT = compute_deck_layout(4, 8)
+_DECK_FIXED_SLOTS = _XL_LAYOUT["fixed"]
+_DECK_CONTENT_SLOTS = list(_XL_LAYOUT["content"])
+
+# Stream Deck XL grid geometry — legacy module-level defaults; live values
+# come from ConfigManager.deck_layout() for the configured model.
 DECK_COLS = 8
 DECK_ROWS = 4
 
@@ -300,6 +367,38 @@ class ConfigManager:
     @property
     def song_requests(self) -> list[Any]:
         return self._data.setdefault("song_requests", [])
+
+    @property
+    def recent_additions(self) -> list[Any]:
+        return self._data.setdefault("recent_additions", [])
+
+    # -- recent-additions feed (admin "New Activity") ----------------------
+
+    RECENT_ADDITIONS_CAP = 100
+
+    def add_recent_addition(self, kind: str, name: str, detail: str = "",
+                            by: str = "") -> None:
+        """Record something that was just added (song upload/import/placement).
+
+        Entries stay visible on the admin's New Activity page until the admin
+        explicitly clears them — they are never auto-marked as seen.
+        """
+        with self._lock:
+            self.recent_additions.insert(0, {
+                "id": uuid.uuid4().hex,
+                "ts": _now_ms(),
+                "kind": kind,      # e.g. "song", "walkup", "warmup", "midgame"
+                "name": name,
+                "detail": detail,
+                "by": by,
+            })
+            del self.recent_additions[self.RECENT_ADDITIONS_CAP:]
+            self.save(mark_dirty=False)
+
+    def clear_recent_additions(self) -> None:
+        with self._lock:
+            self._data["recent_additions"] = []
+            self.save(mark_dirty=False)
 
     # -- Stream Deck helpers ---------------------------------------------
     # These mirror the read-only accessors the play-call deck relied on, so
@@ -642,6 +741,24 @@ class ConfigManager:
             self._data["lineup"] = current
             self.save()
 
+    def add_song_to_page(self, page_id: str, song_id: str) -> bool:
+        """Append one song to a song-list page (deck button appears on sync).
+
+        Returns True when the song was newly added; False when it was already
+        on the page or the ids are unknown.
+        """
+        if song_id not in self.songs:
+            return False
+        with self._lock:
+            songs = self._data.setdefault("page_songs", {}).setdefault(page_id, [])
+            if song_id in songs:
+                return False
+            songs.append(song_id)
+            if page_id == "mid_inning":
+                self._data["mid_inning"] = list(songs)
+            self.save()
+            return True
+
     def set_page_songs(self, page_id: str, song_ids: list[str]) -> None:
         """Set the ordered song list for a song-list page (unknown ids dropped)."""
         valid = [sid for sid in song_ids if sid in self.songs]
@@ -667,10 +784,37 @@ class ConfigManager:
     # the 21 "content" keys below. A page with any slots set is rendered from
     # those slots; a page with none falls back to its built-in auto-layout.
 
-    # Content key indices on a Stream Deck XL (8x4) — everything that isn't a
-    # fixed nav (0/8/16), transport (24/25/26) or page-shortcut (27-31) key.
-    DECK_FIXED_SLOTS = _DECK_FIXED_SLOTS
-    DECK_CONTENT_SLOTS = _DECK_CONTENT_SLOTS
+    def deck_model(self) -> str:
+        """The configured Stream Deck model key (always a valid one)."""
+        model = (self.system.get("deck_model") or "").strip().lower()
+        return model if model in DECK_MODELS else DECK_DEFAULT_MODEL
+
+    def set_deck_model(self, model: str) -> None:
+        model = (model or "").strip().lower()
+        if model not in DECK_MODELS:
+            return
+        with self._lock:
+            self._data["system"]["deck_model"] = model
+            self.save()
+
+    def deck_geometry(self) -> tuple[int, int]:
+        """(rows, cols) of the configured model — pideck's layout hint."""
+        m = DECK_MODELS[self.deck_model()]
+        return m["rows"], m["cols"]
+
+    def deck_layout(self) -> dict[str, Any]:
+        """Full key-role layout for the configured model."""
+        return compute_deck_layout(*self.deck_geometry())
+
+    # Content key indices for the configured deck — everything that isn't a
+    # fixed nav / transport / page-shortcut key (21 keys on the default XL).
+    @property
+    def DECK_FIXED_SLOTS(self) -> set:
+        return self.deck_layout()["fixed"]
+
+    @property
+    def DECK_CONTENT_SLOTS(self) -> list:
+        return self.deck_layout()["content"]
 
     def set_page_slot(self, page_id: str, idx: int, slot: dict | None) -> None:
         """Assign or clear one content key on a page.
@@ -740,6 +884,10 @@ class ConfigManager:
             "label": slot.get("label", ""),
             "color": (slot.get("color") or "").strip(),
         }
+        # remote_nav keys carry the target deck device ("all" or a device id).
+        target = (slot.get("target") or "").strip()
+        if target:
+            out["target"] = target
         text_color = (slot.get("text_color") or "").strip()
         if text_color:
             out["text_color"] = text_color

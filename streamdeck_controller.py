@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""OnDeck Stream Deck XL controller — built on the shared pideck runtime.
+"""OnDeck Stream Deck controller — built on the shared pideck runtime.
 
 pideck (github.com/loggerhead-turtle/pi-deck) owns the device lifecycle,
-hot-replug watchdog, fixed Prev/Home/Next column, bottom-row page shortcuts
-and key rendering. This file keeps only what is OnDeck-specific: the
-Play/Stop/Fade transport keys, walk-up cueing, lineup editing, and the
-dynamic Lineup / Players / Celebrations / song pages.
+hot-replug watchdog, size-adaptive key layout (Mini → XL → Studio), the fixed
+Prev/Home/Next column, bottom-row page shortcuts, dial events and key
+rendering. This file keeps only what is OnDeck-specific: the Play/Stop/Fade
+transport keys, walk-up cueing, lineup editing, replay, remote deck
+navigation, knob volume, and the dynamic Lineup / Players / Celebrations /
+song pages.
 
-Layout (32 keys, 4 rows x 8 cols):
+Layout (XL example — 32 keys, 4 rows x 8 cols; other sizes re-derive):
   Left column   0 / 8 / 16     Prev / Home / Next      (always visible)
   Bottom-left   24 / 25 / 26   Play / Stop / Fade      (always visible)
   Bottom row    27-31          page shortcuts          (first 5 pages)
   Content area  1-7,9-15,17-23 21 slots, per-page content
+
+On a 2-row deck (Mini / Plus / Neo / Studio) only Prev/Next are fixed; the
+transport lives on button slots (action: play/stop/fade) or, on a Stream
+Deck +, on the knobs — dial 0 turns the Audio Pi volume and pushes to mute.
 
 Walk-up flow: on the Lineup page a tile *cues* (queues) the batter's walk-up;
 Play runs it; when the song ends the lineup auto-advances and re-cues the next
@@ -25,6 +31,10 @@ song, or a celebration stinger). The deck holds no audio itself — it calls
 from __future__ import annotations
 
 import logging
+import os
+import threading
+
+import requests as rq
 
 try:
     from pideck import BaseDeckController
@@ -48,10 +58,6 @@ from music_client import MusicClient
 
 log = logging.getLogger("streamdeck")
 
-BTN_PLAY = 24    # bottom row — run the cued walk-up
-BTN_STOP = 25    # bottom row — stop instantly
-BTN_FADE = 26    # bottom row — fade out
-
 # Celebration stingers, in the fixed order they appear on the page.
 CELEBRATIONS = [
     ("hit", "Hit"),
@@ -60,10 +66,19 @@ CELEBRATIONS = [
     ("strikeout", "K"),
 ]
 
+# Labels for the transport/utility action refs (slot actions + editor).
+ACTION_LABELS = {
+    "play": "Play",
+    "stop": "Stop",
+    "fade": "Fade",
+    "replay": "↻\nReplay",
+    "reset_lineup": "⟲ Reset\nLineup",
+}
+
 
 class StreamDeckController(BaseDeckController):
     PAGE_SHORTCUT_BTNS = tuple(range(27, 32))
-    EXTRA_FIXED_BTNS = (BTN_PLAY, BTN_STOP, BTN_FADE)
+    EXTRA_FIXED_BTNS = (24, 25, 26)
     HOME_PAGE_ID = "home"
     DEFAULT_BG = (40, 40, 40)
     # Per-page background tint, keyed by the page's stable id.
@@ -85,11 +100,19 @@ class StreamDeckController(BaseDeckController):
         self.lineup = lineup
         self.music = music
 
+        # Transport keys — assigned per-layout in on_layout (None when the
+        # deck is too small for fixed transport keys).
+        self._btn_play = self._btn_stop = self._btn_fade = None
+
         # Edit-lineup mode: tap "Edit Lineup", tap a batting-order slot to arm
         # it, then tap a player on the players page to fill that spot.
         self._edit_lineup = False
         self._lineup_assign_pos = None   # 1-based position awaiting a player
         self._lineup_return_page = None  # page to bounce back to after picking
+
+        # Knob volume (Stream Deck + / Studio): mirrors the Audio Pi level.
+        self._volume = int(config.system.get("volume", 80) or 80)
+        self._pre_mute = self._volume
 
         # Repaint the deck whenever the lineup auto-advances.
         self.lineup.on_change = self.refresh
@@ -98,26 +121,55 @@ class StreamDeckController(BaseDeckController):
 
     # ── pideck hooks ─────────────────────────────────────
 
+    def on_layout(self, layout) -> None:
+        """Claim the layout's transport keys for Play / Stop / Fade."""
+        transport = list(layout.transport_btns)[:3]
+        transport += [None] * (3 - len(transport))
+        self._btn_play, self._btn_stop, self._btn_fade = transport
+        self.EXTRA_FIXED_BTNS = tuple(b for b in transport if b is not None)
+
     def before_render(self) -> None:
         # Pick up any edits the web portal wrote to config.json since the last
         # paint — the portal runs its own ConfigManager against the same file.
         self.config.load()
 
     def render_fixed_keys(self) -> None:
-        self.btn(BTN_PLAY, "▶\nPlay", (30, 110, 40))
-        self.btn(BTN_STOP, "■\nStop", (90, 30, 30))
-        self.btn(BTN_FADE, "↘\nFade", (30, 60, 90))
+        self.btn(self._btn_play, "▶\nPlay", (30, 110, 40))
+        self.btn(self._btn_stop, "■\nStop", (90, 30, 30))
+        self.btn(self._btn_fade, "↘\nFade", (30, 60, 90))
 
     def on_fixed_key(self, idx) -> None:
-        if idx == BTN_PLAY:
+        if idx == self._btn_play:
             self.lineup.play()
-            self.flash(BTN_PLAY)
-        elif idx == BTN_STOP:
+            self.flash(idx)
+        elif idx == self._btn_stop:
             self.music.stop()
-            self.flash(BTN_STOP)
-        elif idx == BTN_FADE:
+            self.flash(idx)
+        elif idx == self._btn_fade:
             self.music.fade()
-            self.flash(BTN_FADE)
+            self.flash(idx)
+
+    # ── Dials (Stream Deck + / Studio) ───────────────────
+    # Dial 0 is the volume knob: turn to adjust the Audio Pi level, push to
+    # mute / un-mute. Other dials are left for future assignments.
+
+    def on_dial_turn(self, dial, steps) -> None:
+        if dial != 0 or not steps:
+            return
+        self._volume = max(0, min(100, self._volume + steps * 2))
+        if self._volume > 0:
+            self._pre_mute = self._volume
+        self.music.set_volume(self._volume)
+        log.debug("Dial volume → %s", self._volume)
+
+    def on_dial_push(self, dial, pressed) -> None:
+        if dial != 0 or not pressed:
+            return
+        if self._volume > 0:
+            self._pre_mute, self._volume = self._volume, 0
+        else:
+            self._volume = self._pre_mute or 80
+        self.music.set_volume(self._volume)
 
     # ── Content handler ──────────────────────────────────
 
@@ -281,8 +333,11 @@ class StreamDeckController(BaseDeckController):
             return dict(CELEBRATIONS).get(ref, ref)
         if kind == "nav":
             return (self.config.pages.get(ref, {}).get("name", ref) or "")[:10]
+        if kind == "remote_nav":
+            name = (self.config.pages.get(ref, {}).get("name", ref) or "")[:9]
+            return f"→ {name}"
         if kind == "action":
-            return {"play": "Play", "stop": "Stop", "fade": "Fade"}.get(ref, ref)
+            return ACTION_LABELS.get(ref, ref)
         if kind == "edit_lineup":
             return "Edit\nLineup"
         if kind == "lineup_slot":
@@ -367,6 +422,13 @@ class StreamDeckController(BaseDeckController):
         elif kind == "nav":
             self.go_to_page(ref)
             return
+        elif kind == "remote_nav":
+            # Navigation deck: send another Stream Deck Pi (or all of them)
+            # to a page. Fire-and-forget on a thread so the HID callback
+            # never blocks on a slow peer.
+            self._send_remote_nav(ref, slot.get("target") or "all")
+            self.flash(btn_idx, "→")
+            return
         elif kind == "action":
             if ref == "play":
                 self.lineup.play()
@@ -375,8 +437,47 @@ class StreamDeckController(BaseDeckController):
                 ok = self.music.stop()
             elif ref == "fade":
                 ok = self.music.fade(int(slot.get("fade_ms") or 1000))
+            elif ref == "replay":
+                # Re-run the last thing that played, without advancing the
+                # batting order for it.
+                self.lineup.note_external_playback()
+                ok = self.music.replay()
+            elif ref == "reset_lineup":
+                ok = self.lineup.reset()
         if ok:
             self.flash(btn_idx)
+
+    # ── Remote deck navigation ───────────────────────────
+
+    def _send_remote_nav(self, page_id: str, target: str) -> None:
+        """POST /ondeck/api/deck/goto to peer Stream Deck Pis.
+
+        Peers are the non-revoked deck-role devices from config (their IPs are
+        kept fresh by /sync/ping and synced down to every Pi). ``target`` is a
+        device id or "all". Page ids are shared config, so ``page_id`` means
+        the same page on every deck.
+        """
+        port = int(os.environ.get("ONDECK_PORTAL_PORT", "5000"))
+        peers = [
+            d for did, d in self.config.devices.items()
+            if d.get("role") == "deck" and not d.get("revoked") and d.get("ip")
+            and (target == "all" or did == target or d.get("id") == target)
+        ]
+        if not peers:
+            log.warning("remote_nav: no reachable deck devices for target %r", target)
+            return
+
+        def _post():
+            for dev in peers:
+                url = f"http://{dev['ip']}:{port}/ondeck/api/deck/goto"
+                try:
+                    rq.post(url, json={"page": page_id}, timeout=3)
+                    log.info("remote_nav → %s (%s) page=%s",
+                             dev.get("name"), dev.get("ip"), page_id)
+                except Exception as exc:
+                    log.warning("remote_nav to %s failed: %s", dev.get("ip"), exc)
+
+        threading.Thread(target=_post, daemon=True).start()
 
     # ── Edit-lineup flow ─────────────────────────────────
 

@@ -29,7 +29,9 @@ The cloud instance is the source of truth. The Pi polls `/sync/*` endpoints ever
 | `web/templates/library_edit.html` | Song editor with trim editor |
 | `web/templates/deck_editor.html` | Stream Deck button editor (8×4 grid, per-key slots) |
 | `web/templates/devices.html` | Pi device pairing + management (codes, rename, revoke) |
-| `streamdeck_controller.py` | Stream Deck XL runtime — OnDeck-specific pages/actions on the shared `pideck` library (github.com/loggerhead-turtle/pi-deck; installed by `install.sh`, sibling-checkout fallback) |
+| `streamdeck_controller.py` | Stream Deck runtime (any size) — OnDeck-specific pages/actions on the shared `pideck` library (github.com/loggerhead-turtle/pi-deck; installed by `install.sh`, sibling-checkout fallback) |
+| `pi/kiosk_routes.py` | No-login field pages: `/deck-settings` (volume, transport, replay, lineup reset, deck pages, model) + `/pi-settings` (sync now, restart, reboot, shutdown) |
+| `web/templates/admin_activity.html` | Admin "New Activity" feed — recent uploads/placements, persists until Clear |
 | `bluetooth_manager.py` | Audio Pi BlueZ control (`bluetoothctl`) + preferred-speaker auto-connect + sink routing |
 | `web/templates/bluetooth.html` | Bluetooth speaker management page (proxied to the Audio Pi) |
 | `web/templates/login.html` | Standalone login page |
@@ -129,13 +131,59 @@ links). Helpers live in `config_manager.py` (`create_pairing_code`,
 
 ## Stream Deck Editor
 
-The portal **Stream Deck** page (`/ondeck/deck`) lays out the physical XL keys.
-Each page stores `pages[id].slots["<idx>"] = {type, ref, label, color}` for the 21
-content keys (`type ∈ player_walkup|song|celebration|nav|action|blank`). The deck
-runtime (`streamdeck_controller.py`) renders/handles from slots when a page has
-any, else falls back to the built-in auto-layout. Everything syncs via
-`/sync/config` (no new endpoints). Fixed nav/transport/page-shortcut keys stay
-owned by the controller.
+The portal **Stream Deck** page (`/ondeck/deck`) lays out the physical keys.
+Each page stores `pages[id].slots["<idx>"] = {type, ref, label, color, …}` for
+the content keys (`type ∈ player_walkup|song|celebration|nav|remote_nav|
+lineup_slot|edit_lineup|action|text|blank`; `action` refs: `play|stop|fade|
+replay|reset_lineup`). `remote_nav` also stores `target` (a deck device id or
+`"all"`). The deck runtime (`streamdeck_controller.py`) renders/handles from
+slots when a page has any, else falls back to the built-in auto-layout.
+Everything syncs via `/sync/config` (no new endpoints). Fixed
+nav/transport/page-shortcut keys stay owned by the controller.
+
+## Deck Sizes & Knobs
+
+`system["deck_model"]` (Settings → Stream Deck) picks the physical model:
+`mini|original|neo|plus|xl|studio` (`DECK_MODELS` in `config_manager.py`).
+`compute_deck_layout(rows, cols)` derives the fixed-key roles per size —
+rows≥4: nav col + bottom-row transport/shortcuts (classic XL); rows==3: nav
+col + transport after Next; rows==2: Prev/Next only (put transport on slots).
+The same rules live in `pideck.layout` (duplicated on purpose — the cloud has
+no pideck install; keep them in step). The controller follows the *attached
+hardware's* grid if it differs from the config and logs a warning. On a
+Stream Deck + / Studio, dial 0 turns the Audio Pi volume; pressing it mutes.
+
+## Replay, Lineup Reset & Deck-to-Deck Nav
+
+- Audio Pi remembers the last played clip; `POST /replay` re-runs it
+  (`MusicClient.replay()`, deck action `replay`, portal `/ondeck/api/replay`).
+- `LineupManager.reset()` jumps back to the leadoff hitter and re-cues (deck
+  action `reset_lineup`, portal `POST /ondeck/api/lineup/reset`).
+- Deck-to-deck: a `remote_nav` key posts `{page}` to the target deck Pi's
+  `POST /ondeck/api/deck/goto` (:5000, session-exempt, Pi-only — main.py
+  registers the live controller via `web.app.attach_runtime`). Peer IPs come
+  from `config["devices"]` (kept fresh by `/sync/ping`).
+
+## Upload Auto-Placement & New Activity
+
+Player AJAX uploads (`/ondeck/player-upload`) auto-place by `song_type`:
+`walkup` → player's walk-up; `warmup` → player's warm-up **and** the Pitcher
+Warm-Up page's song list; `midgame` → player's mid-inning song **and** the
+Mid-Inning page. The Library upload form has a destination select
+(`player:<pid>` / `warmup` / `midgame` / `page:<page_id>`). Every
+upload/import/placement is recorded in `config["recent_additions"]`
+(`cfg.add_recent_addition`), shown on **Admin → New Activity**
+(`/admin/activity`) until the admin presses Clear — entries are never
+auto-marked seen (unlike `/ondeck/notifications`).
+
+## Kiosk Pages (no login, field LAN only)
+
+Registered only on the Pis (never the cloud): `/deck-settings` on the deck
+Pi's portal (volume slider, Play/Stop/Fade/Replay, lineup reset, jump deck to
+page, brightness, deck model, Audio Pi target) and `/pi-settings` on **both**
+Pis (hostname/IP, Wi-Fi + cloud-link shortcuts, sync now, service restart,
+reboot, shutdown — via the `ondeck-power` NOPASSWD sudoers rule from
+install.sh). Endpoint names are exempted in `_check_auth`'s `always_ok`.
 
 ## Pi Roles
 

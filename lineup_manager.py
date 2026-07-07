@@ -85,6 +85,20 @@ class LineupManager:
             self._index = after[0] if after else filled[0]
         self._notify()
 
+    def reset(self) -> bool:
+        """Jump back to the top of the order (leadoff) and cue that batter.
+
+        The "start the lineup over" button: clears any armed auto-advance,
+        moves to the first filled slot, and cues them so Play is ready.
+        """
+        with self._lock:
+            self._queued_batter = False
+            self._armed = False
+            filled = self._filled_indices()
+            self._index = filled[0] if filled else 0
+        self._notify()
+        return self.cue_current()
+
     # -- cue / play -------------------------------------------------------
 
     def cue_current(self) -> bool:

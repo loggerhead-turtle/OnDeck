@@ -47,6 +47,26 @@
     </div>
   </div>
 
+  <!-- Stream Deck hardware -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5 space-y-4">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Stream Deck</h2>
+    <div>
+      <label class="block text-xs text-gray-400 mb-1.5 font-medium">Deck model</label>
+      <select name="deck_model"
+              class="w-full sm:w-80 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-green-500">
+        {% for key, m in deck_models.items() %}
+        <option value="{{ key }}" {% if key == deck_model %}selected{% endif %}>{{ m.label }}</option>
+        {% endfor %}
+      </select>
+      <p class="text-xs text-gray-500 mt-1.5">
+        Sets the button grid in the Stream Deck editor and which keys are
+        reserved for navigation/transport. The Pi follows the attached
+        hardware automatically; keep this matched so the editor lines up.
+        On a Stream Deck +, knob 1 adjusts volume (press to mute).
+      </p>
+    </div>
+  </div>
+
   <!-- AI announcer voice (ElevenLabs) -->
   <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5 space-y-5">
     <div class="flex items-center justify-between">

@@ -66,6 +66,11 @@ class MusicClient:
     def stop(self) -> bool:
         return self._post("/stop") is not None
 
+    def replay(self) -> bool:
+        """Re-run the last clip the Audio Pi played (walk-up do-over)."""
+        r = self._post("/replay")
+        return bool(r and r.get("ok"))
+
     def fade(self, ms: int = 1000) -> bool:
         return self._post("/fade", {"ms": ms}) is not None
 

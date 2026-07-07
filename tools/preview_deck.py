@@ -2,8 +2,10 @@
 """Render the Stream Deck pages to PNGs without any hardware.
 
 Drives the real ``StreamDeckController`` rendering code against a fake deck and
-composes the 32 keys into one image per page — so you can iterate on layout and
-colours from a laptop, and see exactly what the physical Stream Deck XL shows.
+composes the keys into one image per page — so you can iterate on layout and
+colours from a laptop, and see exactly what the physical Stream Deck shows.
+The grid follows the configured deck model (Settings → Stream Deck), so you
+can preview a Mini/Original/Plus/XL layout by switching the model.
 
 Usage:
     python tools/preview_deck.py                 # uses your ~/ondeck config
@@ -20,16 +22,14 @@ import argparse
 import os
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 # Allow running from the repo root: `python tools/preview_deck.py`.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# Stream Deck XL geometry, used only for the composite preview image.
-KEY = 96
+KEY = 96   # rendered key size in the composite image
 GAP = 10
-COLS = 8
-ROWS = 4
 
 PAGES = [
     ("home", "1_home"),
@@ -42,6 +42,33 @@ PAGES = [
     ("celebrations", "8_celebrations"),
     ("pitcher_warmup", "9_pitcher_warmup"),
 ]
+
+
+def _stub_streamdeck_lib() -> None:
+    """Provide just enough of the `StreamDeck` package for headless rendering.
+
+    pideck's key renderer imports ``StreamDeck.ImageHelpers.PILHelper`` to
+    convert a PIL image to the device wire format; here we keep the PIL image
+    as-is so it can be pasted into the composite. Installed real library wins.
+    """
+    try:
+        from StreamDeck.ImageHelpers import PILHelper  # noqa: F401
+        PILHelper.to_native_key_format = staticmethod(lambda deck, img: img)
+        return
+    except ImportError:
+        pass
+    pkg = types.ModuleType("StreamDeck")
+    helpers = types.ModuleType("StreamDeck.ImageHelpers")
+
+    class PILHelper:  # noqa: D401 - minimal stand-in
+        @staticmethod
+        def to_native_key_format(deck, img):
+            return img
+
+    helpers.PILHelper = PILHelper
+    pkg.ImageHelpers = helpers
+    sys.modules["StreamDeck"] = pkg
+    sys.modules["StreamDeck.ImageHelpers"] = helpers
 
 
 def _seed_demo(cfg) -> None:
@@ -89,11 +116,13 @@ def main() -> None:
     if args.demo:
         os.environ["ONDECK_HOME"] = tempfile.mkdtemp(prefix="ondeck_preview_")
 
+    _stub_streamdeck_lib()
+
     from PIL import Image
     from config_manager import ConfigManager
     from music_client import MusicClient
     from lineup_manager import LineupManager
-    import streamdeck_controller as sdc
+    from streamdeck_controller import StreamDeckController
 
     cfg = ConfigManager()
     if args.demo:
@@ -117,28 +146,28 @@ def main() -> None:
         def set_key_callback(self, cb):
             pass
 
-    # Keep the rendered PIL image instead of converting to the wire format.
-    sdc.PILHelper.to_native_key_format = lambda deck, img: img
-
     music = MusicClient(cfg)
     lineup = LineupManager(cfg, music)
-    ctrl = sdc.StreamDeckController.__new__(sdc.StreamDeckController)
-    ctrl.config, ctrl.lineup, ctrl.music = cfg, lineup, music
-    ctrl.current_page_id, ctrl.deck = "home", FakeDeck()
+    # Real constructor: opens no hardware (open_deck finds none), computes the
+    # layout from the configured deck model, and leaves deck=None — then we
+    # swap in the fake deck and drive the real render path.
+    ctrl = StreamDeckController(cfg, lineup, music)
+    ctrl.deck = FakeDeck()
     lineup.on_change = ctrl.refresh
     lineup.set_current(args.current)
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    width = COLS * KEY + (COLS + 1) * GAP
-    height = ROWS * KEY + (ROWS + 1) * GAP
+    cols, rows = ctrl.COLS, ctrl.ROWS
+    width = cols * KEY + (cols + 1) * GAP
+    height = rows * KEY + (rows + 1) * GAP
     for page_id, fname in PAGES:
         imgs.clear()
         ctrl.go_to_page(page_id)
         canvas = Image.new("RGB", (width, height), (8, 8, 8))
         for idx, img in imgs.items():
-            r, c = divmod(idx, COLS)
+            r, c = divmod(idx, cols)
             canvas.paste(img, (GAP + c * (KEY + GAP), GAP + r * (KEY + GAP)))
         path = out_dir / f"deck_{fname}.png"
         canvas.save(path)

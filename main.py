@@ -37,13 +37,17 @@ WEB_HOST = "0.0.0.0"
 WEB_PORT = int(os.environ.get("ONDECK_PORTAL_PORT", "5000"))
 
 
-def _serve_web() -> None:
+def _serve_web(deck=None, lineup=None, music=None) -> None:
     """Run the existing web portal (web/app.py) on a background thread.
 
     The portal keeps its own ConfigManager against the same config.json, so the
     Stream Deck (which reloads the file on each paint) reflects portal edits.
     """
-    from web.app import app
+    from web.app import app, attach_runtime
+
+    # Hand the live deck objects to the portal so its routes (deck goto,
+    # lineup reset, kiosk pages) can drive the physical Stream Deck.
+    attach_runtime(deck=deck, lineup=lineup, music=music)
 
     # Coach Pi-only routes (Wi-Fi + cloud link). Registered here so they never
     # exist on the cloud deployment, which runs web.app:app directly.
@@ -52,6 +56,13 @@ def _serve_web() -> None:
         register_pi_routes(app)
     except Exception as exc:  # missing optional deps must not stop the portal
         log.warning("Pi web routes not registered: %s", exc)
+
+    # No-login kiosk pages (deck settings + Pi settings) — field LAN only.
+    try:
+        from pi.kiosk_routes import register as register_kiosk_routes
+        register_kiosk_routes(app)
+    except Exception as exc:
+        log.warning("Kiosk routes not registered: %s", exc)
 
     log.info("Web portal → http://%s:%s", WEB_HOST, WEB_PORT)
     app.run(host=WEB_HOST, port=WEB_PORT, threaded=True, use_reloader=False)
@@ -71,8 +82,9 @@ def main() -> None:
     # Auto-advance the batting order when a walk-up song ends on the Audio Pi.
     lineup.start_auto_advance()
 
-    # Web portal on a background thread.
-    threading.Thread(target=_serve_web, daemon=True).start()
+    # Web portal on a background thread, wired to the live deck objects.
+    threading.Thread(target=_serve_web, args=(deck, lineup, music),
+                     daemon=True).start()
 
     # Stream Deck event loop owns the main thread.
     try:

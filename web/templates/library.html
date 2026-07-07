@@ -27,6 +27,23 @@
       <span>⬆</span> Upload Audio
     </h2>
     <form method="POST" action="/ondeck/library/upload" enctype="multipart/form-data">
+      <label class="block text-xs text-gray-400 mb-1.5">Add it to the deck as…</label>
+      <select name="destination"
+              class="w-full mb-3 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-green-500">
+        <option value="">Library only (place it later)</option>
+        <option value="warmup">Pitcher Warm-Up page</option>
+        <option value="midgame">Mid-Inning page</option>
+        <option value="page:hype">Hype page</option>
+        <option value="page:mound_visit">Mound Visit page</option>
+        <option value="page:dead_ball">Dead Ball page</option>
+        {% if upload_players %}
+        <optgroup label="Player walk-up">
+          {% for pid, p in upload_players %}
+          <option value="player:{{ pid }}">#{{ p.jersey }} {{ p.first_name }} {{ p.last_name }}</option>
+          {% endfor %}
+        </optgroup>
+        {% endif %}
+      </select>
       <label id="drop-zone"
              class="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-600 hover:border-green-500 rounded-lg p-6 cursor-pointer transition-colors text-center"
              for="file-input">

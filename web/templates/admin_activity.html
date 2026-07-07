@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}New Activity{% endblock %}
+{% block content %}
+
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-2xl font-bold">New Activity</h1>
+    <p class="text-sm text-gray-500 mt-1">
+      Songs just uploaded or imported, and where they were placed on the
+      Stream Deck. Entries stay here until you clear them.
+    </p>
+  </div>
+  <div class="flex items-center gap-2">
+    <a href="/admin"
+       class="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-sm font-medium transition-colors">
+      ← Admin
+    </a>
+    {% if additions %}
+    <form method="POST" action="/admin/activity/clear"
+          onsubmit="return confirm('Clear all new-activity entries?');">
+      <button type="submit"
+              class="px-4 py-2 rounded-lg bg-red-800/70 hover:bg-red-700 text-red-100 text-sm font-medium transition-colors">
+        ✕ Clear
+      </button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if additions %}
+<div class="bg-gray-800 rounded-xl border border-gray-700/50 overflow-hidden">
+  <ul class="divide-y divide-gray-700/50">
+    {% for a in additions %}
+    <li class="px-4 py-3 flex items-start gap-3">
+      <span class="mt-0.5 text-lg">
+        {% if a.kind == 'walkup' %}🚶{% elif a.kind == 'warmup' %}⚾{% elif a.kind == 'midgame' %}🎶{% else %}🎵{% endif %}
+      </span>
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="font-semibold text-white">{{ a.name }}</span>
+          <span class="px-1.5 py-0.5 rounded text-[11px] uppercase tracking-wide
+            {% if a.kind == 'walkup' %}bg-green-900/60 text-green-300
+            {% elif a.kind == 'warmup' %}bg-cyan-900/60 text-cyan-300
+            {% elif a.kind == 'midgame' %}bg-yellow-900/60 text-yellow-300
+            {% else %}bg-indigo-900/60 text-indigo-300{% endif %}">
+            {{ {'walkup': 'walk-up', 'warmup': 'warm-up', 'midgame': 'mid-inning'}.get(a.kind, 'song') }}
+          </span>
+        </div>
+        {% if a.detail %}<p class="text-sm text-gray-400 mt-0.5">{{ a.detail }}</p>{% endif %}
+        <p class="text-xs text-gray-600 mt-0.5">
+          {{ a.ts|datetime }}{% if a.by %} · by {{ a.by }}{% endif %}
+        </p>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% else %}
+<div class="bg-gray-800 rounded-xl border border-gray-700/50 p-10 text-center text-gray-500">
+  Nothing new — uploads and deck placements will show up here.
+</div>
+{% endif %}
+
+{% endblock %}

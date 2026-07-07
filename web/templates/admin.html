@@ -4,10 +4,18 @@
 
 <div class="flex items-center justify-between mb-6">
   <h1 class="text-2xl font-bold">User Administration</h1>
-  <a href="/admin/homepage"
-     class="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-sm font-medium transition-colors">
-    ✏ Edit Homepage
-  </a>
+  <div class="flex items-center gap-2">
+    <a href="/admin/activity"
+       class="px-4 py-2 rounded-lg {% if new_activity_count %}bg-amber-700 hover:bg-amber-600 text-white{% else %}bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white{% endif %} text-sm font-medium transition-colors">
+      🆕 New Activity{% if new_activity_count %}
+      <span class="ml-1 px-1.5 py-0.5 rounded-full bg-amber-900/70 text-amber-100 text-xs font-bold">{{ new_activity_count }}</span>
+      {% endif %}
+    </a>
+    <a href="/admin/homepage"
+       class="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-sm font-medium transition-colors">
+      ✏ Edit Homepage
+    </a>
+  </div>
 </div>
 
 {% if collisions %}

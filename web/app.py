@@ -39,8 +39,9 @@ import requests as rq
 
 from config_manager import (
     ConfigManager, MUSIC_DIR, ONDECK_HOME, CONFIG_PATH, rating_summary,
-    DECK_COLS, DECK_ROWS, DECK_FONTS, DECK_FONT_ORDER,
+    DECK_FONTS, DECK_FONT_ORDER,
     DECK_DEFAULT_FONT, DECK_DEFAULT_FONT_SIZE,
+    DECK_MODELS, DECK_DEFAULT_MODEL,
 )
 
 # ---------------------------------------------------------------------------
@@ -93,6 +94,23 @@ app.secret_key = os.environ.get("ONDECK_SECRET", "ondeck-dev-secret-change-me")
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 
 cfg = ConfigManager()
+
+# ---------------------------------------------------------------------------
+# In-process runtime handles (Stream Deck Pi only)
+# ---------------------------------------------------------------------------
+# On the Stream Deck Pi the portal runs on a thread inside main.py, in the
+# same process as the deck controller. main.py registers the live objects
+# here so web routes (and peer decks, via /ondeck/api/deck/goto) can drive
+# the physical deck. On the cloud these stay None.
+
+runtime: dict = {"deck": None, "lineup": None, "music": None}
+
+
+def attach_runtime(deck=None, lineup=None, music=None) -> None:
+    """Called by main.py so portal routes can reach the live deck objects."""
+    runtime["deck"] = deck
+    runtime["lineup"] = lineup
+    runtime["music"] = music
 
 
 # Custom Jinja filters
@@ -196,6 +214,66 @@ def _unread_notification_count() -> int:
     return sum(1 for n in cfg.data.get("notifications", []) if not n.get("seen"))
 
 
+# ---------------------------------------------------------------------------
+# Recent additions — the admin's "New Activity" feed (persists until cleared)
+# + auto-placement of uploaded songs onto the deck
+# ---------------------------------------------------------------------------
+
+# Where an uploaded song lands on the deck, by upload context.
+_SONG_TYPE_PAGE = {"warmup": "pitcher_warmup", "midgame": "mid_inning"}
+_SONG_TYPE_LABEL = {"walkup": "player walk-up", "warmup": "pitcher warm-up",
+                    "midgame": "mid-inning"}
+
+
+def _uploader_name() -> str:
+    """Display name of whoever is doing the upload, for the activity feed."""
+    _key, name = _rater_identity()
+    return name or "someone"
+
+
+def _auto_place_song(song_id: str, song_type: str, player: dict | None = None,
+                     pid: str | None = None) -> str:
+    """Put a just-uploaded song in the right place on the Stream Deck.
+
+    * walkup  → the player's walk-up (their tile on the Players page)
+    * warmup  → the player's warm-up + a button on the Pitcher Warm-Up page
+    * midgame → the player's mid-inning song + a button on the Mid-Inning page
+
+    Returns a human description of what was placed (for the activity feed);
+    "" when nothing was placed.
+    """
+    song_name = cfg.get_song_display_name(song_id)
+    placed = []
+    if song_type == "walkup" and player is not None:
+        with cfg._lock:
+            player["walkup_song_id"] = song_id
+            cfg.save()
+        placed.append("set as their walk-up")
+    elif song_type == "warmup":
+        if player is not None:
+            with cfg._lock:
+                player["pitching_warmup_song_id"] = song_id
+                cfg.save()
+            placed.append("set as their warm-up")
+        if cfg.add_song_to_page("pitcher_warmup", song_id):
+            placed.append("added to the Pitcher Warm-Up deck page")
+    elif song_type == "midgame":
+        if player is not None:
+            with cfg._lock:
+                player["midgame_song_id"] = song_id
+                cfg.save()
+            placed.append("set as their mid-inning song")
+        if cfg.add_song_to_page("mid_inning", song_id):
+            placed.append("added to the Mid-Inning deck page")
+    if not placed:
+        return ""
+    detail = f'"{song_name}" ' + " and ".join(placed)
+    if player is not None:
+        who = f"#{player.get('jersey', '')} {player.get('first_name', '')} {player.get('last_name', '')}".strip()
+        detail = f"{who}: {detail}"
+    return detail
+
+
 def _check_song_duplicates(pid: str, song_id: str, song_type: str) -> tuple[list[str], list[str]]:
     """Check if a song is already assigned to other players.
 
@@ -260,6 +338,15 @@ def _check_auth(allowed_roles=None):
         # Pi-only cloud-link page — reachable before the device has any account
         # (these endpoints exist only on the deck Pi, registered by main.py).
         "pi_cloud_settings", "pi_cloud_settings_post",
+        # Pi-only field pages: Wi-Fi + no-login kiosk settings (deck + Pi).
+        # These endpoints are registered only on the Pis, never on the cloud.
+        "pi_wifi", "pi_wifi_post",
+        "kiosk_deck_settings", "kiosk_deck_settings_post",
+        "kiosk_pi_settings", "kiosk_pi_action",
+        # Deck-to-deck navigation: a peer Stream Deck Pi on the field LAN has
+        # no browser session, so this endpoint authenticates by reachability
+        # (it exists only on the Pi and can only switch the visible page).
+        "ondeck_api_deck_goto",
     }
     if request.endpoint in always_ok:
         return
@@ -283,6 +370,7 @@ def _check_auth(allowed_roles=None):
             "admin_reset_user_password", "admin_reset_player_password",
             "admin_set_player_username", "admin_delete_player",
             "admin_homepage", "admin_homepage_save",
+            "admin_activity", "admin_activity_clear",
             "ondeck_settings", "ondeck_settings_save", "ondeck_settings_youtube_cookies",
         }
         if request.endpoint in admin_only:
@@ -682,7 +770,26 @@ def admin_panel():
 
     teams = cfg.teams
     return render_template("admin.html", users=users, staff=staff, ghosts=ghosts,
-                           players=players, teams=teams, collisions=collisions)
+                           players=players, teams=teams, collisions=collisions,
+                           new_activity_count=len(cfg.recent_additions))
+
+
+@app.get("/admin/activity")
+def admin_activity():
+    """Everything that was just added (songs + deck placements).
+
+    Entries persist until the admin presses Clear — unlike notifications,
+    viewing this page does not mark anything as seen.
+    """
+    return render_template("admin_activity.html",
+                           additions=cfg.recent_additions)
+
+
+@app.post("/admin/activity/clear")
+def admin_activity_clear():
+    cfg.clear_recent_additions()
+    flash("New activity cleared.", "success")
+    return redirect(url_for("admin_activity"))
 
 
 @app.post("/admin/players/<pid>/teams")
@@ -942,7 +1049,8 @@ def ondeck_library():
         rows.sort(key=lambda r: (-(r["avg"] if r["count"] else -1), r["name"].lower()))
     open_requests = sum(1 for r in cfg.song_requests if r.get("status") == "open")
     return render_template("library.html", rows=rows, cfg=cfg, sort=sort,
-                           song_count=len(rows), open_requests=open_requests)
+                           song_count=len(rows), open_requests=open_requests,
+                           upload_players=cfg.players_by_jersey())
 
 
 @app.post("/ondeck/library/upload")
@@ -957,9 +1065,9 @@ def ondeck_library_upload():
     dest = MUSIC_DIR / name
     f.save(str(dest))
 
-    existing = {s["filename"] for s in cfg.songs.values()}
-    if name not in existing:
-        cfg.add_song(name, Path(name).stem.replace("_", " ").replace("-", " "))
+    existing = {s["filename"]: sid for sid, s in cfg.songs.items()}
+    song_id = existing.get(name) or cfg.add_song(
+        name, Path(name).stem.replace("_", " ").replace("-", " "))
 
     try:
         with open(str(dest), "rb") as fh:
@@ -967,7 +1075,29 @@ def ondeck_library_upload():
     except Exception:
         pass
 
-    flash(f'Uploaded "{name}".', "success")
+    # Optional destination: drop the new song straight onto the deck.
+    #   "" (library only) | player:<pid> | warmup | midgame | page:<page_id>
+    destination = (request.form.get("destination") or "").strip()
+    placed = ""
+    if destination.startswith("player:"):
+        pid = destination.split(":", 1)[1]
+        player = cfg.players.get(pid)
+        if player:
+            placed = _auto_place_song(song_id, "walkup", player, pid)
+    elif destination in ("warmup", "midgame"):
+        placed = _auto_place_song(song_id, destination)
+    elif destination.startswith("page:"):
+        page_id = destination.split(":", 1)[1]
+        if cfg.add_song_to_page(page_id, song_id):
+            pname = cfg.pages.get(page_id, {}).get("name", page_id)
+            placed = f'"{cfg.get_song_display_name(song_id)}" added to the {pname} deck page'
+
+    cfg.add_recent_addition(
+        "song", cfg.get_song_display_name(song_id),
+        detail=placed or "uploaded to the library",
+        by=_uploader_name())
+
+    flash(f'Uploaded "{name}".' + (f" {placed}." if placed else ""), "success")
     return redirect(url_for("ondeck_library"))
 
 
@@ -991,9 +1121,12 @@ def ondeck_library_import():
         filename = data.get("filename")
 
     if filename:
-        existing = {s["filename"] for s in cfg.songs.values()}
-        if filename not in existing:
-            cfg.add_song(filename, Path(filename).stem.replace("_", " "))
+        existing = {s["filename"]: sid for sid, s in cfg.songs.items()}
+        song_id = existing.get(filename) or cfg.add_song(
+            filename, Path(filename).stem.replace("_", " "))
+        cfg.add_recent_addition("song", cfg.get_song_display_name(song_id),
+                                detail="imported from YouTube",
+                                by=_uploader_name())
         flash(f'Imported "{filename}".', "success")
     else:
         flash("Import completed.", "success")
@@ -1241,6 +1374,9 @@ def ondeck_request_promote(rid: str):
     except Exception:
         pass
     if sid:
+        cfg.add_recent_addition("song", cfg.get_song_display_name(sid),
+                                detail="promoted from a song request",
+                                by=_uploader_name())
         flash(f'Added "{req.get("title")}" to the library with its rating.', "success")
     return redirect(request.referrer or url_for("ondeck_spotify_import"))
 
@@ -1556,6 +1692,9 @@ def ondeck_my_profile_upload():
                           else "added a walk-up song",
                           detail=Path(name).stem.replace("_", " ").replace("-", " "))
         cfg.save()
+    who = f"#{player.get('jersey', '')} {player.get('first_name', '')} {player.get('last_name', '')}".strip()
+    cfg.add_recent_addition("walkup", cfg.get_song_display_name(song_id),
+                            detail=f"{who} uploaded a walk-up song", by=who)
     flash("Song uploaded!", "success")
     return redirect(url_for("ondeck_my_profile"))
 
@@ -1673,11 +1812,23 @@ def ondeck_player_upload():
         cfg.songs[song_id]["display_name"] = display_name
         cfg.save()
 
+    # Drop the song onto the right deck spot for its type: warm-up uploads
+    # also land on the Pitcher Warm-Up deck page, mid-inning uploads on the
+    # Mid-Inning page (walk-ups already show on the Players page tiles).
+    placed = _auto_place_song(song_id, song_type, player, pid)
+    who = f"#{player.get('jersey', '')} {player.get('first_name', '')} {player.get('last_name', '')}".strip()
+    cfg.add_recent_addition(
+        song_type if song_type in _SONG_TYPE_LABEL else "song",
+        display_name,
+        detail=placed or f"{who} uploaded a {_SONG_TYPE_LABEL.get(song_type, 'song')} song",
+        by=who)
+
     return {
         "success": True,
         "song_id": song_id,
         "new_song": new_song,
-        "filename": filename
+        "filename": filename,
+        "placed": placed,
     }
 
 
@@ -1913,6 +2064,51 @@ def ondeck_api_volume():
     return jsonify(data), code
 
 
+@app.post("/ondeck/api/replay")
+def ondeck_api_replay():
+    """Replay the last clip the Audio Pi played (e.g. re-run a walk-up)."""
+    if runtime["lineup"]:
+        # Don't let the replay advance the batting order when it ends.
+        runtime["lineup"].note_external_playback()
+    data, code = _proxy("POST", "/replay")
+    return jsonify(data), code
+
+
+# ---------------------------------------------------------------------------
+# Local deck control (Stream Deck Pi only — runtime handles set by main.py)
+# ---------------------------------------------------------------------------
+
+@app.post("/ondeck/api/deck/goto")
+def ondeck_api_deck_goto():
+    """Move THIS Pi's Stream Deck to a page.
+
+    Called by the browser, the kiosk pages, and by *other* Stream Deck Pis
+    (a "navigation deck" key posts here to steer this deck — see the
+    remote_nav slot type). Session-exempt: it exists only on the field Pi and
+    can only change which page is showing.
+    """
+    deck = runtime["deck"]
+    if deck is None:
+        return jsonify(error="no Stream Deck runtime on this instance"), 503
+    body = request.get_json(force=True, silent=True) or {}
+    page_id = (body.get("page") or "").strip()
+    if not page_id:
+        return jsonify(error="page required"), 400
+    if not deck.go_to_page(page_id):
+        return jsonify(error="unknown page"), 404
+    return jsonify(ok=True, page=page_id)
+
+
+@app.post("/ondeck/api/lineup/reset")
+def ondeck_api_lineup_reset():
+    """Send the batting order back to the top and cue the leadoff hitter."""
+    lineup = runtime["lineup"]
+    if lineup is None:
+        return jsonify(error="no lineup runtime on this instance"), 503
+    cued = lineup.reset()
+    return jsonify(ok=True, cued=bool(cued))
+
+
 # ---------------------------------------------------------------------------
 # Bluetooth speaker — admin/editor manage the Audio Pi's A2DP speaker
 # ---------------------------------------------------------------------------
@@ -2000,12 +2196,8 @@ CELEBRATIONS = [
     ("strikeout", "Strikeout"),
 ]
 
-# Fixed Stream Deck XL keys the controller owns (shown locked in the editor).
-_DECK_FIXED_LABELS = {
-    0: "▲ Prev", 8: "⌂ Home", 16: "▼ Next",
-    24: "▶ Play", 25: "■ Stop", 26: "↘ Fade",
-    27: "Page", 28: "Page", 29: "Page", 30: "Page", 31: "Page",
-}
+# Fixed keys the controller owns (shown locked in the editor) come from the
+# configured deck model's layout: cfg.deck_layout()["fixed_labels"].
 
 
 @app.get("/ondeck/sounds")
@@ -2081,6 +2273,14 @@ def ondeck_deck():
          "css": DECK_FONTS[key]["css"], "weight": DECK_FONTS[key]["weight"]}
         for key in DECK_FONT_ORDER
     ]
+    # Peer Stream Deck Pis a navigation key can steer (deck-to-deck control).
+    deck_devices = [
+        {"id": d.get("id", did), "label": d.get("name") or d.get("hostname") or "Deck Pi"}
+        for did, d in cfg.devices.items()
+        if d.get("role") == "deck" and not d.get("revoked")
+    ]
+    layout = cfg.deck_layout()
+    model = cfg.deck_model()
     return render_template(
         "deck_editor.html",
         pages=[(pid, cfg.pages[pid]) for pid in order],
@@ -2088,14 +2288,16 @@ def ondeck_deck():
         page=page,
         page_no=page_no,
         slots=page.get("slots", {}),
-        content_slots=cfg.DECK_CONTENT_SLOTS,
-        fixed_labels=_DECK_FIXED_LABELS,
-        deck_cols=DECK_COLS,
-        deck_rows=DECK_ROWS,
+        content_slots=layout["content"],
+        fixed_labels=layout["fixed_labels"],
+        deck_cols=layout["cols"],
+        deck_rows=layout["rows"],
+        deck_model_label=DECK_MODELS[model]["label"],
         players=players,
         songs=songs,
         celebrations=celebrations,
         nav_pages=nav_pages,
+        deck_devices=deck_devices,
         fonts=fonts,
         default_font=DECK_DEFAULT_FONT,
         default_font_size=DECK_DEFAULT_FONT_SIZE,
@@ -2127,6 +2329,7 @@ def ondeck_deck_slot(page_id: str):
     cfg.set_page_slot(page_id, idx, {
         "type": (data.get("type") or "blank").strip(),
         "ref": (data.get("ref") or "").strip(),
+        "target": (data.get("target") or "").strip(),
         "label": (data.get("label") or "").strip(),
         "color": (data.get("color") or "").strip(),
         "text_color": (data.get("text_color") or "").strip(),
@@ -2420,7 +2623,9 @@ def ondeck_settings():
                            has_yt_cookies=COOKIES_FILE.exists(),
                            elevenlabs_key_set=bool(_elevenlabs_key()),
                            spotify_ready=_spotify_ready(),
-                           spotify_secret_set=bool(_spotify_creds()[1]))
+                           spotify_secret_set=bool(_spotify_creds()[1]),
+                           deck_models=DECK_MODELS,
+                           deck_model=cfg.deck_model())
 
 
 @app.post("/ondeck/settings/save")
@@ -2436,6 +2641,11 @@ def ondeck_settings_save():
             s["volume"] = max(0, min(100, int(request.form.get("volume", 80))))
         except ValueError:
             pass
+
+        # Physical Stream Deck model — drives the editor grid and key roles.
+        model = (request.form.get("deck_model") or "").strip().lower()
+        if model in DECK_MODELS:
+            s["deck_model"] = model
 
         # AI announcer voice (ElevenLabs).
         s["elevenlabs_voice_id"] = request.form.get("elevenlabs_voice_id", "").strip()
