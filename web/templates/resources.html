@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Resources{% endblock %}
+{% block content %}
+
+<div class="flex items-center justify-between mb-6 gap-3 flex-wrap">
+  <h1 class="text-2xl font-bold">Resources</h1>
+  <span class="text-xs text-gray-500" id="last-refresh">refreshing…</span>
+</div>
+
+<p class="text-sm text-gray-400 mb-6">
+  Live health of the OnDeck hardware — CPU temperature, load, memory, disk,
+  Wi-Fi signal, and Raspberry Pi power throttling flags. Useful for debugging
+  a Pi that's dropping audio or losing the network at the field.
+</p>
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+  <!-- This server (deck Pi portal, or the cloud instance) -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5" id="card-local">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="font-semibold text-white flex items-center gap-2">
+        🖥 {% if cloud_mode %}Cloud instance{% else %}This Pi (portal){% endif %}
+      </h2>
+      <span class="w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
+    </div>
+    <div data-body class="text-sm text-gray-400">Loading…</div>
+  </div>
+
+  <!-- The audio server (Audio Pi, or this Pi in local-audio mode) -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5" id="card-audio">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="font-semibold text-white flex items-center gap-2">🔊 Audio server</h2>
+      <span class="w-2.5 h-2.5 rounded-full bg-gray-600" data-dot></span>
+    </div>
+    <div data-body class="text-sm text-gray-400">Loading…</div>
+  </div>
+</div>
+
+{% if devices %}
+<h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
+  Linked devices (last sync check-in)
+</h2>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+  {% for d in devices %}
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5">
+    <div class="flex items-center justify-between mb-2">
+      <h3 class="font-semibold text-white">{{ d.name }}</h3>
+      <span class="text-xs px-2 py-0.5 rounded-full border
+        {% if d.role == 'audio' %}bg-cyan-900/50 border-cyan-700/40 text-cyan-300
+        {% else %}bg-indigo-900/50 border-indigo-700/40 text-indigo-300{% endif %}">
+        {{ d.role }}
+      </span>
+    </div>
+    <div class="text-xs text-gray-500 mb-3">
+      {{ d.hostname or '—' }}{% if d.ip %} · {{ d.ip }}{% endif %}
+      {% if d.last_seen %} · seen {{ d.last_seen[:19].replace('T', ' ') }} UTC{% endif %}
+    </div>
+    {% if d.stats %}
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+      <div class="bg-gray-900 rounded-lg p-2">
+        <div class="text-lg font-bold {% if d.stats.cpu_temp_c and d.stats.cpu_temp_c > 75 %}text-red-400{% elif d.stats.cpu_temp_c and d.stats.cpu_temp_c > 65 %}text-yellow-400{% else %}text-green-400{% endif %}">
+          {{ d.stats.cpu_temp_c if d.stats.cpu_temp_c is not none else '—' }}°
+        </div>
+        <div class="text-[10px] text-gray-500 uppercase">Temp</div>
+      </div>
+      <div class="bg-gray-900 rounded-lg p-2">
+        <div class="text-lg font-bold text-gray-200">{{ d.stats.cpu_percent if d.stats.cpu_percent is not none else '—' }}%</div>
+        <div class="text-[10px] text-gray-500 uppercase">CPU</div>
+      </div>
+      <div class="bg-gray-900 rounded-lg p-2">
+        <div class="text-lg font-bold text-gray-200">{{ d.stats.mem_used_pct if d.stats.mem_used_pct is not none else '—' }}%</div>
+        <div class="text-[10px] text-gray-500 uppercase">Mem</div>
+      </div>
+      <div class="bg-gray-900 rounded-lg p-2">
+        <div class="text-lg font-bold text-gray-200">{{ d.stats.disk_used_pct if d.stats.disk_used_pct is not none else '—' }}%</div>
+        <div class="text-[10px] text-gray-500 uppercase">Disk</div>
+      </div>
+    </div>
+    {% else %}
+    <p class="text-xs text-gray-600">No stats reported yet — the Pi sends them with each 5-minute sync.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<script>
+function fmtUptime(s) {
+  if (s == null) return '—';
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return (d ? d + 'd ' : '') + h + 'h ' + m + 'm';
+}
+
+function tile(label, value, cls) {
+  return `<div class="bg-gray-900 rounded-lg p-3 text-center">
+    <div class="text-xl font-bold ${cls || 'text-gray-200'}">${value}</div>
+    <div class="text-[10px] text-gray-500 uppercase tracking-wider">${label}</div>
+  </div>`;
+}
+
+function tempClass(t) {
+  if (t == null) return 'text-gray-500';
+  if (t > 75) return 'text-red-400';
+  if (t > 65) return 'text-yellow-400';
+  return 'text-green-400';
+}
+
+function renderStats(card, d) {
+  const body = card.querySelector('[data-body]');
+  const dot = card.querySelector('[data-dot]');
+  if (!d || d.error) {
+    dot.className = 'w-2.5 h-2.5 rounded-full bg-red-500';
+    body.innerHTML = '<p class="text-sm text-red-400">Unreachable' + (d && d.error ? ' — ' + d.error : '') + '</p>';
+    return;
+  }
+  dot.className = 'w-2.5 h-2.5 rounded-full bg-green-500';
+  const mem = d.memory || {}, disk = d.disk || {}, wifi = d.wifi, thr = d.throttled;
+  let html = `<div class="text-xs text-gray-500 mb-3">${d.hostname || ''}${d.ip ? ' · ' + d.ip : ''} · up ${fmtUptime(d.uptime_s)}</div>`;
+  html += '<div class="grid grid-cols-2 sm:grid-cols-4 gap-2">';
+  html += tile('Temp', d.cpu_temp_c != null ? d.cpu_temp_c + '°C' : '—', tempClass(d.cpu_temp_c));
+  html += tile('CPU', d.cpu_percent != null ? d.cpu_percent + '%' : '—');
+  html += tile('Memory', mem.used_pct != null ? mem.used_pct + '%' : '—');
+  html += tile('Disk', disk.used_pct != null ? disk.used_pct + '%' : '—');
+  html += '</div>';
+  const rows = [];
+  if (d.load_avg) rows.push(['Load avg', d.load_avg.join(' / ')]);
+  if (mem.available_mb != null) rows.push(['Memory free', mem.available_mb + ' MB of ' + mem.total_mb + ' MB']);
+  if (disk.free_gb != null) rows.push(['Disk free', disk.free_gb + ' GB of ' + disk.total_gb + ' GB']);
+  if (wifi) rows.push(['Wi-Fi', (wifi.ssid || '?') + (wifi.signal_dbm != null ? ' (' + wifi.signal_dbm + ' dBm)' : '')]);
+  if (d.player) rows.push(['Playback', d.player.state + (d.player.queued && d.player.queued.file ? ' — ' + d.player.queued.file : '')]);
+  if (thr) {
+    const problems = [];
+    if (thr.undervoltage_now) problems.push('UNDER-VOLTAGE NOW');
+    if (thr.throttled_now) problems.push('THROTTLED NOW');
+    if (thr.undervoltage_seen) problems.push('under-voltage seen since boot');
+    if (thr.throttled_seen) problems.push('throttled since boot');
+    rows.push(['Power', problems.length
+      ? '<span class="text-red-400">⚠ ' + problems.join(', ') + '</span>'
+      : '<span class="text-green-400">✔ healthy (' + thr.raw + ')</span>']);
+  }
+  if (rows.length) {
+    html += '<dl class="mt-3 space-y-1">' + rows.map(([k, v]) =>
+      `<div class="flex justify-between gap-3 text-xs"><dt class="text-gray-500">${k}</dt><dd class="text-gray-300 text-right">${v}</dd></div>`
+    ).join('') + '</dl>';
+  }
+  body.innerHTML = html;
+}
+
+async function refresh() {
+  const targets = [
+    ['card-local', '/ondeck/api/local-stats'],
+    ['card-audio', '/ondeck/api/audio-stats'],
+  ];
+  await Promise.all(targets.map(async ([id, url]) => {
+    const card = document.getElementById(id);
+    try {
+      const r = await fetch(url);
+      renderStats(card, await r.json());
+    } catch (e) {
+      renderStats(card, { error: 'network error' });
+    }
+  }));
+  document.getElementById('last-refresh').textContent =
+    'updated ' + new Date().toLocaleTimeString();
+}
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+
+{% endblock %}

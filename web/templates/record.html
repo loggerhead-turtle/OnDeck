@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+{% block title %}Record{% endblock %}
+{% block content %}
+
+<div class="max-w-xl mx-auto">
+  <h1 class="text-2xl font-bold mb-2">🎙️ Record from your phone</h1>
+  <p class="text-sm text-gray-400 mb-6">
+    Play the song out loud — from Spotify, Apple Music, YouTube, or another
+    phone — hold this device near the speaker and hit record. Echo cancellation
+    and noise suppression are turned off so music comes through clean.
+  </p>
+
+  <div id="insecure-warning" class="hidden mb-4 px-4 py-3 rounded-lg bg-amber-900/50 border border-amber-700/50 text-amber-200 text-sm">
+    ⚠ Microphone access needs a secure page (HTTPS). Open the <b>cloud portal</b>
+    on your phone to record — plain-HTTP Pi pages can't use the mic.
+  </div>
+  <div id="unsupported-warning" class="hidden mb-4 px-4 py-3 rounded-lg bg-red-900/50 border border-red-700/50 text-red-200 text-sm">
+    ✕ This browser doesn't support audio recording. Try Safari (iPhone) or
+    Chrome (Android).
+  </div>
+
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 mb-5">
+    <!-- Big record control -->
+    <div class="flex flex-col items-center gap-4">
+      <button type="button" id="rec-toggle"
+              class="w-24 h-24 rounded-full bg-red-600 hover:bg-red-500 active:scale-95 transition-all
+                     flex items-center justify-center text-4xl shadow-lg shadow-red-900/40 select-none">
+        ●
+      </button>
+      <div class="font-mono text-2xl text-gray-200" id="rec-time">0:00</div>
+
+      <!-- Level meter -->
+      <div class="w-full h-3 bg-gray-900 rounded-full overflow-hidden">
+        <div id="level-bar" class="h-full w-0 bg-green-500 transition-[width] duration-75"></div>
+      </div>
+      <p class="text-xs text-gray-500 text-center" id="rec-hint">
+        Tap the red button to start. If the bar barely moves, move the phone
+        closer to the speaker.
+      </p>
+    </div>
+  </div>
+
+  <!-- Review + upload (appears after a take) -->
+  <div id="review-panel" class="hidden bg-gray-800 rounded-xl border border-gray-700/50 p-6 space-y-4">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Review your take</h2>
+    <audio id="playback" controls playsinline class="w-full"></audio>
+
+    <div>
+      <label class="block text-xs text-gray-400 mb-1.5 font-medium">Song name</label>
+      <input type="text" id="rec-title" placeholder="e.g. Thunderstruck (recorded)"
+             class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-3 text-white text-base focus:outline-none focus:border-green-500">
+    </div>
+
+    {% if current_player %}
+    <label class="flex items-center gap-3 px-3 py-3 rounded-lg bg-gray-900 cursor-pointer">
+      <input type="checkbox" id="assign-walkup" checked class="w-5 h-5 accent-green-500">
+      <span class="text-sm text-gray-200">Make this my walk-up song</span>
+    </label>
+    {% endif %}
+
+    <div class="flex gap-3">
+      <button type="button" id="upload-btn"
+              class="flex-1 py-3 rounded-lg bg-green-700 hover:bg-green-600 text-white font-semibold text-base transition-colors">
+        ⬆ Save to library
+      </button>
+      <button type="button" id="discard-btn"
+              class="px-4 py-3 rounded-lg border border-gray-700 hover:border-red-700 text-gray-400 hover:text-red-300 text-sm transition-colors">
+        Discard
+      </button>
+    </div>
+    <p id="upload-status" class="text-sm text-center h-5"></p>
+  </div>
+
+  <div class="mt-6 text-xs text-gray-600 space-y-1">
+    <p><b>Tips for a clean capture:</b></p>
+    <p>• Turn the source volume up to ~80% and keep the phones 15–30&nbsp;cm apart.</p>
+    <p>• Record a few seconds extra on both ends — you can trim precisely afterwards in the editor.</p>
+    <p>• Silence notifications on both phones first.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  const toggleBtn = document.getElementById('rec-toggle');
+  const timeEl = document.getElementById('rec-time');
+  const levelBar = document.getElementById('level-bar');
+  const hint = document.getElementById('rec-hint');
+  const review = document.getElementById('review-panel');
+  const playback = document.getElementById('playback');
+  const statusEl = document.getElementById('upload-status');
+
+  let recorder = null, chunks = [], startTs = 0, timerId = null;
+  let audioCtx = null, analyser = null, meterId = null, stream = null;
+  let takeBlob = null, takeType = '';
+
+  if (!window.isSecureContext) {
+    document.getElementById('insecure-warning').classList.remove('hidden');
+  }
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    document.getElementById('unsupported-warning').classList.remove('hidden');
+    toggleBtn.disabled = true;
+    return;
+  }
+
+  function pickMime() {
+    // webm/opus for Chrome & Android; mp4 (AAC) is the only option on iOS Safari.
+    const options = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4',
+                     'audio/ogg;codecs=opus'];
+    return options.find(m => MediaRecorder.isTypeSupported(m)) || '';
+  }
+
+  function fmt(s) { return Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0'); }
+
+  function startMeter() {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const src = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    src.connect(analyser);
+    const buf = new Uint8Array(analyser.fftSize);
+    meterId = setInterval(() => {
+      analyser.getByteTimeDomainData(buf);
+      let peak = 0;
+      for (let i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i] - 128));
+      const pct = Math.min(100, Math.round((peak / 128) * 140));
+      levelBar.style.width = pct + '%';
+      levelBar.className = 'h-full transition-[width] duration-75 ' +
+        (pct > 92 ? 'bg-red-500' : pct > 65 ? 'bg-yellow-400' : 'bg-green-500');
+    }, 80);
+  }
+
+  function stopMeter() {
+    if (meterId) { clearInterval(meterId); meterId = null; }
+    if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+    levelBar.style.width = '0';
+  }
+
+  async function start() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          // Voice-call processing wrecks music: it treats the song as noise
+          // and echo. Turn it all off for a faithful capture.
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
+    } catch (err) {
+      alert('Microphone access was denied.\n\n' + err.message);
+      return;
+    }
+    chunks = [];
+    recorder = new MediaRecorder(stream, pickMime() ? { mimeType: pickMime() } : undefined);
+    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = onTakeReady;
+    recorder.start(250);
+    startTs = Date.now();
+    timerId = setInterval(() => { timeEl.textContent = fmt((Date.now() - startTs) / 1000); }, 250);
+    startMeter();
+    toggleBtn.textContent = '■';
+    toggleBtn.classList.add('animate-pulse');
+    hint.textContent = 'Recording… tap again to stop.';
+    review.classList.add('hidden');
+  }
+
+  function stop() {
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    clearInterval(timerId);
+    stopMeter();
+    toggleBtn.textContent = '●';
+    toggleBtn.classList.remove('animate-pulse');
+    hint.textContent = 'Tap the red button to record another take.';
+  }
+
+  function onTakeReady() {
+    takeType = (recorder.mimeType || 'audio/webm').split(';')[0];
+    takeBlob = new Blob(chunks, { type: takeType });
+    playback.src = URL.createObjectURL(takeBlob);
+    review.classList.remove('hidden');
+    review.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    statusEl.textContent = '';
+  }
+
+  toggleBtn.addEventListener('click', () => {
+    if (recorder && recorder.state === 'recording') stop(); else start();
+  });
+
+  document.getElementById('discard-btn').addEventListener('click', () => {
+    takeBlob = null;
+    review.classList.add('hidden');
+    timeEl.textContent = '0:00';
+  });
+
+  document.getElementById('upload-btn').addEventListener('click', async () => {
+    if (!takeBlob) return;
+    const title = document.getElementById('rec-title').value.trim() ||
+      ('Phone recording ' + new Date().toLocaleDateString());
+    const fd = new FormData();
+    const ext = { 'audio/mp4': 'm4a', 'audio/webm': 'webm', 'audio/ogg': 'ogg' }[takeType] || 'webm';
+    fd.append('file', takeBlob, 'recording.' + ext);
+    fd.append('title', title);
+    fd.append('mime', takeType);
+    const assign = document.getElementById('assign-walkup');
+    if (assign && assign.checked) fd.append('assign', 'walkup');
+    statusEl.textContent = 'Uploading…';
+    statusEl.className = 'text-sm text-center h-5 text-gray-400';
+    try {
+      const r = await fetch('/ondeck/record/upload', { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'upload failed');
+      statusEl.textContent = '✔ Saved to the library' +
+        (d.assigned === 'walkup' ? ' and set as your walk-up!' : '!');
+      statusEl.className = 'text-sm text-center h-5 text-green-400';
+      takeBlob = null;
+      setTimeout(() => {
+        window.location.href = {{ ('/ondeck/my-profile' if current_player else '/ondeck/library')|tojson }};
+      }, 1200);
+    } catch (err) {
+      statusEl.textContent = '✕ ' + err.message;
+      statusEl.className = 'text-sm text-center h-5 text-red-400';
+    }
+  });
+})();
+</script>
+
+{% endblock %}

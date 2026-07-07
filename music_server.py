@@ -34,6 +34,7 @@ import time
 from pathlib import Path
 
 from flask import Flask, jsonify, request
+from werkzeug.utils import secure_filename
 
 from config_manager import MUSIC_DIR
 
@@ -310,13 +311,17 @@ def http_status():
     return jsonify(player.status())
 
 
+AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".wav", ".ogg", ".oga", ".opus",
+              ".webm", ".flac", ".mp4", ".wma", ".aiff", ".aif"}
+
+
 @app.post("/upload")
 def http_upload():
     if "file" not in request.files:
         return jsonify(error="file required"), 400
     f = request.files["file"]
-    name = Path(f.filename or "").name
-    if not name:
+    name = secure_filename(Path(f.filename or "").name)
+    if not name or Path(name).suffix.lower() not in AUDIO_EXTS:
         return jsonify(error="bad filename"), 400
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)
     dest = MUSIC_DIR / name
@@ -427,6 +432,18 @@ def http_bt_preferred():
 @app.get("/health")
 def http_health():
     return jsonify(ok=True, service="ondeck-audio")
+
+
+@app.get("/stats")
+def http_stats():
+    """System resource snapshot (temp/CPU/mem/disk/Wi-Fi) for diagnostics."""
+    try:
+        from system_stats import gather
+        stats = gather()
+    except Exception as exc:  # a broken sensor must never break audio
+        stats = {"error": str(exc)}
+    return jsonify(ok=True, service="ondeck-audio", player=player.status(),
+                   **stats)
 
 
 @app.get("/")

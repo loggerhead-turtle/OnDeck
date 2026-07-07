@@ -8,7 +8,37 @@
 
 <form method="POST" action="/ondeck/settings/save">
   <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-5 mb-5 space-y-5">
-    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Audio Pi</h2>
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Audio Output</h2>
+
+    {% set out_mode = system.audio_output or 'auto' %}
+    <div class="space-y-2">
+      <label class="flex items-start gap-3 px-3 py-3 rounded-lg bg-gray-900 cursor-pointer border {{ 'border-green-600' if out_mode == 'auto' else 'border-transparent' }}">
+        <input type="radio" name="audio_output" value="auto" {{ 'checked' if out_mode == 'auto' }} class="mt-1 accent-green-500">
+        <span>
+          <span class="block text-sm text-gray-200 font-medium">Auto (recommended)</span>
+          <span class="block text-xs text-gray-500">Use the IP below, else the last Audio Pi that checked in, else this Pi.</span>
+        </span>
+      </label>
+      <label class="flex items-start gap-3 px-3 py-3 rounded-lg bg-gray-900 cursor-pointer border {{ 'border-green-600' if out_mode == 'remote' else 'border-transparent' }}">
+        <input type="radio" name="audio_output" value="remote" {{ 'checked' if out_mode == 'remote' }} class="mt-1 accent-green-500">
+        <span>
+          <span class="block text-sm text-gray-200 font-medium">Audio Pi (two-Pi setup)</span>
+          <span class="block text-xs text-gray-500">Always play on the separate Audio Pi — never fall back to this Pi's output.</span>
+        </span>
+      </label>
+      <label class="flex items-start gap-3 px-3 py-3 rounded-lg bg-gray-900 cursor-pointer border {{ 'border-green-600' if out_mode == 'local' else 'border-transparent' }}">
+        <input type="radio" name="audio_output" value="local" {{ 'checked' if out_mode == 'local' }} class="mt-1 accent-green-500">
+        <span>
+          <span class="block text-sm text-gray-200 font-medium">This Pi (single-Pi / Bluetooth)</span>
+          <span class="block text-xs text-gray-500">
+            The Stream Deck Pi plays the audio itself — straight to a Bluetooth
+            speaker or its line out. No second Pi needed. Requires the audio
+            service on this Pi (install with role <code class="text-gray-400">both</code>);
+            pair the speaker on the <a href="/ondeck/bluetooth" class="text-green-400 hover:underline">Bluetooth page</a>.
+          </span>
+        </span>
+      </label>
+    </div>
 
     <div class="grid sm:grid-cols-2 gap-4">
       <div>

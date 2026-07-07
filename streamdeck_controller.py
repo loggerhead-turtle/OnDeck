@@ -25,6 +25,7 @@ song, or a celebration stinger). The deck holds no audio itself — it calls
 from __future__ import annotations
 
 import logging
+import threading
 
 try:
     from pideck import BaseDeckController
@@ -95,6 +96,10 @@ class StreamDeckController(BaseDeckController):
         self.lineup.on_change = self.refresh
 
         super().__init__(config)         # opens the deck + first render
+
+        # Keep "stats" keys (CPU temp / usage) live: repaint every few seconds
+        # while the current page shows one. Cheap when it doesn't.
+        threading.Thread(target=self._stats_refresh_loop, daemon=True).start()
 
     # ── pideck hooks ─────────────────────────────────────
 
@@ -270,6 +275,48 @@ class StreamDeckController(BaseDeckController):
         p = self.config.players.get(player_id, {})
         return f"#{p.get('jersey', '')}\n{(p.get('first_name', '') or '')[:8]}"
 
+    # ── System-stats key ─────────────────────────────────
+
+    @staticmethod
+    def _stats_snapshot() -> dict:
+        try:
+            from system_stats import gather
+            return gather()
+        except Exception:
+            return {}
+
+    def _stats_label(self) -> str:
+        s = self._stats_snapshot()
+        temp = s.get("cpu_temp_c")
+        cpu = s.get("cpu_percent")
+        return (f"{temp:.0f}°" if temp is not None else "--°") + "\n" \
+             + (f"CPU {cpu:.0f}%" if cpu is not None else "CPU --")
+
+    def _stats_color(self) -> tuple[int, int, int]:
+        """Green → amber → red with SoC temperature, so a cooking Pi stands out."""
+        temp = (self._stats_snapshot() or {}).get("cpu_temp_c")
+        if temp is None:
+            return (45, 45, 45)
+        if temp >= 75:
+            return (120, 25, 25)
+        if temp >= 65:
+            return (110, 80, 15)
+        return (25, 70, 40)
+
+    def _page_has_stats_key(self) -> bool:
+        slots = self.config.pages.get(self.current_page_id, {}).get("slots", {})
+        return any((s or {}).get("type") == "stats" for s in slots.values())
+
+    def _stats_refresh_loop(self) -> None:
+        import time
+        while True:
+            time.sleep(5)
+            try:
+                if self._page_has_stats_key():
+                    self.refresh()
+            except Exception:
+                pass  # a repaint hiccup must never kill the loop
+
     def _slot_default_label(self, slot: dict) -> str:
         """A sensible button label when the editor left the label blank."""
         kind, ref = slot.get("type"), slot.get("ref", "")
@@ -283,6 +330,8 @@ class StreamDeckController(BaseDeckController):
             return (self.config.pages.get(ref, {}).get("name", ref) or "")[:10]
         if kind == "action":
             return {"play": "Play", "stop": "Stop", "fade": "Fade"}.get(ref, ref)
+        if kind == "stats":
+            return self._stats_label()
         if kind == "edit_lineup":
             return "Edit\nLineup"
         if kind == "lineup_slot":
@@ -315,7 +364,12 @@ class StreamDeckController(BaseDeckController):
                 continue
             kind = slot.get("type")
             label = slot.get("label") or self._slot_default_label(slot)
-            bg = self.hex2rgb(slot["color"]) if slot.get("color") else self.DEFAULT_BG
+            if kind == "stats":
+                # Always live — a custom label becomes the key's title line.
+                live = self._stats_label()
+                label = (slot.get("label").strip() + "\n" + live) if slot.get("label") else live
+            bg = self.hex2rgb(slot["color"]) if slot.get("color") else \
+                 (self._stats_color() if kind == "stats" else self.DEFAULT_BG)
             fg = self.hex2rgb(slot["text_color"]) if slot.get("text_color") else (255, 255, 255)
             font = slot.get("font") or DECK_DEFAULT_FONT
             size = int(slot.get("font_size") or DECK_DEFAULT_FONT_SIZE)
@@ -340,6 +394,9 @@ class StreamDeckController(BaseDeckController):
         ok = False
         if kind == "text":
             return  # a label-only key — nothing to do
+        elif kind == "stats":
+            self.refresh()  # tap → refresh the reading right now
+            return
         elif kind == "edit_lineup":
             self._toggle_edit_lineup(btn_idx)
             return

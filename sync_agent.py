@@ -143,6 +143,11 @@ def sync() -> bool:
     # 3. Ping — report our IP to the cloud dashboard.                     #
     # ------------------------------------------------------------------ #
     hostname = socket.gethostname()
+    try:
+        from system_stats import gather
+        stats = gather(brief=True)
+    except Exception:
+        stats = None
     requests.post(
         f"{CLOUD_URL}/sync/ping",
         headers=_headers(),
@@ -151,6 +156,7 @@ def sync() -> bool:
             "hostname":  hostname,
             "ip":        _local_ip(),
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "stats":     stats,
         },
         timeout=10,
     )

@@ -406,19 +406,22 @@ recStop.addEventListener('click', () => {
 })
 
 function getSupportedMime() {
-  for (const m of ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg']) {
+  // audio/mp4 covers iOS Safari, which supports none of the webm/ogg types.
+  for (const m of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4',
+                   'audio/ogg;codecs=opus', 'audio/ogg']) {
     if (MediaRecorder.isTypeSupported(m)) return m
   }
   return ''
 }
 
 async function uploadRecording() {
-  const blob = new Blob(recChunks, { type: recorder.mimeType || 'audio/webm' })
+  const type = (recorder.mimeType || 'audio/webm').split(';')[0]
+  const blob = new Blob(recChunks, { type })
   recBtn.textContent = '● Uploading…'
   try {
     const r = await fetch('/ondeck/players/{{ pid }}/record', {
       method: 'POST',
-      headers: { 'Content-Type': 'audio/webm' },
+      headers: { 'Content-Type': type },
       body: blob,
     })
     if (r.ok) {

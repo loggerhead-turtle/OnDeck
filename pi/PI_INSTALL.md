@@ -1,16 +1,44 @@
 # OnDeck — Raspberry Pi install, Wi-Fi & account linking
 
-OnDeck runs on two Raspberry Pis on a local field network (a single Pi can do
-both roles for testing). **Both** Pis support headless Wi-Fi onboarding — if no
-Wi-Fi is configured, the Pi raises an `OnDeck-Setup` hotspot with a captive
-portal:
+OnDeck runs on one or two Raspberry Pis on a local field network. **All** Pis
+support headless Wi-Fi onboarding — if no Wi-Fi is configured, the Pi raises
+an `OnDeck-Setup` hotspot with a captive portal:
 
 | Pi | Role | What it does |
 |----|------|--------------|
 | **Stream Deck Pi** | `deck` | Stream Deck XL + local web portal + Wi-Fi onboarding |
 | **Audio Pi** | `audio` | Plugged into the field PA; plays the audio + Wi-Fi onboarding |
+| **Single Pi** | `both` | Deck **and** audio on one Pi — play straight to a Bluetooth speaker, no second Pi (see §5b) |
 
 (`coach` is accepted as an alias of `deck` for back-compat.)
+
+---
+
+## 0. Fastest path — flash a ready-made OnDeck image
+
+Instead of §1–2 below, you can build (or download, if published on the repo's
+Releases page) a flashable image with OnDeck fully baked in:
+
+```bash
+# On any Linux machine with Docker (~30 GB free disk, 30–60 min):
+ROLE=audio ./pi/build_image.sh    # Audio Pi image (default)
+ROLE=deck  ./pi/build_image.sh    # Stream Deck Pi image
+ROLE=both  ./pi/build_image.sh    # single-Pi image (deck + Bluetooth audio)
+```
+
+Flash the resulting `deploy/image_*OnDeck-<role>.img.xz` with **Raspberry Pi
+Imager → Use custom**, boot the Pi, and that's it:
+
+- All packages, the code, and the Python environment are pre-installed —
+  first boot just wires up services, no internet required.
+- With no Wi-Fi configured, the Pi opens the **`OnDeck-Setup`** hotspot —
+  connect a phone, pick your Wi-Fi, and enter your Cloud URL + pairing code.
+- To change a card's role after flashing, edit the `ondeck-role` file on the
+  boot partition (`audio`, `deck`, or `both`) before first boot.
+- Default login `ondeck` / `ondeck` — change it on first login
+  (`passwd`), or pre-set your own user with Imager's settings gear.
+
+Prefer stock Raspberry Pi OS? Use the classic path below.
 
 ---
 
@@ -120,6 +148,26 @@ Notes:
   the Pi's default (3.5 mm / HDMI / USB).
 - The **cloud** portal can't reach the Audio Pi (NAT) — the Bluetooth page only
   controls it from the field network. It shows "Audio Pi unreachable" elsewhere.
+
+---
+
+## 5b. Single-Pi mode — Bluetooth straight from the Stream Deck Pi
+
+You can skip the Audio Pi entirely and let the Stream Deck Pi play the music
+itself — over Bluetooth to the speaker, or out its own 3.5 mm / USB / HDMI
+audio if you'd rather run a cable:
+
+1. Install the Stream Deck Pi with role **`both`** (one-liner in §2, or the
+   `both` image from §0). That puts the audio server on the same Pi.
+2. In the portal: **Settings → Audio Output → "This Pi (single-Pi /
+   Bluetooth)"**. From then on every deck press and portal preview plays
+   locally instead of calling out to an Audio Pi.
+3. Pair the speaker once on the **Bluetooth** page (scan → pair). Auto-connect
+   is remembered, so on game day you just power the speaker on.
+
+Switching back to a two-Pi setup later is the same setting — pick **"Audio Pi
+(two-Pi setup)"** (or **Auto**) again. If no Bluetooth speaker is connected in
+single-Pi mode, audio falls back to the Pi's default ALSA output (wired).
 
 ---
 

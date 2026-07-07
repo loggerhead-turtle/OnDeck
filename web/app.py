@@ -10,8 +10,10 @@ from __future__ import annotations
 import base64
 import functools
 import hashlib
+import hmac
 import json
 import re
+import secrets
 import sys
 import time
 import uuid
@@ -35,6 +37,7 @@ from flask import (
     url_for,
 )
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 import requests as rq
 
 from config_manager import (
@@ -88,11 +91,109 @@ def _load_homepage() -> dict:
 def _save_homepage(data: dict) -> None:
     HOMEPAGE_FILE.write_text(json.dumps(data, indent=2))
 
+def _session_secret() -> str:
+    """The Flask session secret.
+
+    Prefer ONDECK_SECRET (Render sets it). Without it, generate a random
+    secret once and persist it under ONDECK_HOME so sessions survive restarts
+    — a guessable hardcoded fallback would let anyone forge a session cookie.
+    """
+    env = os.environ.get("ONDECK_SECRET", "")
+    if env:
+        return env
+    secret_file = ONDECK_HOME / "secret_key"
+    try:
+        if secret_file.exists():
+            existing = secret_file.read_text().strip()
+            if existing:
+                return existing
+        ONDECK_HOME.mkdir(parents=True, exist_ok=True)
+        secret = secrets.token_hex(32)
+        secret_file.write_text(secret)
+        os.chmod(secret_file, 0o600)
+        return secret
+    except OSError:
+        # Read-only filesystem (tests/containers): fall back to a per-process
+        # random secret. Sessions won't survive a restart, but stay unforgeable.
+        return secrets.token_hex(32)
+
+
 app = Flask(__name__)
-app.secret_key = os.environ.get("ONDECK_SECRET", "ondeck-dev-secret-change-me")
+app.secret_key = _session_secret()
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+# Render terminates TLS; on the field Pi the portal is plain HTTP on the LAN.
+app.config["SESSION_COOKIE_SECURE"] = CLOUD_MODE
+# Cap request bodies (audio uploads) so a rogue client can't exhaust the disk.
+app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
 
 cfg = ConfigManager()
+
+
+@app.after_request
+def _security_headers(resp):
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# Uploaded-audio filename hygiene
+# ---------------------------------------------------------------------------
+
+ALLOWED_AUDIO_EXTS = {
+    ".mp3", ".m4a", ".aac", ".wav", ".ogg", ".oga", ".opus",
+    ".webm", ".flac", ".mp4", ".wma", ".aiff", ".aif",
+}
+
+
+def _safe_audio_filename(raw: str) -> str | None:
+    """A filesystem-safe basename for an uploaded audio file, or None.
+
+    Strips any path components, sanitizes the name, and rejects anything
+    without a recognized audio extension so an upload can never drop an
+    executable/HTML file into the shared music dir.
+    """
+    name = secure_filename(Path(raw or "").name)
+    if not name:
+        return None
+    if Path(name).suffix.lower() not in ALLOWED_AUDIO_EXTS:
+        return None
+    return name
+
+
+# ---------------------------------------------------------------------------
+# Lightweight per-IP rate limiting (login + pairing-code redemption)
+# ---------------------------------------------------------------------------
+
+_rate_buckets: dict[str, list[float]] = {}
+
+
+def _rate_limited(bucket: str, limit: int, window_s: int) -> bool:
+    """True when `bucket` (e.g. "login:1.2.3.4") exceeded limit per window."""
+    now = time.time()
+    hits = _rate_buckets.setdefault(bucket, [])
+    hits[:] = [t for t in hits if now - t < window_s]
+    if len(hits) >= limit:
+        return True
+    hits.append(now)
+    # Keep the map from growing without bound.
+    if len(_rate_buckets) > 10000:
+        _rate_buckets.clear()
+    return False
+
+
+def _safe_next_url(raw: str | None, fallback: str) -> str:
+    """Only allow same-site relative redirect targets.
+
+    ``startswith("/")`` alone is not enough: ``//evil.com`` and ``/\\evil.com``
+    are scheme-relative URLs browsers will follow off-site.
+    """
+    if raw and raw.startswith("/") and not raw.startswith("//") and "\\" not in raw:
+        return raw
+    return fallback
 
 
 # Custom Jinja filters
@@ -142,6 +243,10 @@ def _load_users() -> list[dict]:
 def _save_users(users: list[dict]) -> None:
     ONDECK_HOME.mkdir(parents=True, exist_ok=True)
     AUTH_FILE.write_text(json.dumps({"users": users}, indent=2))
+    try:
+        os.chmod(AUTH_FILE, 0o600)  # password hashes — owner-only
+    except OSError:
+        pass
 
 
 def _find_user(username: str) -> dict | None:
@@ -301,6 +406,7 @@ def _check_auth(allowed_roles=None):
             "ondeck_team_roster",
             "ondeck_music", "ondeck_music_rate",
             "ondeck_music_request", "ondeck_request_rate", "ondeck_request_delete",
+            "ondeck_record", "ondeck_record_upload",
             "ondeck_logout",
         }
         if request.endpoint not in player_ok:
@@ -371,7 +477,7 @@ def _bearer_token() -> str:
 
 def _valid_sync_token(token: str) -> bool:
     """A token is valid if it's the global sync token or a live device token."""
-    if SYNC_TOKEN and token == SYNC_TOKEN:
+    if SYNC_TOKEN and hmac.compare_digest(token, SYNC_TOKEN):
         return True
     return cfg.device_for_token(token) is not None
 
@@ -452,6 +558,10 @@ def ondeck_login():
 
 @app.post("/ondeck/login")
 def ondeck_login_post():
+    if _rate_limited(f"login:{request.remote_addr}", limit=15, window_s=300):
+        flash("Too many login attempts — wait a few minutes and try again.", "error")
+        return redirect(url_for("ondeck_login"))
+
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "")
     remember = request.form.get("remember") == "on"
@@ -463,10 +573,8 @@ def ondeck_login_post():
         session["user_id"] = user["id"]
         session["role"] = user["role"]
         session["username"] = user["username"]
-        next_url = request.args.get("next") or url_for("ondeck_settings_hub")
-        if not next_url.startswith("/"):
-            next_url = url_for("ondeck_settings_hub")
-        return redirect(next_url)
+        return redirect(_safe_next_url(request.args.get("next"),
+                                       url_for("ondeck_settings_hub")))
 
     # Try player credentials in cfg.players.
     for pid, player in cfg.players.items():
@@ -885,10 +993,12 @@ def admin_homepage_save():
 @app.get("/ondeck/audio/<path:filename>")
 def ondeck_serve_audio(filename: str):
     safe = Path(filename).name
-    path = MUSIC_DIR / safe
-    if not path.exists():
+    path = (MUSIC_DIR / safe).resolve()
+    if MUSIC_DIR.resolve() not in path.parents or not path.exists():
         abort(404)
-    return send_file(str(path))
+    # conditional=True enables HTTP Range requests — iOS Safari needs byte
+    # ranges to play/scrub audio reliably.
+    return send_file(str(path), conditional=True)
 
 
 # ---------------------------------------------------------------------------
@@ -952,7 +1062,10 @@ def ondeck_library_upload():
         flash("No file selected.", "error")
         return redirect(url_for("ondeck_library"))
 
-    name = Path(f.filename).name
+    name = _safe_audio_filename(f.filename)
+    if not name:
+        flash("Unsupported file type — upload an audio file (MP3, M4A, WAV…).", "error")
+        return redirect(url_for("ondeck_library"))
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)
     dest = MUSIC_DIR / name
     f.save(str(dest))
@@ -1118,7 +1231,10 @@ def ondeck_music_request():
     uploaded = ""
     f = request.files.get("file")
     if f and f.filename:
-        name = Path(f.filename).name
+        name = _safe_audio_filename(f.filename)
+        if not name:
+            flash("Unsupported file type — attach an audio file.", "error")
+            return redirect(request.referrer or url_for("ondeck_music"))
         MUSIC_DIR.mkdir(parents=True, exist_ok=True)
         f.save(str(MUSIC_DIR / name))
         uploaded = name
@@ -1224,7 +1340,10 @@ def ondeck_request_promote(rid: str):
         abort(404)
     f = request.files.get("file")
     if f and f.filename:
-        name = Path(f.filename).name
+        name = _safe_audio_filename(f.filename)
+        if not name:
+            flash("Unsupported file type — upload an audio file.", "error")
+            return redirect(request.referrer or url_for("ondeck_spotify_import"))
         MUSIC_DIR.mkdir(parents=True, exist_ok=True)
         f.save(str(MUSIC_DIR / name))
     elif req.get("uploaded_file"):
@@ -1365,19 +1484,27 @@ def ondeck_players_record(pid: str):
     if not blob:
         return jsonify(error="empty body"), 400
 
-    filename = f"ann_{pid}.webm"
+    # iOS Safari records audio/mp4, Chrome/Android audio/webm — store with the
+    # matching extension so ffmpeg and browser playback both behave.
+    ext = _record_ext(request.content_type)
+    filename = f"ann_{pid}{ext}"
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)
     (MUSIC_DIR / filename).write_bytes(blob)
 
     with cfg._lock:
+        old = player.get("announcement_file")
         player["announcement_file"]     = filename
         player["announcement_start_ms"] = 0
         player["announcement_end_ms"]   = None
         cfg.save()
+    if old and old != filename:
+        (MUSIC_DIR / old).unlink(missing_ok=True)
 
     try:
         rq.post(_audio_pi_url("/upload"),
-                files={"file": (filename, blob, "audio/webm")}, timeout=15)
+                files={"file": (filename, blob,
+                                request.content_type or "audio/webm")},
+                timeout=15)
     except Exception:
         pass
 
@@ -1541,7 +1668,10 @@ def ondeck_my_profile_upload():
     if not f or not f.filename:
         flash("No file selected.", "error")
         return redirect(url_for("ondeck_my_profile"))
-    name = Path(f.filename).name
+    name = _safe_audio_filename(f.filename)
+    if not name:
+        flash("Unsupported file type — upload an audio file (MP3, M4A, WAV…).", "error")
+        return redirect(url_for("ondeck_my_profile"))
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)
     f.save(str(MUSIC_DIR / name))
     existing = {s["filename"]: sid for sid, s in cfg.songs.items()}
@@ -1655,7 +1785,9 @@ def ondeck_player_upload():
     if not display_name:
         return {"error": "No display name provided"}, 400
 
-    filename = Path(f.filename).name
+    filename = _safe_audio_filename(f.filename)
+    if not filename:
+        return {"error": "Unsupported file type — upload an audio file"}, 400
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)
     f.save(str(MUSIC_DIR / filename))
 
@@ -1910,6 +2042,113 @@ def ondeck_api_fade():
 def ondeck_api_volume():
     body = request.get_json(force=True) or {}
     data, code = _proxy("POST", "/volume", json=body)
+    return jsonify(data), code
+
+
+# ---------------------------------------------------------------------------
+# Record from phone — capture a song/announcement with the device microphone
+# ---------------------------------------------------------------------------
+# Works on iOS Safari (audio/mp4) and Android/desktop (audio/webm;opus). The
+# page records with music-friendly constraints (echo cancellation / noise
+# suppression / auto-gain OFF) so a song playing out loud isn't mangled.
+
+# MediaRecorder blob type → stored file extension (ffmpeg handles all of them).
+_RECORD_EXT = {
+    "audio/mp4": ".m4a",     # iOS Safari
+    "audio/aac": ".m4a",
+    "audio/webm": ".webm",   # Chrome/Android (opus)
+    "audio/ogg": ".ogg",     # Firefox
+    "audio/mpeg": ".mp3",
+    "audio/wav": ".wav",
+}
+
+
+def _record_ext(content_type: str) -> str:
+    base = (content_type or "").split(";")[0].strip().lower()
+    return _RECORD_EXT.get(base, ".webm")
+
+
+@app.get("/ondeck/record")
+def ondeck_record():
+    return render_template("record.html")
+
+
+@app.post("/ondeck/record/upload")
+def ondeck_record_upload():
+    """Save a phone recording into the music library (AJAX, multipart).
+
+    Players may also assign the new recording as their own walk-up in the same
+    step; staff recordings just land in the library for assignment later.
+    """
+    f = request.files.get("file")
+    if not f:
+        return jsonify(error="no audio received"), 400
+    title = (request.form.get("title") or "").strip() or "Phone recording"
+    ext = _record_ext(f.mimetype or request.form.get("mime", ""))
+
+    # Derive a safe, unique filename from the title.
+    stem = secure_filename(title)[:60] or "recording"
+    MUSIC_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"rec_{stem}{ext}"
+    n = 1
+    while (MUSIC_DIR / filename).exists():
+        n += 1
+        filename = f"rec_{stem}_{n}{ext}"
+    f.save(str(MUSIC_DIR / filename))
+
+    song_id = cfg.add_song(filename, title)
+
+    # Player self-service: optionally make it their active walk-up right away.
+    assigned = ""
+    if session.get("role") == "player" and request.form.get("assign") == "walkup":
+        pid = session.get("player_id")
+        with cfg._lock:
+            player = cfg.players.get(pid)
+            if player:
+                cfg.add_player_walkup_song(pid, song_id)
+                player["walkup_song_id"] = song_id
+                _add_notification(pid, player, "recorded a new walk-up song",
+                                  detail=title)
+                cfg.save()
+                assigned = "walkup"
+
+    # Mirror to the Audio Pi (best-effort, local mode only).
+    if not CLOUD_MODE:
+        try:
+            with open(str(MUSIC_DIR / filename), "rb") as fh:
+                rq.post(_audio_pi_url("/upload"),
+                        files={"file": (filename, fh)}, timeout=30)
+        except Exception:
+            pass
+
+    return jsonify(ok=True, song_id=song_id, filename=filename, assigned=assigned)
+
+
+# ---------------------------------------------------------------------------
+# Resources — system diagnostics (temp, CPU, memory, disk, Wi-Fi, throttling)
+# ---------------------------------------------------------------------------
+
+@app.get("/ondeck/resources")
+def ondeck_resources():
+    _check_auth(["admin", "editor"])
+    # Cloud view: whatever the field Pis last reported in their sync pings.
+    return render_template("resources.html", devices=cfg.list_devices())
+
+
+@app.get("/ondeck/api/local-stats")
+def ondeck_api_local_stats():
+    """Stats for the machine serving this portal (deck Pi, or the cloud box)."""
+    try:
+        from system_stats import gather
+        return jsonify(ok=True, **gather())
+    except Exception as exc:
+        return jsonify(ok=False, error=str(exc)), 500
+
+
+@app.get("/ondeck/api/audio-stats")
+def ondeck_api_audio_stats():
+    """Stats proxied from the audio server (may be this same Pi in local mode)."""
+    data, code = _proxy("GET", "/stats")
     return jsonify(data), code
 
 
@@ -2428,6 +2667,8 @@ def ondeck_settings_save():
     with cfg._lock:
         s = cfg.system
         s["audio_pi_ip"] = request.form.get("audio_pi_ip", "").strip()
+        mode = request.form.get("audio_output", s.get("audio_output", "auto"))
+        s["audio_output"] = mode if mode in ("auto", "remote", "local") else "auto"
         try:
             s["audio_pi_port"] = int(request.form.get("audio_pi_port", 5100))
         except ValueError:
@@ -2500,6 +2741,25 @@ def sync_auth():
     return jsonify(users=_load_users())
 
 
+# (filename) -> (size, mtime, md5). Hashing every file on every 5-minute Pi
+# poll re-reads the whole library; cache digests until a file changes.
+_md5_cache: dict[str, tuple[int, float, str]] = {}
+
+
+def _file_md5(path: Path) -> str:
+    st = path.stat()
+    cached = _md5_cache.get(path.name)
+    if cached and cached[0] == st.st_size and cached[1] == st.st_mtime:
+        return cached[2]
+    h = hashlib.md5()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 16), b""):
+            h.update(chunk)
+    digest = h.hexdigest()
+    _md5_cache[path.name] = (st.st_size, st.st_mtime, digest)
+    return digest
+
+
 @app.get("/sync/files")
 @_require_sync_token
 def sync_list_files():
@@ -2507,8 +2767,8 @@ def sync_list_files():
     files = []
     for f in sorted(MUSIC_DIR.iterdir()):
         if f.is_file():
-            digest = hashlib.md5(f.read_bytes()).hexdigest()
-            files.append({"filename": f.name, "size": f.stat().st_size, "md5": digest})
+            files.append({"filename": f.name, "size": f.stat().st_size,
+                          "md5": _file_md5(f)})
     return jsonify(files=files)
 
 
@@ -2516,10 +2776,10 @@ def sync_list_files():
 @_require_sync_token
 def sync_download_file(filename: str):
     safe = Path(filename).name
-    path = MUSIC_DIR / safe
-    if not path.exists():
+    path = (MUSIC_DIR / safe).resolve()
+    if MUSIC_DIR.resolve() not in path.parents or not path.exists():
         abort(404)
-    return send_file(str(path))
+    return send_file(str(path), conditional=True)
 
 
 @app.post("/sync/ping")
@@ -2529,9 +2789,10 @@ def sync_ping():
     pi_id = (body.get("pi_id") or "default")[:64]
     ip = body.get("ip") or request.remote_addr
     hostname = body.get("hostname", pi_id)
+    stats = body.get("stats") if isinstance(body.get("stats"), dict) else None
     # If the Pi authenticated with a per-device token, update that device's
     # check-in. Fall back to the legacy known_pis map (global token / unpaired).
-    if not cfg.touch_device(_bearer_token(), ip=ip, hostname=hostname):
+    if not cfg.touch_device(_bearer_token(), ip=ip, hostname=hostname, stats=stats):
         with cfg._lock:
             cfg.system.setdefault("known_pis", {})[pi_id] = {
                 "ip":        ip,
@@ -2550,6 +2811,9 @@ def sync_pair():
     captive portal (or a boot file) posts the code and gets back a token it then
     stores in sync.env for all future /sync/* calls.
     """
+    # Codes are short (6 hex chars) so brute-forcing must be expensive.
+    if _rate_limited(f"pair:{request.remote_addr}", limit=10, window_s=600):
+        return jsonify(ok=False, error="too many attempts"), 429
     body = request.get_json(force=True, silent=True) or {}
     code = (body.get("code") or "").strip()
     hostname = (body.get("hostname") or "")[:64]

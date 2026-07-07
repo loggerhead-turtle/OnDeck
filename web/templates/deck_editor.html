@@ -168,6 +168,7 @@
             <option value="play">Transport: Play</option>
             <option value="stop">Transport: Stop</option>
             <option value="fade">Transport: Fade out</option>
+            <option value="stats">System stats (temp / CPU)</option>
           </select>
         </div>
 
@@ -278,6 +279,7 @@ function defaultLabel(slot) {
   if (t === 'celebration') return (DECK.celebrations.find(c => c.id === slot.ref) || {}).label || slot.ref;
   if (t === 'nav') return (DECK.navPages.find(n => n.id === slot.ref) || {}).label || 'Page';
   if (t === 'edit_lineup') return 'Edit\nLineup';
+  if (t === 'stats') return '48°\nCPU 7%';
   if (t === 'lineup_slot') return 'Spot ' + (slot.ref || '?');
   if (t === 'action') return { play: 'Play', stop: 'Stop', fade: 'Fade' }[slot.ref] || slot.ref;
   return '';   // text-only: falls back to its own label
@@ -332,7 +334,7 @@ const ACTION_PARAMS = {
   nav: ['p-nav'],
   lineup_slot: ['p-lineup_slot'],
   fade: ['p-fade'],
-  text: [], edit_lineup: [], play: [], stop: [], blank: [],
+  text: [], edit_lineup: [], play: [], stop: [], blank: [], stats: [],
 };
 
 function showParams(action) {
@@ -409,6 +411,7 @@ function collectSlot() {
   else if (action === 'celebration') { slot.type = 'celebration'; slot.ref = $('sb-celebration').value; }
   else if (action === 'nav') { slot.type = 'nav'; slot.ref = $('sb-nav').value; }
   else if (action === 'edit_lineup') { slot.type = 'edit_lineup'; }
+  else if (action === 'stats') { slot.type = 'stats'; }
   else if (action === 'lineup_slot') { slot.type = 'lineup_slot'; slot.ref = String(parseInt($('sb-position').value) || 1); }
   else { slot.type = 'action'; slot.ref = action; if (action === 'fade') slot.fade_ms = parseInt($('sb-fade-ms').value) || 1000; }
   return slot;

@@ -2,7 +2,12 @@
 <html lang="en" class="h-full">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0f1a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="OnDeck">
   <title>{% block title %}OnDeck{% endblock %} — OnDeck ⚾</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -46,6 +51,16 @@
       font-family: 'Courier New', monospace;
       letter-spacing: 0.05em;
     }
+
+    /* Respect notches / home indicators on phones (viewport-fit=cover). */
+    header { padding-top: env(safe-area-inset-top); }
+    #transport-bar { padding-bottom: calc(0.5rem + env(safe-area-inset-bottom)); }
+
+    /* Comfortable touch targets on coarse pointers (phones/tablets). */
+    @media (pointer: coarse) {
+      button, .btn, select { min-height: 40px; }
+      input[type="range"] { min-height: 32px; }
+    }
   </style>
   {% block head %}{% endblock %}
 </head>
@@ -59,24 +74,25 @@
       <span class="font-bold text-lg tracking-tight text-white">OnDeck</span>
     </a>
 
-    <!-- Right side: Settings + Profile/Logout -->
-    <div class="ml-auto flex items-center gap-2">
+    <!-- Right side: Settings + Profile/Logout (desktop) -->
+    <div class="ml-auto hidden md:flex items-center gap-2">
       {% if current_player %}
-        <span class="text-xs text-gray-400 hidden sm:inline">{{ current_player.first_name }} {{ current_player.last_name }}</span>
+        <span class="text-xs text-gray-400">{{ current_player.first_name }} {{ current_player.last_name }}</span>
         <a href="/ondeck/my-profile" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Profile</a>
+        <a href="/ondeck/record" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Record</a>
         <a href="/ondeck/team-roster" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Teammates</a>
         <a href="/ondeck/music" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Rate Music</a>
         <a href="/ondeck/logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>
       {% elif current_user %}
         <a href="/ondeck/music" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Music</a>
         <a href="/ondeck/settings-hub" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Settings</a>
-        <span class="text-xs text-gray-400 hidden sm:inline">{{ current_user }}</span>
+        <span class="text-xs text-gray-400">{{ current_user }}</span>
         <a href="/ondeck/logout" class="text-xs text-gray-400 hover:text-white transition-colors px-2 py-1 rounded hover:bg-gray-800">Sign out</a>
       {% endif %}
     </div>
 
     <!-- Mode badge + Audio Pi status -->
-    <div class="{% if not current_user and not current_player %}ml-auto {% endif %}flex items-center gap-3">
+    <div class="{% if not current_user and not current_player %}ml-auto {% endif %}flex items-center gap-3 {% if current_user or current_player %}hidden sm:flex{% endif %}">
       {% if cloud_mode %}
         <span class="px-2 py-0.5 rounded text-xs font-medium bg-indigo-900/60 border border-indigo-700/40 text-indigo-300">
           ☁ Cloud
@@ -88,7 +104,42 @@
         </div>
       {% endif %}
     </div>
+
+    <!-- Hamburger (phones/tablets) -->
+    {% if current_user or current_player %}
+    <button type="button" id="nav-toggle" aria-label="Menu" aria-expanded="false"
+            onclick="toggleMobileNav()"
+            class="md:hidden ml-2 w-11 h-11 flex items-center justify-center rounded-lg text-gray-300 hover:text-white hover:bg-gray-800 transition-colors text-2xl leading-none">
+      ☰
+    </button>
+    {% endif %}
   </header>
+
+  <!-- Mobile nav drawer -->
+  {% if current_user or current_player %}
+  <nav id="mobile-nav" class="hidden md:hidden bg-gray-900 border-b border-gray-800 shrink-0">
+    <div class="px-4 py-2 flex flex-col">
+      {% if current_player %}
+        <span class="px-3 py-2 text-xs text-gray-500">{{ current_player.first_name }} {{ current_player.last_name }}</span>
+        <a href="/ondeck/my-profile" class="px-3 py-3 rounded-lg text-sm text-gray-200 hover:bg-gray-800">👤 My Profile</a>
+        <a href="/ondeck/record" class="px-3 py-3 rounded-lg text-sm text-gray-200 hover:bg-gray-800">🎙 Record a Song</a>
+        <a href="/ondeck/team-roster" class="px-3 py-3 rounded-lg text-sm text-gray-200 hover:bg-gray-800">⚾ Teammates</a>
+        <a href="/ondeck/music" class="px-3 py-3 rounded-lg text-sm text-gray-200 hover:bg-gray-800">🎧 Rate Music</a>
+      {% elif current_user %}
+        <span class="px-3 py-2 text-xs text-gray-500">{{ current_user }}</span>
+        <a href="/ondeck/dashboard" class="px-3 py-3 rounded-lg text-sm text-gray-200 hover:bg-gray-800">🏠 Dashboard</a>
+        <a href="/ondeck/players" class="px-3 py-3 rounded-lg text-sm text-gray-200 hover:bg-gray-800">👥 Players</a>
+        <a href="/ondeck/library" class="px-3 py-3 rounded-lg text-sm text-gray-200 hover:bg-gray-800">🎵 Library</a>
+        <a href="/ondeck/record" class="px-3 py-3 rounded-lg text-sm text-gray-200 hover:bg-gray-800">🎙 Record a Song</a>
+        <a href="/ondeck/lineup" class="px-3 py-3 rounded-lg text-sm text-gray-200 hover:bg-gray-800">📋 Lineup</a>
+        <a href="/ondeck/music" class="px-3 py-3 rounded-lg text-sm text-gray-200 hover:bg-gray-800">🎧 Music &amp; Requests</a>
+        <a href="/ondeck/resources" class="px-3 py-3 rounded-lg text-sm text-gray-200 hover:bg-gray-800">📊 Resources</a>
+        <a href="/ondeck/settings-hub" class="px-3 py-3 rounded-lg text-sm text-gray-200 hover:bg-gray-800">⚙️ Settings &amp; Tools</a>
+      {% endif %}
+      <a href="/ondeck/logout" class="px-3 py-3 rounded-lg text-sm text-gray-400 hover:bg-gray-800 border-t border-gray-800 mt-1">Sign out</a>
+    </div>
+  </nav>
+  {% endif %}
 
   <!-- Flash messages -->
   {% with messages = get_flashed_messages(with_categories=true) %}
@@ -438,6 +489,14 @@
     {% else %}
     function pollStatus() {}
     {% endif %}
+
+    function toggleMobileNav() {
+      const nav = document.getElementById('mobile-nav')
+      const btn = document.getElementById('nav-toggle')
+      if (!nav) return
+      const open = nav.classList.toggle('hidden') === false
+      if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false')
+    }
 
     setTimeout(() => {
       document.querySelectorAll('#flash-container .flash-msg').forEach(el => {

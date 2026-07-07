@@ -30,6 +30,10 @@ The cloud instance is the source of truth. The Pi polls `/sync/*` endpoints ever
 | `web/templates/deck_editor.html` | Stream Deck button editor (8×4 grid, per-key slots) |
 | `web/templates/devices.html` | Pi device pairing + management (codes, rename, revoke) |
 | `streamdeck_controller.py` | Stream Deck XL runtime — OnDeck-specific pages/actions on the shared `pideck` library (github.com/loggerhead-turtle/pi-deck; installed by `install.sh`, sibling-checkout fallback) |
+| `system_stats.py` | Dependency-free system health (CPU temp/%, memory, disk, Wi-Fi, `vcgencmd get_throttled`) — used by `/ondeck/resources`, the deck `stats` key, Audio Pi `/stats`, and the sync ping |
+| `web/templates/record.html` | Mobile phone recorder (`/ondeck/record`) — MediaRecorder with music-friendly constraints, iOS `audio/mp4` support, level meter |
+| `web/templates/resources.html` | Live diagnostics page (`/ondeck/resources`) — local + audio-server stats, linked-device health from sync pings |
+| `pi/build_image.sh` | pi-gen flashable SD image builder (`ROLE=audio\|deck\|both`) — packages/repo/venv baked in, first-boot finisher |
 | `bluetooth_manager.py` | Audio Pi BlueZ control (`bluetoothctl`) + preferred-speaker auto-connect + sink routing |
 | `web/templates/bluetooth.html` | Bluetooth speaker management page (proxied to the Audio Pi) |
 | `web/templates/login.html` | Standalone login page |
@@ -64,6 +68,32 @@ On the Pi, `ONDECK_HOME` defaults to `~/ondeck`. Never hardcode Pi username — 
 ## Auth
 
 Single-user. On first visit with no `auth.json`, redirects to `/setup` to create account. Password stored as bcrypt hash via `werkzeug.security`. 30-day session cookie. `ONDECK_PASSWORD_HASH` env var overrides `auth.json` for scripted deploys.
+
+## Security conventions
+
+- Session secret: `ONDECK_SECRET` env var, else a random secret persisted to `$ONDECK_HOME/secret_key` (0600). Never a hardcoded fallback.
+- Session cookies: HttpOnly + SameSite=Lax always; `Secure` added in cloud mode.
+- Sync tokens compared with `hmac.compare_digest` (app.py `_valid_sync_token` + `config_manager.device_for_token`).
+- Per-IP rate limits: login 15/5 min, `/sync/pair` 10/10 min (`_rate_limited` in app.py, in-memory).
+- Redirect targets go through `_safe_next_url` (blocks `//host` open redirects).
+- Every upload passes `_safe_audio_filename` (secure_filename + `ALLOWED_AUDIO_EXTS` allowlist); `MAX_CONTENT_LENGTH` = 100 MB. The Audio Pi `/upload` mirrors the same check.
+- Audio is served with `send_file(..., conditional=True)` — byte ranges, which iOS Safari requires for playback/scrubbing.
+- `auth.json` written with mode 0600.
+
+## Audio Output Modes (`system.audio_output`)
+
+`auto` (default): explicit `audio_pi_ip` → last audio-role device seen by `/sync/ping` → localhost. `remote`: never falls back to localhost. `local`: always `127.0.0.1` — the Stream Deck Pi runs its own `music_server` (install `ROLE=both`) and plays straight to a Bluetooth speaker or line out, bypassing the second Pi. Selected in Settings → Audio Output; resolved by `config_manager.audio_pi_endpoint()`.
+
+## Diagnostics
+
+- `/ondeck/resources` (admin/editor): live stats for the portal host + audio server, plus per-device health reported in sync pings (stored whitelisted under `devices[id].stats`).
+- `system_stats.gather(brief=…)` is the single collector; cached ~2 s.
+- Audio Pi exposes `GET /stats`; portal proxies at `/ondeck/api/audio-stats`; local host at `/ondeck/api/local-stats`.
+- Stream Deck: slot type `stats` renders live `48° / CPU 7%` with temperature-tinted background, repainting every 5 s while visible (thread in `streamdeck_controller`).
+
+## Phone Recording (`/ondeck/record`)
+
+MediaRecorder with `echoCancellation/noiseSuppression/autoGainControl: false` (music capture, not voice). Mime pick order: `audio/webm;codecs=opus` → `audio/webm` → `audio/mp4` (iOS Safari) → ogg; stored extension derived server-side via `_record_ext`. Requires HTTPS (secure context) — the page warns on plain-HTTP Pi portals. Players can auto-assign the take as their walk-up; staff takes land in the library. Announcement recording in `player_edit.html` uses the same mime logic.
 
 ## Cloud Mode Differences (ONDECK_MODE=cloud)
 

@@ -10,6 +10,7 @@ The config file is the single source of truth during a game. Writes are atomic
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import secrets
@@ -49,6 +50,11 @@ def _default_config() -> dict[str, Any]:
         "system": {
             "audio_pi_ip": "",
             "audio_pi_port": 5100,
+            # Where playback happens: "auto" (explicit IP → discovered Audio Pi
+            # → localhost), "remote" (never fall back to localhost), or "local"
+            # (this Pi runs its own music_server — e.g. the Stream Deck Pi
+            # playing straight to a Bluetooth speaker, no second Pi).
+            "audio_output": "auto",
             "wifi_configured": False,
             "bluetooth_device": None,
             "volume": 80,
@@ -1002,26 +1008,41 @@ class ConfigManager:
         return best.get("ip") if best else None
 
     def audio_pi_endpoint(self) -> tuple[str, int]:
-        """(ip, port) of the Audio Pi: explicit `audio_pi_ip` setting first, then
-        the auto-discovered audio device, then localhost."""
+        """(ip, port) of the audio server this device should drive.
+
+        Honors ``system.audio_output``:
+          * ``local``  — always this machine (the deck Pi runs its own
+            music_server and plays to its Bluetooth speaker / line out, no
+            second Pi needed);
+          * ``remote`` — explicit IP or discovered Audio Pi only (no localhost
+            fallback that would silently play out the wrong box);
+          * ``auto``   — explicit IP → discovered Audio Pi → localhost.
+        """
         s = self.system
         try:
             port = int(s.get("audio_pi_port", 5100) or 5100)
         except (TypeError, ValueError):
             port = 5100
-        ip = s.get("audio_pi_ip") or self.discovered_audio_ip() or "127.0.0.1"
-        return ip, port
+        mode = (s.get("audio_output") or "auto").lower()
+        if mode == "local":
+            return "127.0.0.1", port
+        ip = s.get("audio_pi_ip") or self.discovered_audio_ip()
+        if mode == "remote":
+            return (ip or ""), port
+        return (ip or "127.0.0.1"), port
 
     def device_for_token(self, token: str) -> dict[str, Any] | None:
         """The (non-revoked) device that owns a sync token, if any."""
         if not token:
             return None
         for device in self.devices.values():
-            if device.get("token") == token and not device.get("revoked"):
+            stored = device.get("token") or ""
+            if hmac.compare_digest(stored, token) and not device.get("revoked"):
                 return device
         return None
 
-    def touch_device(self, token: str, ip: str = "", hostname: str = "") -> bool:
+    def touch_device(self, token: str, ip: str = "", hostname: str = "",
+                     stats: dict[str, Any] | None = None) -> bool:
         """Record a check-in from the device that owns ``token``."""
         from datetime import datetime, timezone
         with self._lock:
@@ -1033,6 +1054,15 @@ class ConfigManager:
                 device["ip"] = ip
             if hostname:
                 device["hostname"] = hostname
+            if stats:
+                # Brief health snapshot from the Pi (temp/CPU/mem/disk) for the
+                # cloud Resources page. Whitelist keys so a rogue payload can't
+                # bloat config.json.
+                device["stats"] = {
+                    k: stats.get(k)
+                    for k in ("cpu_temp_c", "cpu_percent", "mem_used_pct",
+                              "disk_used_pct", "uptime_s")
+                }
             self.save(mark_dirty=False)
             return True
 
