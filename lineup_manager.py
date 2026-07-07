@@ -11,9 +11,13 @@ walk-up flow the coach asked for:
      **re-cues** them, queued and ready. The coach just presses Play again.
 
 The "current batter" is live game state, not configuration, so it is held in
-memory here rather than persisted — restarting mid-game starts at the top of the
-order. End-of-song is detected by polling the Audio Pi's status (the song plays
-on a different Pi, so there is no local end-of-song callback to hook).
+memory here — and mirrored to ``game_state.json`` on every change so a crash,
+service restart or power outage resumes mid-game instead of starting the order
+over. On startup :meth:`restore` reloads the saved index and re-cues that
+batter as soon as the Audio Pi answers (the status poller retries the cue, so
+it works even when the Audio Pi boots slower than the deck Pi). End-of-song is
+detected by polling the Audio Pi's status (the song plays on a different Pi,
+so there is no local end-of-song callback to hook).
 
 Playing non-lineup audio (hype, a stinger, a one-off player) must NOT advance the
 batting order, so the controller calls :meth:`note_external_playback` whenever it
@@ -28,6 +32,7 @@ import time
 from typing import Callable
 
 from config_manager import ConfigManager
+from game_state import load_game_state, update_game_state
 from music_client import MusicClient
 
 log = logging.getLogger("lineup")
@@ -49,6 +54,9 @@ class LineupManager:
         self._armed = False             # auto-advance when this playback ends
         self._was_playing = False       # for edge detection in the poller
         self._poller_started = False
+        # Set when the restored batter couldn't be cued yet (Audio Pi still
+        # booting); the status poller retries until the cue lands.
+        self._restore_cue_pending = False
 
     # -- order helpers ----------------------------------------------------
 
@@ -73,6 +81,7 @@ class LineupManager:
         with self._lock:
             if 0 <= index < len(self.config.lineup):
                 self._index = index
+        self._persist()
         self._notify()
 
     def advance(self) -> None:
@@ -83,6 +92,7 @@ class LineupManager:
                 return
             after = [i for i in filled if i > self._index]
             self._index = after[0] if after else filled[0]
+        self._persist()
         self._notify()
 
     def reset(self) -> bool:
@@ -96,8 +106,34 @@ class LineupManager:
             self._armed = False
             filled = self._filled_indices()
             self._index = filled[0] if filled else 0
+        self._persist()
         self._notify()
         return self.cue_current()
+
+    # -- crash / power-loss recovery ---------------------------------------
+
+    def _persist(self) -> None:
+        """Mirror the current batter to game_state.json (best-effort)."""
+        update_game_state(lineup_index=self._index)
+
+    def restore(self) -> None:
+        """Resume the saved batting position after a restart.
+
+        Re-cues the restored batter so Play works immediately; if the Audio Pi
+        isn't up yet (both Pis rebooting after an outage), the status poller
+        retries the cue until it lands.
+        """
+        saved = load_game_state().get("lineup_index")
+        if not isinstance(saved, int):
+            return
+        with self._lock:
+            if not (0 <= saved < len(self.config.lineup)):
+                return
+            self._index = saved
+        log.info("Restored batting position %s from game_state.json", saved + 1)
+        if self.current_player_id() and not self.cue_current():
+            with self._lock:
+                self._restore_cue_pending = True
 
     # -- cue / play -------------------------------------------------------
 
@@ -142,6 +178,16 @@ class LineupManager:
             status = self.music.status()
             if not status:
                 continue
+            # The Audio Pi is answering — finish a pending post-restart cue so
+            # the restored batter is loaded and Play works right away.
+            with self._lock:
+                retry_cue = self._restore_cue_pending
+                self._restore_cue_pending = False
+            if retry_cue and self.current_player_id():
+                log.info("Audio Pi is back — re-cueing the restored batter")
+                self.cue_current()
+                if self.on_change:
+                    self._notify()
             state = status.get("state")
             advance = False
             with self._lock:

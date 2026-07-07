@@ -176,6 +176,25 @@ upload/import/placement is recorded in `config["recent_additions"]`
 (`/admin/activity`) until the admin presses Clear — entries are never
 auto-marked seen (unlike `/ondeck/notifications`).
 
+## Failure & Power-Loss Recovery
+
+Layered so a crash or outage mid-game resumes where it left off:
+- **Process/boot**: both Pi services are systemd units with `Restart=always`
+  (3s) and start on boot; the deck survives USB unplug/replug; the Bluetooth
+  speaker auto-reconnects.
+- **Config**: config.json writes are atomic (tmp + fsync + rename) so power
+  loss can't corrupt it; the cloud re-syncs config + music every 5 min.
+- **Live game state** (`game_state.py` → `$ONDECK_HOME/game_state.json`,
+  local, never synced): the current batter index and the deck's visible page
+  are mirrored on every change. On startup `LineupManager.restore()` (called
+  in main.py) reloads the index and re-cues that batter — if the Audio Pi is
+  still booting, the auto-advance poller retries the cue until it answers —
+  and the controller returns to the saved page.
+- **Audio Pi** (`$ONDECK_HOME/player_state.json`): volume and the last-played
+  clip persist, so `/replay` works right after a reboot. A song that was
+  *playing* when power died does not auto-resume mid-note (deliberate — use
+  Replay); stale/corrupt state files are ignored.
+
 ## Kiosk Pages (no login, field LAN only)
 
 Registered only on the Pis (never the cloud): `/deck-settings` on the deck

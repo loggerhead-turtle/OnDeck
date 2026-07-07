@@ -53,6 +53,7 @@ from config_manager import (
     DECK_DEFAULT_FONT,
     DECK_DEFAULT_FONT_SIZE,
 )
+from game_state import load_game_state, update_game_state
 from lineup_manager import LineupManager
 from music_client import MusicClient
 
@@ -119,7 +120,20 @@ class StreamDeckController(BaseDeckController):
 
         super().__init__(config)         # opens the deck + first render
 
+        # Crash / power-loss recovery: come back on the page the coach was
+        # using, not Home (the batter index is restored by LineupManager).
+        saved_page = load_game_state().get("deck_page")
+        if saved_page and saved_page in self.config.pages \
+                and saved_page != self.current_page_id:
+            self.current_page_id = saved_page
+            log.info("Restored deck page %r from game_state.json", saved_page)
+            self.render_all()
+
     # ── pideck hooks ─────────────────────────────────────
+
+    def on_page_change(self, page_id) -> None:
+        # Remember the visible page so a restart resumes where the coach was.
+        update_game_state(deck_page=page_id)
 
     def on_layout(self, layout) -> None:
         """Claim the layout's transport keys for Play / Stop / Fade."""

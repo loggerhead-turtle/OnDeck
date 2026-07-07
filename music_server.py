@@ -25,18 +25,20 @@ Endpoints (all JSON):
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shlex
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
 
 from flask import Flask, jsonify, request
 
-from config_manager import MUSIC_DIR
+from config_manager import MUSIC_DIR, ONDECK_HOME
 
 log = logging.getLogger("ondeck-audio")
 
@@ -49,6 +51,37 @@ except Exception:  # pragma: no cover - missing optional deps must not stop audi
 app = Flask(__name__)
 
 DEFAULT_FADE_MS = 1000
+
+# Crash / power-loss recovery: the volume and the last-played clip (what
+# /replay re-runs) survive a service restart or reboot. Local to this Pi,
+# never synced — like bluetooth.json.
+PLAYER_STATE_PATH = ONDECK_HOME / "player_state.json"
+
+
+def _load_player_state() -> dict:
+    try:
+        data = json.loads(PLAYER_STATE_PATH.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_player_state(state: dict) -> None:
+    """Atomic, best-effort write — a failed save must never break playback."""
+    try:
+        ONDECK_HOME.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(ONDECK_HOME), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                json.dump(state, fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, PLAYER_STATE_PATH)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    except Exception:
+        pass
 
 # A2DP speaker control + audio routing. Disable on laptops/CI with
 # ONDECK_NO_BLUETOOTH=1 (then playback uses the ALSA default / override).
@@ -74,6 +107,19 @@ class Player:
         self._started_at: float | None = None
         self._volume = 80                # 0..100, applied as ffmpeg gain
         self.on_finish = None            # optional callable()
+        # Pick the volume + replay memory back up after a restart or outage.
+        saved = _load_player_state()
+        try:
+            self._volume = max(0, min(100, int(saved.get("volume", 80))))
+        except (TypeError, ValueError):
+            pass
+        last = saved.get("last_played")
+        if isinstance(last, dict) and last.get("file"):
+            self._last_played = last
+
+    def _persist(self) -> None:
+        _save_player_state({"volume": self._volume,
+                            "last_played": self._last_played})
 
     # -- queue / play -----------------------------------------------------
 
@@ -91,9 +137,10 @@ class Player:
             self._spawn(cmd)
             self._state = "playing"
             self._started_at = time.monotonic()
-            # Remembered across stop/fade/natural end so /replay can re-run
-            # the last walk-up ("the ump missed it — run it again").
+            # Remembered across stop/fade/natural end — and across restarts —
+            # so /replay can re-run the last walk-up ("run it again").
             self._last_played = dict(self._queued)
+            self._persist()
             return True
 
     def replay(self) -> bool:
@@ -217,6 +264,7 @@ class Player:
             self._volume = max(0, min(100, int(level)))
             # Volume change applies to the next play; we don't restart a
             # running clip to avoid an audible glitch mid-walk-up.
+            self._persist()
 
     # -- process management ----------------------------------------------
 

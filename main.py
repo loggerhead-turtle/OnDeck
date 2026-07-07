@@ -76,10 +76,16 @@ def main() -> None:
     music = MusicClient(config)
     lineup = LineupManager(config, music)
 
+    # Resume the game where it left off (crash / power-outage recovery):
+    # restore the saved batting position and re-cue that batter. Done before
+    # the deck is built so the first paint already shows the right hitter.
+    lineup.restore()
+
     # Stream Deck controller (built before the web thread so it's ready first).
     deck = StreamDeckController(config, lineup, music)
 
     # Auto-advance the batting order when a walk-up song ends on the Audio Pi.
+    # The same poller finishes the restore cue once the Audio Pi is back up.
     lineup.start_auto_advance()
 
     # Web portal on a background thread, wired to the live deck objects.
