@@ -3,23 +3,77 @@
 {% block content %}
 
 <div class="max-w-xl mx-auto">
-  <h1 class="text-2xl font-bold mb-2">🎙️ Record from your phone</h1>
+  <h1 class="text-2xl font-bold mb-2">🎙️ Record a song</h1>
   <p class="text-sm text-gray-400 mb-6">
-    Play the song out loud — from Spotify, Apple Music, YouTube, or another
-    phone — hold this device near the speaker and hit record. Echo cancellation
-    and noise suppression are turned off so music comes through clean.
+    Three ways to capture a song, cleanest first: upload a <b>screen
+    recording</b> made with the phone's own audio (no microphone involved),
+    capture a <b>browser tab's audio</b> on a computer, or record through the
+    <b>microphone</b> while the song plays out loud.
   </p>
 
+  <!-- Option 1: phone screen recording (device-internal audio) -->
+  <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 mb-5">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
+      📲 Best quality — use the phone's own audio
+    </h2>
+    <p class="text-xs text-gray-500 mb-3">
+      Phones can't share their internal audio with a web page directly, but
+      their built-in <b>screen recorder</b> captures it perfectly. Record the
+      screen while the song plays, then upload the video here — OnDeck keeps
+      just the audio and throws the video away.
+    </p>
+    <details class="mb-4 text-xs text-gray-400">
+      <summary class="cursor-pointer text-gray-300 py-1">How to screen-record with sound</summary>
+      <div class="mt-2 space-y-1 pl-1">
+        <p><b>iPhone:</b> Settings → Control Center → add “Screen Recording” once.
+           Then swipe into Control Center, tap ⏺, play the song in your music
+           app, stop, and the video lands in Photos.</p>
+        <p><b>Android 11+:</b> Quick Settings → Screen record → set sound to
+           <b>“Device audio”</b> (not microphone), play the song, stop.</p>
+        <p>Music-app audio is captured by the OS recorder even though the page
+           can't hear it — that's the trick.</p>
+      </div>
+    </details>
+    <div class="space-y-3">
+      <label class="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-600 hover:border-green-500 rounded-lg p-5 cursor-pointer transition-colors text-center">
+        <span class="text-2xl">🎬</span>
+        <span class="text-sm text-gray-300 font-medium" id="screen-file-label">Choose the screen-recording video</span>
+        <span class="text-xs text-gray-500">MP4 / MOV — only the audio is kept</span>
+        <input type="file" id="screen-file" accept="video/*,.mov,.mp4,.m4v,.webm,.mkv" class="hidden">
+      </label>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1.5 font-medium">Song name</label>
+        <input type="text" id="screen-title" placeholder="e.g. Thunderstruck"
+               class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-3 text-white text-base focus:outline-none focus:border-green-500">
+      </div>
+      {% if current_player %}
+      <label class="flex items-center gap-3 px-3 py-3 rounded-lg bg-gray-900 cursor-pointer">
+        <input type="checkbox" id="screen-assign" checked class="w-5 h-5 accent-green-500">
+        <span class="text-sm text-gray-200">Make this my walk-up song</span>
+      </label>
+      {% endif %}
+      <button type="button" id="screen-upload"
+              class="w-full py-3 rounded-lg bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white font-semibold text-base transition-colors">
+        ⬆ Extract the audio &amp; save
+      </button>
+      <p id="screen-status" class="text-sm text-center h-5"></p>
+    </div>
+  </div>
+
   <div id="insecure-warning" class="hidden mb-4 px-4 py-3 rounded-lg bg-amber-900/50 border border-amber-700/50 text-amber-200 text-sm">
-    ⚠ Microphone access needs a secure page (HTTPS). Open the <b>cloud portal</b>
-    on your phone to record — plain-HTTP Pi pages can't use the mic.
+    ⚠ Live microphone/tab capture needs a secure page (HTTPS) — open the
+    <b>cloud portal</b> for that. The <b>screen-recording upload below works
+    here too</b>.
   </div>
   <div id="unsupported-warning" class="hidden mb-4 px-4 py-3 rounded-lg bg-red-900/50 border border-red-700/50 text-red-200 text-sm">
-    ✕ This browser doesn't support audio recording. Try Safari (iPhone) or
-    Chrome (Android).
+    ✕ This browser can't record live audio — use the <b>screen-recording
+    upload</b> below instead.
   </div>
 
   <div class="bg-gray-800 rounded-xl border border-gray-700/50 p-6 mb-5">
+    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
+      🎙 Live capture — microphone<span id="live-mode-note"></span>
+    </h2>
     <!-- Big record control -->
     <div class="flex flex-col items-center gap-4">
       <button type="button" id="rec-toggle"
@@ -37,6 +91,11 @@
         Tap the red button to start. If the bar barely moves, move the phone
         closer to the speaker.
       </p>
+
+      <!-- Desktop Chrome/Edge only: capture a tab's audio digitally -->
+      <button type="button" id="tab-capture" class="hidden text-xs text-gray-400 hover:text-white underline underline-offset-2">
+        🖥 On this computer: capture a browser tab's audio instead (no microphone)
+      </button>
     </div>
   </div>
 
@@ -93,13 +152,16 @@
   let audioCtx = null, analyser = null, meterId = null, stream = null;
   let takeBlob = null, takeType = '';
 
+  // Live capture (mic / tab) needs a secure context + MediaRecorder. The
+  // screen-recording upload below has no such requirement — never disable it.
+  const liveOk = !!(navigator.mediaDevices && window.MediaRecorder);
   if (!window.isSecureContext) {
     document.getElementById('insecure-warning').classList.remove('hidden');
   }
-  if (!navigator.mediaDevices || !window.MediaRecorder) {
+  if (!liveOk) {
     document.getElementById('unsupported-warning').classList.remove('hidden');
     toggleBtn.disabled = true;
-    return;
+    toggleBtn.classList.add('opacity-40', 'cursor-not-allowed');
   }
 
   function pickMime() {
@@ -136,6 +198,21 @@
     levelBar.style.width = '0';
   }
 
+  function beginRecording(recStream, hintText) {
+    chunks = [];
+    recorder = new MediaRecorder(recStream, pickMime() ? { mimeType: pickMime() } : undefined);
+    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = onTakeReady;
+    recorder.start(250);
+    startTs = Date.now();
+    timerId = setInterval(() => { timeEl.textContent = fmt((Date.now() - startTs) / 1000); }, 250);
+    startMeter();
+    toggleBtn.textContent = '■';
+    toggleBtn.classList.add('animate-pulse');
+    hint.textContent = hintText;
+    review.classList.add('hidden');
+  }
+
   async function start() {
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -151,18 +228,28 @@
       alert('Microphone access was denied.\n\n' + err.message);
       return;
     }
-    chunks = [];
-    recorder = new MediaRecorder(stream, pickMime() ? { mimeType: pickMime() } : undefined);
-    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-    recorder.onstop = onTakeReady;
-    recorder.start(250);
-    startTs = Date.now();
-    timerId = setInterval(() => { timeEl.textContent = fmt((Date.now() - startTs) / 1000); }, 250);
-    startMeter();
-    toggleBtn.textContent = '■';
-    toggleBtn.classList.add('animate-pulse');
-    hint.textContent = 'Recording… tap again to stop.';
-    review.classList.add('hidden');
+    beginRecording(stream, 'Recording from the microphone… tap again to stop.');
+  }
+
+  // Desktop Chrome/Edge: capture a tab's audio digitally — no mic, no room
+  // noise. The user must pick a *tab* and tick "Also share tab audio".
+  async function startTabCapture() {
+    let display;
+    try {
+      display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    } catch (err) {
+      return; // user cancelled the picker
+    }
+    const audioTracks = display.getAudioTracks();
+    if (!audioTracks.length) {
+      display.getTracks().forEach(t => t.stop());
+      alert('No audio was shared.\n\nPick a browser TAB (not a window or ' +
+            'screen) and tick "Also share tab audio" in the picker.');
+      return;
+    }
+    stream = display;  // stop() ends every shared track
+    beginRecording(new MediaStream(audioTracks),
+                   'Capturing tab audio… play the song in that tab, then tap stop.');
   }
 
   function stop() {
@@ -184,8 +271,69 @@
     statusEl.textContent = '';
   }
 
-  toggleBtn.addEventListener('click', () => {
-    if (recorder && recorder.state === 'recording') stop(); else start();
+  if (liveOk) {
+    toggleBtn.addEventListener('click', () => {
+      if (recorder && recorder.state === 'recording') stop(); else start();
+    });
+  }
+
+  // Tab-audio capture is a desktop-browser feature (Chrome/Edge expose
+  // getDisplayMedia; phones either lack it or can't share audio).
+  const tabBtn = document.getElementById('tab-capture');
+  if (liveOk && navigator.mediaDevices.getDisplayMedia) {
+    tabBtn.classList.remove('hidden');
+    tabBtn.addEventListener('click', () => {
+      if (recorder && recorder.state === 'recording') stop();
+      startTabCapture();
+    });
+  }
+
+  // --- Screen-recording upload (phone-internal audio) ----------------------
+  const screenFile = document.getElementById('screen-file');
+  const screenTitle = document.getElementById('screen-title');
+  const screenBtn = document.getElementById('screen-upload');
+  const screenStatus = document.getElementById('screen-status');
+
+  screenFile.addEventListener('change', () => {
+    const f = screenFile.files[0];
+    if (!f) return;
+    document.getElementById('screen-file-label').textContent = f.name;
+    if (!screenTitle.value) {
+      screenTitle.value = f.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
+    }
+  });
+
+  screenBtn.addEventListener('click', async () => {
+    const f = screenFile.files[0];
+    if (!f) {
+      screenStatus.textContent = 'Choose the screen-recording video first.';
+      screenStatus.className = 'text-sm text-center h-5 text-yellow-400';
+      return;
+    }
+    const fd = new FormData();
+    fd.append('file', f);
+    fd.append('title', screenTitle.value.trim() || f.name.replace(/\.[^.]+$/, ''));
+    fd.append('source', 'screen');
+    const assign = document.getElementById('screen-assign');
+    if (assign && assign.checked) fd.append('assign', 'walkup');
+    screenBtn.disabled = true;
+    screenStatus.textContent = 'Uploading & extracting audio… (can take a minute)';
+    screenStatus.className = 'text-sm text-center h-5 text-gray-400';
+    try {
+      const r = await fetch('/ondeck/record/upload', { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'upload failed');
+      screenStatus.textContent = '✔ Audio saved to the library' +
+        (d.assigned === 'walkup' ? ' and set as your walk-up!' : '!');
+      screenStatus.className = 'text-sm text-center h-5 text-green-400';
+      setTimeout(() => {
+        window.location.href = {{ ('/ondeck/my-profile' if current_player else '/ondeck/library')|tojson }};
+      }, 1200);
+    } catch (err) {
+      screenStatus.textContent = '✕ ' + err.message;
+      screenStatus.className = 'text-sm text-center h-5 text-red-400';
+      screenBtn.disabled = false;
+    }
   });
 
   document.getElementById('discard-btn').addEventListener('click', () => {

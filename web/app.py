@@ -2068,6 +2068,52 @@ def _record_ext(content_type: str) -> str:
     return _RECORD_EXT.get(base, ".webm")
 
 
+# Containers a phone screen recording arrives in (video + device audio).
+_SCREEN_VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
+
+
+def _ffmpeg_exe() -> str:
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
+
+
+def _extract_audio_track(src: Path, dest: Path) -> str | None:
+    """Strip the audio track out of a screen-recording video into ``dest``.
+
+    Tries a lossless stream copy first (iOS/Android record AAC, which drops
+    straight into .m4a), then falls back to an AAC re-encode for anything
+    else. Returns an error message, or None on success.
+    """
+    import subprocess
+    last_err = "ffmpeg failed"
+    for codec_args in (["-c:a", "copy"], ["-c:a", "aac", "-b:a", "192k"]):
+        cmd = [_ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error",
+               "-i", str(src), "-vn", *codec_args, str(dest)]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        except FileNotFoundError:
+            return "ffmpeg not installed"
+        except subprocess.TimeoutExpired:
+            return "audio extraction timed out"
+        if r.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
+            return None
+        last_err = (r.stderr or "").strip()[-300:] or last_err
+        dest.unlink(missing_ok=True)
+    return last_err
+
+
+def _unique_music_name(stem: str, ext: str) -> str:
+    filename = f"rec_{stem}{ext}"
+    n = 1
+    while (MUSIC_DIR / filename).exists():
+        n += 1
+        filename = f"rec_{stem}_{n}{ext}"
+    return filename
+
+
 @app.get("/ondeck/record")
 def ondeck_record():
     return render_template("record.html")
@@ -2077,24 +2123,39 @@ def ondeck_record():
 def ondeck_record_upload():
     """Save a phone recording into the music library (AJAX, multipart).
 
-    Players may also assign the new recording as their own walk-up in the same
-    step; staff recordings just land in the library for assignment later.
+    Two sources: a live MediaRecorder take (mic or desktop tab-audio capture),
+    or — with ``source=screen`` — a phone *screen recording*, whose video is
+    dropped and only the device-audio track kept. Players may also assign the
+    result as their walk-up in the same step.
     """
     f = request.files.get("file")
     if not f:
         return jsonify(error="no audio received"), 400
     title = (request.form.get("title") or "").strip() or "Phone recording"
-    ext = _record_ext(f.mimetype or request.form.get("mime", ""))
-
-    # Derive a safe, unique filename from the title.
     stem = secure_filename(title)[:60] or "recording"
     MUSIC_DIR.mkdir(parents=True, exist_ok=True)
-    filename = f"rec_{stem}{ext}"
-    n = 1
-    while (MUSIC_DIR / filename).exists():
-        n += 1
-        filename = f"rec_{stem}_{n}{ext}"
-    f.save(str(MUSIC_DIR / filename))
+
+    if request.form.get("source") == "screen":
+        # Screen recording: validate the container, then keep only the audio.
+        suffix = Path(f.filename or "").suffix.lower()
+        if suffix not in _SCREEN_VIDEO_EXTS:
+            return jsonify(error="upload the screen-recording video "
+                                 "(MP4/MOV/WebM)"), 400
+        filename = _unique_music_name(stem, ".m4a")
+        # Temp video lives outside MUSIC_DIR so a mid-extraction Pi sync never
+        # picks it up.
+        tmp = ONDECK_HOME / f".extract-{uuid.uuid4().hex}{suffix}"
+        try:
+            f.save(str(tmp))
+            err = _extract_audio_track(tmp, MUSIC_DIR / filename)
+        finally:
+            tmp.unlink(missing_ok=True)
+        if err:
+            return jsonify(error=f"couldn't read the recording's audio: {err}"), 422
+    else:
+        ext = _record_ext(f.mimetype or request.form.get("mime", ""))
+        filename = _unique_music_name(stem, ext)
+        f.save(str(MUSIC_DIR / filename))
 
     song_id = cfg.add_song(filename, title)
 
