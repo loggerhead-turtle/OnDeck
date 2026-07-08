@@ -41,6 +41,7 @@ from config_manager import (
     ConfigManager, MUSIC_DIR, ONDECK_HOME, CONFIG_PATH, rating_summary,
     DECK_COLS, DECK_ROWS, DECK_FONTS, DECK_FONT_ORDER,
     DECK_DEFAULT_FONT, DECK_DEFAULT_FONT_SIZE,
+    DECK_PAGE_BG_HEX, DECK_DEFAULT_BG_HEX,
 )
 
 # ---------------------------------------------------------------------------
@@ -2056,6 +2057,74 @@ def _deck_song_choices() -> list[tuple[str, str]]:
     return sorted(out, key=lambda kv: kv[1].lower())
 
 
+# Celebration keys with the short labels the deck paints (mirrors
+# streamdeck_controller.CELEBRATIONS — that module needs deck hardware libs,
+# so it can't be imported here).
+_DECK_CELEBRATIONS = [("hit", "Hit"), ("extra_base", "XBH"),
+                      ("home_run", "HR"), ("strikeout", "K")]
+
+# One-line explanation of each built-in page's automatic deck behavior, shown
+# above the editor grid so it's clear these pages work without any custom keys.
+_DECK_PAGE_HELP = {
+    "home": "The deck paints one navigation key per page here automatically.",
+    "lineup": "The deck fills this page with your batting order automatically — "
+              "see the walk-up flow below.",
+    "players": "The deck paints every player here automatically (by jersey "
+               "number); a press plays their walk-up immediately. Players "
+               "without a walk-up song show dim.",
+    "celebrations": "The deck paints the four stingers (Hit / XBH / HR / K) "
+                    "here automatically; assign their songs on the Sounds page.",
+    "custom": None,
+}
+_DECK_SONG_PAGE_HELP = ("The deck paints one key per song assigned to this "
+                        "page on the Sounds page; a press plays it immediately.")
+
+
+def _deck_auto_preview(page_id: str, page: dict) -> dict[str, dict]:
+    """What the deck's built-in auto-layout paints on a page with no custom keys.
+
+    Mirrors StreamDeckController's fallback rendering (_render_*_page) so the
+    editor can show the coach what this page really looks like on the deck.
+    Returns {content_slot_index: {label, color}}.
+    """
+    out: dict[str, dict] = {}
+    slots = cfg.DECK_CONTENT_SLOTS
+
+    def put(i: int, label: str, color: str) -> None:
+        if i < len(slots):
+            out[str(slots[i])] = {"label": label, "color": color}
+
+    kind = page.get("kind", page_id)
+    if kind == "home":
+        for i, pid in enumerate(cfg.get_page_order()):
+            put(i, (cfg.pages[pid].get("name", pid) or "")[:10],
+                DECK_PAGE_BG_HEX.get(pid, DECK_DEFAULT_BG_HEX))
+    elif kind == "lineup":
+        lineup = cfg.lineup
+        filled = [i for i, pid in enumerate(lineup) if pid]
+        for i, slot_idx in enumerate(filled):
+            p = cfg.players.get(lineup[slot_idx], {})
+            first = (p.get("first_name", "") or "")[:8]
+            put(i, f"{i + 1}. #{p.get('jersey', '')}\n{first}",
+                DECK_PAGE_BG_HEX["lineup"])
+    elif kind == "players":
+        for i, (_pid, p) in enumerate(cfg.players_by_jersey()):
+            first = (p.get("first_name", "") or "")[:8]
+            has_walkup = bool(p.get("walkup_song_id"))
+            put(i, f"#{p.get('jersey', '')}\n{first}",
+                DECK_PAGE_BG_HEX["players"] if has_walkup else "#232323")
+    elif kind == "celebrations":
+        for i, (key, label) in enumerate(_DECK_CELEBRATIONS):
+            configured = bool(cfg.get_celebration_song(key))
+            put(i, label,
+                DECK_PAGE_BG_HEX["celebrations"] if configured else "#231419")
+    elif kind != "custom":
+        for i, (_sid, song) in enumerate(cfg.get_songs_for_page(page_id)):
+            put(i, (song.get("display_name", "") or "")[:14],
+                DECK_PAGE_BG_HEX.get(page_id, DECK_DEFAULT_BG_HEX))
+    return out
+
+
 @app.get("/ondeck/deck")
 def ondeck_deck():
     _check_auth(["admin", "editor"])
@@ -2081,12 +2150,16 @@ def ondeck_deck():
          "css": DECK_FONTS[key]["css"], "weight": DECK_FONTS[key]["weight"]}
         for key in DECK_FONT_ORDER
     ]
+    page_kind = page.get("kind", page_id)
     return render_template(
         "deck_editor.html",
         pages=[(pid, cfg.pages[pid]) for pid in order],
         page_id=page_id,
         page=page,
         page_no=page_no,
+        page_kind=page_kind,
+        page_help=_DECK_PAGE_HELP.get(page_kind, _DECK_SONG_PAGE_HELP),
+        auto_preview=_deck_auto_preview(page_id, page),
         slots=page.get("slots", {}),
         content_slots=cfg.DECK_CONTENT_SLOTS,
         fixed_labels=_DECK_FIXED_LABELS,

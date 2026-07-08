@@ -147,6 +147,22 @@ _DECK_CONTENT_SLOTS = [i for i in range(32) if i not in _DECK_FIXED_SLOTS]
 DECK_COLS = 8
 DECK_ROWS = 4
 
+# Per-page key background tint, keyed by the built-in page's stable id. Shared
+# by the deck runtime (StreamDeckController.PAGE_BG) and the web editor's
+# auto-layout preview so both always paint the same colors.
+DECK_PAGE_BG_HEX: dict[str, str] = {
+    "home":           "#1e1e1e",
+    "lineup":         "#143c5a",
+    "players":        "#145028",
+    "hype":           "#5a3214",
+    "mid_inning":     "#3c3c14",
+    "mound_visit":    "#501e50",
+    "dead_ball":      "#323232",
+    "celebrations":   "#641428",
+    "pitcher_warmup": "#145050",
+}
+DECK_DEFAULT_BG_HEX = "#282828"
+
 # Button fonts offered in the deck editor. ``file`` is a DejaVu face shipped on
 # Raspberry Pi OS (fonts-dejavu); ``css``/``weight`` drive the browser preview.
 DECK_FONTS: dict[str, dict[str, Any]] = {

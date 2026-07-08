@@ -39,8 +39,18 @@
             class="w-full py-2.5 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-semibold transition-colors">
       Save Lineup
     </button>
-    <p class="text-xs text-gray-500 mt-2 text-center">
-      The Stream Deck Lineup page mirrors this order. Press a batter to cue, then Play.
+  </div>
+
+  <div class="mt-4 max-w-2xl rounded-xl border border-sky-800/60 bg-sky-950/40 p-4 text-sm text-sky-100">
+    <div class="font-semibold text-sky-200 mb-1">⚾ How this order runs on the Stream Deck</div>
+    <p class="text-sky-100/90">
+      The deck's <b>Lineup</b> page mirrors this order automatically. Press a batter's key to
+      <b>cue</b> their walk-up (it loads silently), press <b>▶ Play</b> to run it — and when the
+      song ends the deck <b>advances to the next spot on its own</b> and cues that batter:
+      spot 1, Play, spot 2, Play… wrapping back to the top. Other sounds (hype, celebrations)
+      never advance the order. You can also edit this order from the deck itself by adding an
+      <i>Edit lineup</i> key in the
+      <a href="{{ url_for('ondeck_deck') }}" class="underline hover:text-white">Stream Deck editor</a>.
     </p>
   </div>
 </form>

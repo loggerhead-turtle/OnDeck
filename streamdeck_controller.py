@@ -40,8 +40,10 @@ except ImportError:                       # dev/Pi checkout: sibling repo
 
 from config_manager import (
     ConfigManager,
+    DECK_DEFAULT_BG_HEX,
     DECK_DEFAULT_FONT,
     DECK_DEFAULT_FONT_SIZE,
+    DECK_PAGE_BG_HEX,
 )
 from lineup_manager import LineupManager
 from music_client import MusicClient
@@ -65,18 +67,12 @@ class StreamDeckController(BaseDeckController):
     PAGE_SHORTCUT_BTNS = tuple(range(27, 32))
     EXTRA_FIXED_BTNS = (BTN_PLAY, BTN_STOP, BTN_FADE)
     HOME_PAGE_ID = "home"
-    DEFAULT_BG = (40, 40, 40)
-    # Per-page background tint, keyed by the page's stable id.
+    DEFAULT_BG = tuple(int(DECK_DEFAULT_BG_HEX[i:i + 2], 16) for i in (1, 3, 5))
+    # Per-page background tint, keyed by the page's stable id — shared with the
+    # web editor's auto-layout preview (config_manager.DECK_PAGE_BG_HEX).
     PAGE_BG = {
-        "home":           (30, 30, 30),
-        "lineup":         (20, 60, 90),
-        "players":        (20, 80, 40),
-        "hype":           (90, 50, 20),
-        "mid_inning":     (60, 60, 20),
-        "mound_visit":    (80, 30, 80),
-        "dead_ball":      (50, 50, 50),
-        "celebrations":   (100, 20, 40),
-        "pitcher_warmup": (20, 80, 80),
+        pid: tuple(int(hx[i:i + 2], 16) for i in (1, 3, 5))
+        for pid, hx in DECK_PAGE_BG_HEX.items()
     }
 
     def __init__(self, config: ConfigManager, lineup: LineupManager,

@@ -55,6 +55,43 @@
       text and the address disappears.
     </p>
 
+    {% if page_kind == 'lineup' %}
+    <!-- The walk-up flow is built into the deck runtime (lineup_manager.py);
+         surface it here so the coach knows it exists without reading code. -->
+    <div class="mb-4 rounded-xl border border-sky-800/60 bg-sky-950/40 p-4 text-sm text-sky-100">
+      <div class="font-semibold text-sky-200 mb-2">⚾ Built in: the walk-up flow on this page</div>
+      <ol class="list-decimal list-inside space-y-1 text-sky-100/90">
+        <li>The deck fills this page with your batting order automatically
+            (set it on the <a href="{{ url_for('ondeck_lineup') }}" class="underline hover:text-white">Lineup</a> page) — one key per filled spot.</li>
+        <li>Pressing a batter's key <b>cues</b> their walk-up — announcement + song load silently, ready to go.</li>
+        <li>The always-on <b>▶ Play</b> key (bottom left of the deck) runs the cued walk-up.</li>
+        <li>When the song ends, the deck <b>advances to the next spot by itself</b> and cues that
+            batter — spot 1, Play, spot 2, Play… wrapping back to the top. The current batter's key glows yellow.</li>
+      </ol>
+      <p class="text-xs text-sky-200/70 mt-2">
+        Playing anything else (Hype, Celebrations, a one-off player) never advances the order.
+        To change the batting order from the deck itself, add an <b>Edit lineup (toggle)</b> key
+        plus <b>Lineup spot</b> keys: switch Edit Lineup on, tap a spot, then tap a player to fill it.
+      </p>
+    </div>
+    {% elif page_help %}
+    <div class="mb-4 rounded-xl border border-gray-700/60 bg-gray-900/50 px-4 py-3 text-sm text-gray-300">
+      {{ page_help }}
+    </div>
+    {% endif %}
+
+    {% if page_kind != 'custom' %}
+    <p id="auto-note" class="hidden text-xs text-sky-300/80 mb-3">
+      Dashed keys below are the <b>automatic layout</b> — the deck paints them on its own.
+      Saving any custom key takes over the whole page (the automatic layout turns off);
+      <b>Clear page</b> brings it back.
+    </p>
+    <p id="custom-note" class="hidden text-xs text-amber-300/80 mb-3">
+      Custom layout in use — this page's automatic layout is off.
+      <b>Clear page</b> restores it.
+    </p>
+    {% endif %}
+
     <div id="deck-grid" class="grid grid-cols-8 gap-1.5"></div>
 
     <!-- Bulk fill / clear -->
@@ -202,11 +239,21 @@
           <select id="sb-nav" class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm"></select>
         </div>
 
+        <div id="p-edit_lineup" class="sb-param hidden">
+          <p class="text-[11px] text-gray-500">
+            Toggles lineup-editing mode on the deck (the key glows yellow while on).
+            While on, tap a <b>Lineup spot</b> key, then tap a player to fill that
+            batting-order position — no computer needed.
+          </p>
+        </div>
+
         <div id="p-lineup_slot" class="sb-param hidden">
           <label class="block text-xs text-gray-400 mb-1">Batting-order spot</label>
           <input id="sb-position" type="number" min="1" max="{{ lineup_size }}" step="1" value="1"
                  class="w-full px-2 py-1.5 rounded-lg bg-gray-700 border border-gray-600 text-white text-sm">
           <p class="text-[11px] text-gray-500 mt-1">
+            Normal press: cues this spot's batter, ready for ▶ Play — and when the
+            song ends the deck auto-advances to the next spot.
             With Edit&nbsp;Lineup on, tapping this jumps to the players page to fill the spot.
           </p>
         </div>
@@ -236,6 +283,8 @@ const DECK = {
   contentSlots: {{ content_slots|tojson }},
   fixedLabels: {{ fixed_labels|tojson }},
   slots: {{ slots|tojson }},
+  autoPreview: {{ auto_preview|tojson }},
+  pageKind: {{ page_kind|tojson }},
   players: {{ players|tojson }},
   songs: {{ songs|tojson }},
   celebrations: {{ celebrations|tojson }},
@@ -283,9 +332,20 @@ function defaultLabel(slot) {
   return '';   // text-only: falls back to its own label
 }
 
+// The deck only uses its built-in auto-layout while a page has NO custom keys
+// (mirrors the runtime's `if page.slots` check — cleared keys are dropped, so
+// "no data anywhere" is the same test).
+function autoLayoutActive() {
+  return !Object.values(DECK.slots).some(hasData);
+}
+
 function renderGrid() {
   const grid = $('deck-grid');
   grid.innerHTML = '';
+  const showAuto = autoLayoutActive();
+  const note = $('auto-note'), customNote = $('custom-note');
+  if (note) note.classList.toggle('hidden', !(showAuto && Object.keys(DECK.autoPreview).length));
+  if (customNote) customNote.classList.toggle('hidden', showAuto);
   for (let idx = 0; idx < 32; idx++) {
     const cell = document.createElement('div');
     cell.className = 'aspect-square rounded-md flex items-center justify-center text-center px-0.5 leading-tight overflow-hidden select-none';
@@ -312,6 +372,17 @@ function renderGrid() {
       cell.style.whiteSpace = 'pre-line';
       cell.classList.add('border-green-600/60');
       cell.textContent = (slot.label || defaultLabel(slot));
+    } else if (showAuto && DECK.autoPreview[String(idx)]) {
+      // Preview of the deck's built-in auto-layout for this key.
+      const auto = DECK.autoPreview[String(idx)];
+      cell.style.background = auto.color;
+      cell.style.color = '#e5e7eb';
+      cell.style.fontSize = '11px';
+      cell.style.fontWeight = 700;
+      cell.style.whiteSpace = 'pre-line';
+      cell.classList.add('border-dashed', 'border-sky-500/60');
+      cell.textContent = auto.label;
+      cell.title = 'Placed automatically by the deck — click to replace it with a custom key';
     } else {
       cell.style.background = BLANK_BG;
       cell.style.color = BLANK_FG;
@@ -331,8 +402,9 @@ const ACTION_PARAMS = {
   celebration: ['p-celebration'],
   nav: ['p-nav'],
   lineup_slot: ['p-lineup_slot'],
+  edit_lineup: ['p-edit_lineup'],
   fade: ['p-fade'],
-  text: [], edit_lineup: [], play: [], stop: [], blank: [],
+  text: [], play: [], stop: [], blank: [],
 };
 
 function showParams(action) {
