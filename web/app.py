@@ -167,6 +167,190 @@ def _purge_auth_users_by_username(username: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Play-Call shared login (SSO)
+# ---------------------------------------------------------------------------
+# Players and coaches use ONE account for Play-Call and OnDeck:
+#   1. One-click: Play-Call's home page links here via /sso/playcall with a
+#      short-lived HMAC token (shared secret env ONDECK_SSO_SECRET — set the
+#      SAME value on both apps).
+#   2. Same credentials: the login form also accepts a Play-Call
+#      email + password, verified against the shared Supabase user pool
+#      (SUPABASE_URL + SUPABASE_ANON_KEY), with the member's role fetched
+#      from Play-Call (PLAYCALL_URL). All four env vars are optional — with
+#      none set, OnDeck auth behaves exactly as before.
+
+_PC_STAFF_ROLES = {"owner", "coach", "assistant_coach", "manager",
+                   "scouting_coordinator", "offense_spotter"}
+_PC_ROLE_RANK = ["owner", "manager", "coach", "assistant_coach",
+                 "scouting_coordinator", "offense_spotter", "player"]
+
+
+def _verify_sso_token(token: str, secret: str) -> dict | None:
+    """Verify a Play-Call hand-off token: base64url(JSON).hmac_sha256_hex,
+    constant-time signature check, iat/exp enforced. None on any problem."""
+    try:
+        raw, sig = token.rsplit(".", 1)
+        import hmac as _hmac
+        want = _hmac.new(secret.encode("utf-8"), raw.encode("ascii"),
+                         hashlib.sha256).hexdigest()
+        if not _hmac.compare_digest(sig, want):
+            return None
+        pad = "=" * (-len(raw) % 4)
+        body = json.loads(base64.urlsafe_b64decode(raw + pad))
+        if not isinstance(body, dict):
+            return None
+        if int(body.get("exp", 0)) < time.time():
+            return None
+        return body
+    except Exception:
+        return None
+
+
+def _sso_establish_session(email: str, name: str, pc_role: str):
+    """Start an OnDeck session for a verified Play-Call identity.
+
+    Staff (owner/coach/...) get an auth.json account (owner → admin, other
+    staff → editor) created on first arrival with an unusable random password
+    — they sign in through Play-Call, not with a local password. Players are
+    matched to a roster entry by username==email, then by an unambiguous
+    full-name match (which links the entry to the email), else a new player
+    entry is created for them.
+    """
+    email = (email or "").strip().lower()
+    name = " ".join((name or "").split())
+    if not email:
+        flash("Play-Call didn't send an email address — sign in below.", "error")
+        return redirect(url_for("ondeck_login"))
+
+    if pc_role in _PC_STAFF_ROLES:
+        user = _find_user(email)
+        if user is None:
+            user = {"id": str(uuid.uuid4()),
+                    "username": email,
+                    "password_hash": generate_password_hash(uuid.uuid4().hex),
+                    "role": "admin" if pc_role == "owner" else "editor"}
+            users = _load_users()
+            users.append(user)
+            _save_users(users)
+        if user.get("role") != "player":
+            session.permanent = True
+            session["user_id"] = user["id"]
+            session["role"] = user["role"]
+            session["username"] = user["username"]
+            return redirect(url_for("ondeck_settings_hub"))
+        # A legacy player-role auth row under this email — fall through and
+        # treat them as the player they are.
+
+    # Player: match an existing roster entry, else create one.
+    pid_match = None
+    for pid, player in cfg.players.items():
+        if (player.get("player_username") or "").lower() == email:
+            pid_match = pid
+            break
+    if pid_match is None and name:
+        hits = [pid for pid, pl in cfg.players.items()
+                if " ".join(f"{pl.get('first_name') or ''} {pl.get('last_name') or ''}".split()).lower()
+                   == name.lower()]
+        if len(hits) == 1:
+            # Unambiguous name match — link this roster entry to the email so
+            # every future sign-in is a direct match.
+            pid_match = hits[0]
+            with cfg._lock:
+                cfg.players[pid_match]["player_username"] = email
+                cfg.save()
+    if pid_match is None:
+        first, _, last = name.rpartition(" ")
+        if not last:
+            last = name or email
+        pid_match = uuid.uuid4().hex
+        with cfg._lock:
+            cfg.players[pid_match] = {
+                "jersey": None,
+                "first_name": first,
+                "last_name": last,
+                "player_username": email,
+                "player_password_hash": None,
+                "team_ids": [],
+                "announcement_file": None,
+                "announcement_text": "",
+                "announcement_start_ms": 0,
+                "announcement_end_ms": None,
+                "walkup_song_id": None,
+                "music_cue_ms": 0,
+                "pitching_warmup_song_id": None,
+                "midgame_song_id": None,
+                "walkup_songs": [],
+                "warmup_songs": [],
+            }
+            cfg.save()
+
+    session.permanent = True
+    session["role"] = "player"
+    session["player_id"] = pid_match
+    return redirect(url_for("ondeck_my_profile"))
+
+
+def _playcall_password_login(username: str, password: str) -> dict | None:
+    """Try the login form's credentials against the shared Supabase user pool
+    (the same accounts as playsigns.net). Returns {email, name, role} on
+    success, None otherwise. Role comes from Play-Call's /api/sso/whoami —
+    if that's unreachable the identity is still trusted (Supabase verified the
+    password) but drops to least-privilege 'player'."""
+    sb_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    anon = os.environ.get("SUPABASE_ANON_KEY", "")
+    if not (sb_url and anon and "@" in username):
+        return None
+    try:
+        r = rq.post(sb_url + "/auth/v1/token?grant_type=password",
+                    json={"email": username, "password": password},
+                    headers={"apikey": anon}, timeout=10)
+        if r.status_code != 200:
+            return None
+        tok = r.json().get("access_token")
+    except Exception:
+        return None
+    if not tok:
+        return None
+    out = {"email": username.lower(), "name": "", "role": "player"}
+    pc_url = os.environ.get("PLAYCALL_URL", "").rstrip("/")
+    if pc_url:
+        try:
+            r = rq.get(pc_url + "/api/sso/whoami",
+                       headers={"Authorization": "Bearer " + tok}, timeout=10)
+            d = r.json()
+            if d.get("ok"):
+                out["name"] = d.get("name") or ""
+                teams = d.get("teams") or []
+
+                def _rank(t):
+                    role = t.get("role")
+                    return (_PC_ROLE_RANK.index(role)
+                            if role in _PC_ROLE_RANK else len(_PC_ROLE_RANK))
+
+                # OnDeck is baseball — prefer the member's baseball-team role.
+                pool = [t for t in teams if t.get("sport") == "baseball"] or teams
+                if pool:
+                    out["role"] = sorted(pool, key=_rank)[0].get("role") or "player"
+        except Exception:
+            pass
+    return out
+
+
+@app.get("/sso/playcall")
+def ondeck_sso_playcall():
+    secret = os.environ.get("ONDECK_SSO_SECRET", "")
+    if not secret:
+        flash("Play-Call sign-in isn't configured on this server.", "error")
+        return redirect(url_for("ondeck_login"))
+    body = _verify_sso_token(request.args.get("token", ""), secret)
+    if body is None:
+        flash("That Play-Call sign-in link expired — jump over from Play-Call again.", "error")
+        return redirect(url_for("ondeck_login"))
+    return _sso_establish_session(body.get("email"), body.get("name"),
+                                  body.get("role", "player"))
+
+
+# ---------------------------------------------------------------------------
 # Notifications — coach-facing activity log of player-made changes
 # ---------------------------------------------------------------------------
 
@@ -256,6 +440,7 @@ def _check_auth(allowed_roles=None):
     always_ok = {
         "public_home", "static",
         "ondeck_login", "ondeck_login_post", "ondeck_logout",
+        "ondeck_sso_playcall",
         "ondeck_setup", "ondeck_setup_post", "player_signup", "player_signup_post",
         # Pi-only cloud-link page — reachable before the device has any account
         # (these endpoints exist only on the deck Pi, registered by main.py).
@@ -447,7 +632,9 @@ def ondeck_login():
         return redirect(url_for("ondeck_settings_hub"))
     if session.get("role") == "player":
         return redirect(url_for("ondeck_my_profile"))
-    return render_template("login.html")
+    playcall_url = (os.environ.get("PLAYCALL_URL", "").rstrip("/")
+                    if os.environ.get("ONDECK_SSO_SECRET") else "")
+    return render_template("login.html", playcall_url=playcall_url)
 
 
 @app.post("/ondeck/login")
@@ -517,6 +704,13 @@ def ondeck_login_post():
         session["role"] = "player"
         session["player_id"] = legacy_player_id
         return redirect(url_for("ondeck_my_profile"))
+
+    # Shared login: the same email + password the member uses on Play-Call
+    # works here too (both apps share the Supabase user pool).
+    pc = _playcall_password_login(username, password)
+    if pc is not None:
+        return _sso_establish_session(pc["email"], pc.get("name"),
+                                      pc.get("role", "player"))
 
     flash("Incorrect username or password.", "error")
     return redirect(url_for("ondeck_login"))
