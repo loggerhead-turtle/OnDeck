@@ -298,8 +298,13 @@ def _playcall_password_login(username: str, password: str) -> dict | None:
     password) but drops to least-privilege 'player'."""
     sb_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     anon = os.environ.get("SUPABASE_ANON_KEY", "")
-    if not (sb_url and anon and "@" in username):
+    if not (sb_url and anon):
         return None
+    # Coach-created Play-Call accounts use a bare username backed by a
+    # synthetic address — expand it the same way Play-Call's login does.
+    if "@" not in username:
+        username = username + "@" + os.environ.get(
+            "PLAYCALL_USERNAME_DOMAIN", "players.playsigns.net")
     try:
         r = rq.post(sb_url + "/auth/v1/token?grant_type=password",
                     json={"email": username, "password": password},
