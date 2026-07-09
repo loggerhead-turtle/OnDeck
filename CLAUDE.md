@@ -48,6 +48,13 @@ The cloud instance is the source of truth. The Pi polls `/sync/*` endpoints ever
 | `ONDECK_MODE` | `cloud` | Enables cloud mode (hides Audio Pi transport strip, runs yt-dlp locally) |
 | `ONDECK_SECRET` | auto-generated | Flask session secret |
 | `ONDECK_SYNC_TOKEN` | auto-generated | Bearer token for `/sync/*` API endpoints |
+| `ONDECK_SSO_SECRET` | shared with Play-Call | HMAC secret for `/sso/playcall` hand-off tokens (set the SAME value on the Play-Call service) |
+| `PLAYCALL_URL` | `https://playsigns.net` | Play-Call base URL — enables the "Sign in with Play-Call" button and role lookup via `/api/sso/whoami` |
+| `SUPABASE_URL` | same as Play-Call's | Shared Supabase user pool — lets the login form accept Play-Call email+password |
+| `SUPABASE_ANON_KEY` | same as Play-Call's | Anon key for the Supabase password check |
+
+All four SSO vars are optional — with none set, OnDeck auth behaves exactly as
+before. See "Play-Call shared login (SSO)" in `web/app.py` for the flows.
 
 On the Pi, `ONDECK_HOME` defaults to `~/ondeck`. Never hardcode Pi username — always use `Path.home()`.
 

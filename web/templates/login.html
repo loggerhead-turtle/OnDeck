@@ -65,6 +65,23 @@
       </form>
     </div>
 
+    {% if playcall_url %}
+    <div class="mt-4">
+      <div class="flex items-center gap-3 my-3">
+        <div class="flex-1 h-px bg-gray-800"></div>
+        <span class="text-xs text-gray-600">or</span>
+        <div class="flex-1 h-px bg-gray-800"></div>
+      </div>
+      <a href="{{ playcall_url }}/sso/ondeck"
+         class="block w-full py-2.5 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white font-semibold text-sm text-center transition-colors">
+        ⚾ Sign in with Play-Call
+      </a>
+      <p class="text-xs text-gray-600 text-center mt-2">
+        Your Play-Call email &amp; password also work in the form above.
+      </p>
+    </div>
+    {% endif %}
+
     <p class="text-xs text-gray-600 text-center mt-5">
       Players use the username and password set by your coach.
     </p>
