@@ -691,17 +691,52 @@ class ConfigManager:
             return
         with self._lock:
             slots = self.pages[page_id].setdefault("slots", {})
-            kind = (slot or {}).get("type")
-            label = ((slot or {}).get("label") or "").strip()
-            # A key with no action but some text is a "text holder": keep it
-            # (as type "text") so it displays without doing anything on press.
-            if slot and kind in (None, "", "blank") and label:
-                slot = {**slot, "type": "text"}
-                kind = "text"
-            if not slot or (kind in (None, "", "blank") and not label):
-                slots.pop(str(idx), None)
-            else:
-                slots[str(idx)] = self._clean_slot(slot)
+            self._store_slot(slots, idx, slot)
+            self.save()
+
+    def _store_slot(self, slots: dict, idx: int, slot: dict | None) -> None:
+        """Apply one slot assignment into a ``slots`` map (no save).
+
+        The caller holds the lock, persists, and has already excluded fixed
+        keys. A None/blank type with no text clears the key; a key with no
+        action but some text becomes a "text holder" (type ``text``).
+        """
+        kind = (slot or {}).get("type")
+        label = ((slot or {}).get("label") or "").strip()
+        # A key with no action but some text is a "text holder": keep it
+        # (as type "text") so it displays without doing anything on press.
+        if slot and kind in (None, "", "blank") and label:
+            slot = {**slot, "type": "text"}
+            kind = "text"
+        if not slot or (kind in (None, "", "blank") and not label):
+            slots.pop(str(idx), None)
+        else:
+            slots[str(idx)] = self._clean_slot(slot)
+
+    def set_page_slots(self, page_id: str, slots_in: dict, replace: bool = False) -> None:
+        """Apply many slot assignments to a page in one atomic save.
+
+        ``slots_in`` maps a content-key index (int or str) to a slot dict (or
+        None to clear that key). Fixed nav/transport keys are ignored. With
+        ``replace=True`` the page's existing slots are cleared first (a
+        whole-page paste); otherwise the assignments are merged over what's
+        there (overwriting only the listed keys). Used by the editor's
+        multi-button copy/cut/paste/delete.
+        """
+        if page_id not in self.pages:
+            return
+        with self._lock:
+            if replace:
+                self.pages[page_id]["slots"] = {}
+            slots = self.pages[page_id].setdefault("slots", {})
+            for raw_idx, slot in (slots_in or {}).items():
+                try:
+                    idx = int(raw_idx)
+                except (TypeError, ValueError):
+                    continue
+                if idx in self.DECK_FIXED_SLOTS:
+                    continue
+                self._store_slot(slots, idx, slot)
             self.save()
 
     def set_deck_editor_mode(self, mode: str) -> None:

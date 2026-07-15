@@ -2341,6 +2341,44 @@ def ondeck_deck_slot(page_id: str):
     return redirect(url_for("ondeck_deck", page=page_id))
 
 
+@app.post("/ondeck/deck/<page_id>/slots")
+def ondeck_deck_slots(page_id: str):
+    """Save many content keys at once (multi-button paste / cut / delete).
+
+    Body: {"slots": {"<idx>": {type, ref, label, color, ...}}, "replace": bool}.
+    A slot of null (or blank type) clears that key. Same field whitelist as the
+    single-slot route; the bulk write is one atomic save via set_page_slots.
+    """
+    _check_auth(["admin", "editor"])
+    if page_id not in cfg.pages:
+        abort(404)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        abort(400)
+    incoming = data.get("slots")
+    if not isinstance(incoming, dict):
+        abort(400)
+    cleaned: dict[str, dict | None] = {}
+    for idx, slot in incoming.items():
+        if not isinstance(slot, dict):
+            cleaned[str(idx)] = None
+            continue
+        cleaned[str(idx)] = {
+            "type": (slot.get("type") or "blank").strip(),
+            "ref": (slot.get("ref") or "").strip(),
+            "label": (slot.get("label") or "").strip(),
+            "color": (slot.get("color") or "").strip(),
+            "text_color": (slot.get("text_color") or "").strip(),
+            "font": (slot.get("font") or "").strip(),
+            "font_size": slot.get("font_size"),
+            "mode": (slot.get("mode") or "").strip(),
+            "fade_out": bool(slot.get("fade_out")),
+            "fade_ms": slot.get("fade_ms"),
+        }
+    cfg.set_page_slots(page_id, cleaned, replace=bool(data.get("replace")))
+    return jsonify(ok=True)
+
+
 @app.post("/ondeck/deck/<page_id>/fill-players")
 def ondeck_deck_fill_players(page_id: str):
     _check_auth(["admin", "editor"])

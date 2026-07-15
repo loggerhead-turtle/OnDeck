@@ -57,6 +57,24 @@
 
     <div id="deck-grid" class="grid grid-cols-8 gap-1.5"></div>
 
+    <!-- Multi-select toolbar: copy / cut / paste / delete across pages -->
+    <div class="flex flex-wrap items-center gap-2 mt-4">
+      <span id="ms-count" class="text-xs text-gray-400 mr-1">No keys selected</span>
+      <button type="button" id="ms-copy"
+              class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">Copy</button>
+      <button type="button" id="ms-cut"
+              class="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">Cut</button>
+      <button type="button" id="ms-paste"
+              class="px-3 py-1.5 rounded-lg bg-green-700 hover:bg-green-600 text-white text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">Paste</button>
+      <button type="button" id="ms-delete"
+              class="px-3 py-1.5 rounded-lg bg-red-800/70 hover:bg-red-700 text-red-100 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">Delete</button>
+      <span id="ms-status" class="text-xs text-green-400 ml-1 h-4"></span>
+    </div>
+    <p class="text-[11px] text-gray-500 mt-1.5">
+      ⌘/Ctrl-click keys to multi-select · Shift-click for a range · then Copy and
+      Paste onto another page (the clipboard follows you between pages).
+    </p>
+
     <!-- Bulk fill / clear -->
     <div class="flex flex-wrap gap-2 mt-5">
       <form method="POST" action="{{ url_for('ondeck_deck_fill_players', page_id=page_id, order='jersey') }}">
@@ -244,14 +262,22 @@ const DECK = {
   defaultFont: {{ default_font|tojson }},
   defaultFontSize: {{ default_font_size|tojson }},
   saveUrl: {{ url_for('ondeck_deck_slot', page_id=page_id)|tojson }},
+  slotsUrl: {{ url_for('ondeck_deck_slots', page_id=page_id)|tojson }},
   modeUrl: {{ url_for('ondeck_deck_editor_mode')|tojson }},
 };
+
+// Multi-button clipboard lives in localStorage so it survives navigating
+// between page tabs (each page is a separate full-page load).
+const CLIP_KEY = 'ondeck.deck.clipboard';
 
 const DEFAULT_BG = '#374151', DEFAULT_FG = '#ffffff';
 const BLANK_BG = '#1c1c1e', BLANK_FG = '#7a7a80';
 const FIXED = new Set(Object.keys(DECK.fixedLabels).map(Number));
 let editorMode = {{ editor_mode|tojson }};
-let selected = null;
+let selected = null;          // the single key open in the edit panel
+let multi = new Set();        // indices in the multi-button selection
+let anchor = null;            // last-clicked key, for Shift range-select
+let msgTimer = null;
 
 const $ = (id) => document.getElementById(id);
 const fontCss = (key) => (DECK.fonts.find(f => f.id === key) || DECK.fonts[0] || {});
@@ -320,7 +346,8 @@ function renderGrid() {
       cell.textContent = coord(idx);
     }
     if (idx === selected) cell.classList.add('ring-2', 'ring-green-400');
-    cell.onclick = () => selectSlot(idx);
+    if (multi.has(idx)) cell.classList.add('ring-2', 'ring-sky-400');
+    cell.onclick = (e) => onCellClick(idx, e);
     grid.appendChild(cell);
   }
 }
@@ -361,6 +388,7 @@ function closePanel() {
   $('sb-empty').classList.remove('hidden');
   if (editorMode === 'modal') $('panel-wrap').classList.add('panel-hidden');
   renderGrid();
+  if (typeof updateToolbar === 'function') updateToolbar();
 }
 
 function selectSlot(idx) {
@@ -477,6 +505,166 @@ function initFonts() {
   $('sb-font').innerHTML = DECK.fonts.map(f => `<option value="${f.id}">${f.label}</option>`).join('');
 }
 
+// -- Multi-select + clipboard --------------------------------------------
+
+// Editable content-key indices in grid order (fixed nav/transport excluded).
+function contentIndices() {
+  const out = [];
+  for (let i = 0; i < 32; i++) if (!FIXED.has(i)) out.push(i);
+  return out;
+}
+
+// Close the single-key edit panel without touching the multi-selection.
+function deselectSingle() {
+  selected = null;
+  $('sb-editor').classList.add('hidden');
+  $('sb-empty').classList.remove('hidden');
+  if (editorMode === 'modal') $('panel-wrap').classList.add('panel-hidden');
+}
+
+function onCellClick(idx, e) {
+  // ⌘/Ctrl-click toggles a key in the multi-selection (no edit panel).
+  if (e && (e.metaKey || e.ctrlKey)) {
+    deselectSingle();
+    if (multi.has(idx)) multi.delete(idx); else multi.add(idx);
+    anchor = idx;
+    renderGrid();
+    updateToolbar();
+    return;
+  }
+  // Shift-click selects the contiguous range from the last-clicked key.
+  if (e && e.shiftKey && anchor !== null) {
+    const all = contentIndices();
+    const a = all.indexOf(anchor), b = all.indexOf(idx);
+    if (a !== -1 && b !== -1) {
+      deselectSingle();
+      const [lo, hi] = a < b ? [a, b] : [b, a];
+      for (let k = lo; k <= hi; k++) multi.add(all[k]);
+      renderGrid();
+      updateToolbar();
+      return;
+    }
+  }
+  // Plain click: single-select + open the edit panel.
+  multi.clear();
+  anchor = idx;
+  selectSlot(idx);
+  updateToolbar();
+}
+
+// Keys the bulk actions operate on: the multi-selection, or the single key.
+function effectiveSelection() {
+  if (multi.size) return [...multi];
+  if (selected !== null) return [selected];
+  return [];
+}
+
+function readClip() {
+  try { return JSON.parse(localStorage.getItem(CLIP_KEY) || 'null'); }
+  catch (e) { return null; }
+}
+function writeClip(clip) {
+  try { localStorage.setItem(CLIP_KEY, JSON.stringify(clip)); } catch (e) { /* best-effort */ }
+}
+function clipCount() {
+  const c = readClip();
+  return (c && c.slots) ? Object.keys(c.slots).length : 0;
+}
+
+function flashMsg(text) {
+  const el = $('ms-status');
+  if (!el) return;
+  el.textContent = text;
+  if (msgTimer) clearTimeout(msgTimer);
+  msgTimer = setTimeout(() => { el.textContent = ''; }, 1800);
+}
+
+function updateToolbar() {
+  const n = effectiveSelection().length;
+  const nClip = clipCount();
+  $('ms-count').textContent = n
+    ? (n + ' key' + (n > 1 ? 's' : '') + ' selected')
+    : 'No keys selected';
+  $('ms-copy').disabled = n === 0;
+  $('ms-cut').disabled = n === 0;
+  $('ms-delete').disabled = n === 0;
+  $('ms-paste').disabled = nClip === 0;
+  $('ms-paste').textContent = nClip ? ('Paste (' + nClip + ')') : 'Paste';
+}
+
+// POST a batch of {idx: slot|null} to the current page in one atomic save.
+async function bulkSave(slotsObj, replace) {
+  const r = await fetch(DECK.slotsUrl, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slots: slotsObj, replace: !!replace }),
+  });
+  return r.ok;
+}
+
+// Slots in the effective selection that actually hold a button.
+function selectedFilledSlots() {
+  const out = {};
+  effectiveSelection().forEach(i => {
+    const s = DECK.slots[String(i)];
+    if (hasData(s)) out[String(i)] = s;
+  });
+  return out;
+}
+
+function doCopy() {
+  const slots = selectedFilledSlots();
+  const n = Object.keys(slots).length;
+  if (!n) { flashMsg('Nothing to copy'); return; }
+  writeClip({ fromPageNo: DECK.pageNo, slots });
+  updateToolbar();
+  flashMsg(n + ' copied');
+}
+
+async function doCut() {
+  const slots = selectedFilledSlots();
+  const keys = Object.keys(slots);
+  if (!keys.length) { flashMsg('Nothing to cut'); return; }
+  writeClip({ fromPageNo: DECK.pageNo, slots });
+  const clearObj = {};
+  keys.forEach(k => { clearObj[k] = null; });
+  if (await bulkSave(clearObj, false)) {
+    keys.forEach(k => { delete DECK.slots[k]; });
+    if (selected !== null && keys.includes(String(selected))) deselectSingle();
+    multi.clear();
+    renderGrid();
+    updateToolbar();
+    flashMsg(keys.length + ' cut');
+  } else { flashMsg('Cut failed'); }
+}
+
+async function doPaste() {
+  const clip = readClip();
+  if (!clip || !clip.slots || !Object.keys(clip.slots).length) return;
+  if (await bulkSave(clip.slots, false)) {
+    Object.entries(clip.slots).forEach(([k, v]) => { DECK.slots[k] = v; });
+    multi.clear();
+    renderGrid();
+    updateToolbar();
+    flashMsg(Object.keys(clip.slots).length + ' pasted');
+  } else { flashMsg('Paste failed'); }
+}
+
+async function doDelete() {
+  const sel = effectiveSelection().filter(i => hasData(DECK.slots[String(i)]));
+  if (!sel.length) { flashMsg('Nothing to delete'); return; }
+  if (!confirm('Delete ' + sel.length + ' selected key' + (sel.length > 1 ? 's' : '') + '?')) return;
+  const clearObj = {};
+  sel.forEach(i => { clearObj[String(i)] = null; });
+  if (await bulkSave(clearObj, false)) {
+    sel.forEach(i => { delete DECK.slots[String(i)]; });
+    if (selected !== null && sel.includes(selected)) deselectSingle();
+    multi.clear();
+    renderGrid();
+    updateToolbar();
+    flashMsg('Deleted');
+  } else { flashMsg('Delete failed'); }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initFonts();
   applyMode();
@@ -491,6 +679,20 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('sb-save').addEventListener('click', saveSlot);
   $('sb-clear').addEventListener('click', clearSlot);
+  // Multi-select toolbar.
+  $('ms-copy').addEventListener('click', doCopy);
+  $('ms-cut').addEventListener('click', doCut);
+  $('ms-paste').addEventListener('click', doPaste);
+  $('ms-delete').addEventListener('click', doDelete);
+  updateToolbar();
+  // Esc clears the multi-selection (but not while typing in the panel).
+  document.addEventListener('keydown', (e) => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (e.key === 'Escape' && multi.size) {
+      multi.clear(); anchor = null; renderGrid(); updateToolbar();
+    }
+  });
   // Click the modal backdrop to dismiss.
   $('panel-wrap').addEventListener('click', (e) => {
     if (editorMode === 'modal' && e.target === $('panel-wrap')) closePanel();
