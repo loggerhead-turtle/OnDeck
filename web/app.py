@@ -366,6 +366,54 @@ def ondeck_sso_playcall():
                                   body.get("role", "player"))
 
 
+@app.get("/sso/check")
+def ondeck_sso_check():
+    """OnDeck side of the bridge diagnostic — the mirror of Play-Call's
+    /api/sso/ondeck/check. Prints a sha256 fingerprint of OUR
+    ONDECK_SSO_SECRET (never the secret itself) so you can compare the
+    12-char prefix against Play-Call's: same prefix == byte-identical secret.
+    Also reports which bridge vars are set and our clock (skew check).
+
+    Admin-only. If the bridge isn't up yet, sign in with an existing local
+    OnDeck admin (the username/password form) to reach this.
+    """
+    import hmac as _hmac
+    if session.get("role") != "admin":
+        return jsonify({"ok": False, "error": "admin session required"}), 403
+    secret = os.environ.get("ONDECK_SSO_SECRET", "")
+    out = {
+        "ok": True,
+        "app": "ondeck",
+        "playcall_url": os.environ.get("PLAYCALL_URL", ""),
+        "secret_set": bool(secret),
+        "secret_sha256_prefix": (hashlib.sha256(secret.encode()).hexdigest()[:12]
+                                 if secret else ""),
+        "supabase_configured": bool(os.environ.get("SUPABASE_URL")
+                                    and os.environ.get("SUPABASE_ANON_KEY")),
+        "our_clock_epoch": int(time.time()),
+        "token_roundtrip_ok": False,
+    }
+    if secret:
+        body = {"probe": True, "iat": int(time.time()),
+                "exp": int(time.time()) + 300}
+        raw = base64.urlsafe_b64encode(
+            json.dumps(body, separators=(",", ":")).encode("utf-8")
+        ).rstrip(b"=").decode("ascii")
+        sig = _hmac.new(secret.encode("utf-8"), raw.encode("ascii"),
+                        hashlib.sha256).hexdigest()
+        out["token_roundtrip_ok"] = _verify_sso_token(raw + "." + sig,
+                                                      secret) is not None
+    out["how_to_use"] = (
+        "Compare secret_sha256_prefix with Play-Call's "
+        "/api/sso/ondeck/check — same prefix means the shared secret "
+        "matches. Also make sure Play-Call's ONDECK_URL points at a host "
+        "that serves OnDeck's /sso/playcall route directly (the Render URL "
+        "https://ondeck-43di.onrender.com is safest — a custom-domain "
+        "subpath like /ondeck only works if it path-preserving-redirects "
+        "/ondeck/sso/playcall through to OnDeck).")
+    return jsonify(out)
+
+
 # ---------------------------------------------------------------------------
 # Notifications — coach-facing activity log of player-made changes
 # ---------------------------------------------------------------------------
