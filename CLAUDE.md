@@ -56,6 +56,48 @@ The cloud instance is the source of truth. The Pi polls `/sync/*` endpoints ever
 All four SSO vars are optional — with none set, OnDeck auth behaves exactly as
 before. See "Play-Call shared login (SSO)" in `web/app.py` for the flows.
 
+### Turning on the Play-Call bridge (one-time Render setup)
+
+The bridge code ships on both apps but is **gated on env vars that must be set
+in the Render dashboards** — this is what makes "one account for both apps"
+actually work. `_sso_configured()` (OnDeck) keys off `ONDECK_SSO_SECRET`;
+Play-Call's `ondeck_configured()` keys off `ONDECK_URL` + `ONDECK_SSO_SECRET`.
+
+Set these (both services' `render.yaml` now declare them as `sync: false`, so
+Render shows them as required — enter the values once):
+
+| Service | Var | Value |
+|---------|-----|-------|
+| OnDeck | `PLAYCALL_URL` | `https://playsigns.net` (already a default value) |
+| OnDeck | `ONDECK_SSO_SECRET` | a strong random string — **must match Play-Call** |
+| OnDeck | `SUPABASE_URL` / `SUPABASE_ANON_KEY` | **copy from the Play-Call service** |
+| Play-Call | `ONDECK_URL` | `https://ondeck-43di.onrender.com` (already a default value) |
+| Play-Call | `ONDECK_SSO_SECRET` | the **same** string as OnDeck's |
+
+The **#1 silent failure is `ONDECK_SSO_SECRET` differing between the two
+services** (a trailing space or quote counts). Two ways to be safe:
+
+- **Bulletproof:** put the three shared secrets (`ONDECK_SSO_SECRET`,
+  `SUPABASE_URL`, `SUPABASE_ANON_KEY`) in a single Render **Environment Group**
+  and link it to both services — one value, guaranteed identical.
+- **Verify:** hit `GET /api/sso/ondeck/check` on Play-Call as a super-admin —
+  it prints a sha256 fingerprint of its secret and a token round-trip. Compare
+  the fingerprint prefix against OnDeck's; matching prefixes = matching secrets.
+
+### Bridged behavior (when `ONDECK_SSO_SECRET` is set)
+
+Play-Call becomes the single front door and OnDeck stops minting its own
+accounts, so there's no second profile to manage:
+
+- The login page leads with **"Sign in with Play-Call"**; the username/password
+  form stays as a secondary option (Play-Call email + password work there too).
+- `/setup` (first-run local admin) redirects to login — the first Play-Call
+  coach to sign in auto-provisions as the OnDeck **admin**. The empty-users
+  bootstrap in `_check_auth` sends new installs to login, not setup.
+- `/signup/<code>` (player self-signup) redirects to login — players sign in
+  with Play-Call and are auto-added to the roster by `_sso_establish_session`.
+- Play-Call's `/home` hub shows an OnDeck card once its own SSO vars are set.
+
 On the Pi, `ONDECK_HOME` defaults to `~/ondeck`. Never hardcode Pi username — always use `Path.home()`.
 
 ## Data Layout (ONDECK_HOME)

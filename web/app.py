@@ -185,6 +185,17 @@ _PC_ROLE_RANK = ["owner", "manager", "coach", "assistant_coach",
                  "scouting_coordinator", "offense_spotter", "player"]
 
 
+def _sso_configured() -> bool:
+    """True when this OnDeck instance is bridged to Play-Call for identity.
+
+    When set, Play-Call is the single source of accounts: every OnDeck user is
+    provisioned from their Play-Call identity (one-click hand-off or the shared
+    Supabase password), so OnDeck never mints its own local signup/setup
+    account. With it unset, OnDeck's standalone auth behaves exactly as before.
+    """
+    return bool(os.environ.get("ONDECK_SSO_SECRET"))
+
+
 def _verify_sso_token(token: str, secret: str) -> dict | None:
     """Verify a Play-Call hand-off token: base64url(JSON).hmac_sha256_hex,
     constant-time signature check, iat/exp enforced. None on any problem."""
@@ -453,9 +464,12 @@ def _check_auth(allowed_roles=None):
     }
     if request.endpoint in always_ok:
         return
-    # No users configured yet — force first-time setup.
+    # No users configured yet. Standalone: force first-time setup. Bridged to
+    # Play-Call: send them to sign in — the first coach through auto-provisions
+    # as admin, so there's no local account to create.
     if not _load_users():
-        return redirect(url_for("ondeck_setup"))
+        return redirect(url_for("ondeck_login" if _sso_configured()
+                                else "ondeck_setup"))
 
     role = session.get("role")
 
@@ -732,6 +746,10 @@ def ondeck_logout():
 def ondeck_setup():
     if _load_users():
         return redirect(url_for("ondeck_settings_hub"))
+    # Bridged to Play-Call: the first Play-Call coach to sign in becomes the
+    # OnDeck admin automatically — there's no separate account to create here.
+    if _sso_configured():
+        return redirect(url_for("ondeck_login"))
     return render_template("setup.html")
 
 
@@ -739,6 +757,8 @@ def ondeck_setup():
 def ondeck_setup_post():
     if _load_users():
         return redirect(url_for("ondeck_settings_hub"))
+    if _sso_configured():
+        return redirect(url_for("ondeck_login"))
 
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "")
@@ -770,8 +790,18 @@ def ondeck_setup_post():
 # Player signup with access code (public, team-based)
 # ---------------------------------------------------------------------------
 
+def _signup_bridged_redirect():
+    """Bridged to Play-Call: no separate OnDeck account is created. Players
+    sign in with their Play-Call login and are auto-added to the roster."""
+    flash("No separate OnDeck signup needed — sign in with your Play-Call "
+          "account and you'll be added to the roster automatically.", "success")
+    return redirect(url_for("ondeck_login"))
+
+
 @app.get("/signup/<code>")
 def player_signup(code: str):
+    if _sso_configured():
+        return _signup_bridged_redirect()
     link = cfg.get_signup_link(code)
     if not link:
         flash("Invalid or expired signup link.", "error")
@@ -783,6 +813,8 @@ def player_signup(code: str):
 
 @app.post("/signup/<code>")
 def player_signup_post(code: str):
+    if _sso_configured():
+        return _signup_bridged_redirect()
     link = cfg.get_signup_link(code)
     if not link:
         flash("Invalid or expired signup link.", "error")

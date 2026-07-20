@@ -30,14 +30,31 @@
       {% endif %}
     {% endwith %}
 
+    {% if playcall_url %}
+    {# Bridged to Play-Call: it's the front door. One account for both apps. #}
+    <a href="{{ playcall_url }}/sso/ondeck"
+       class="block w-full py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm text-center shadow-xl transition-colors">
+      ⚾ Sign in with Play-Call
+    </a>
+    <p class="text-xs text-gray-500 text-center mt-2">
+      Use the same account you use on Play-Call — no separate OnDeck login.
+    </p>
+
+    <div class="flex items-center gap-3 my-5">
+      <div class="flex-1 h-px bg-gray-800"></div>
+      <span class="text-xs text-gray-600">or with a username &amp; password</span>
+      <div class="flex-1 h-px bg-gray-800"></div>
+    </div>
+    {% endif %}
+
     <div class="bg-gray-800 border border-gray-700/50 rounded-2xl p-6 shadow-xl">
       <form method="POST" action="{{ url_for('ondeck_login_post', **({'next': request.args.get('next')} if request.args.get('next') else {})) }}">
         <div class="space-y-4">
 
           <div>
-            <label for="username" class="block text-xs font-medium text-gray-400 mb-1.5">Username</label>
+            <label for="username" class="block text-xs font-medium text-gray-400 mb-1.5">Username{% if playcall_url %} or Play-Call email{% endif %}</label>
             <input type="text" id="username" name="username"
-                   required autocomplete="username" autofocus
+                   required autocomplete="username"{% if not playcall_url %} autofocus{% endif %}
                    class="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30 transition-colors">
           </div>
 
@@ -65,25 +82,12 @@
       </form>
     </div>
 
-    {% if playcall_url %}
-    <div class="mt-4">
-      <div class="flex items-center gap-3 my-3">
-        <div class="flex-1 h-px bg-gray-800"></div>
-        <span class="text-xs text-gray-600">or</span>
-        <div class="flex-1 h-px bg-gray-800"></div>
-      </div>
-      <a href="{{ playcall_url }}/sso/ondeck"
-         class="block w-full py-2.5 rounded-lg bg-indigo-700 hover:bg-indigo-600 text-white font-semibold text-sm text-center transition-colors">
-        ⚾ Sign in with Play-Call
-      </a>
-      <p class="text-xs text-gray-600 text-center mt-2">
-        Your Play-Call email &amp; password also work in the form above.
-      </p>
-    </div>
-    {% endif %}
-
     <p class="text-xs text-gray-600 text-center mt-5">
-      Players use the username and password set by your coach.
+      {% if playcall_url %}
+        Your Play-Call email &amp; password work in the form above too.
+      {% else %}
+        Players use the username and password set by your coach.
+      {% endif %}
     </p>
 
     {% if not cloud_mode %}

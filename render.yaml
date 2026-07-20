@@ -25,3 +25,25 @@ services:
       # Copy this value into ~/ondeck/sync.env on every Pi.
       - key: ONDECK_SYNC_TOKEN
         generateValue: true
+
+      # ---- Play-Call shared login (SSO) --------------------------------
+      # One account for OnDeck + Play-Call. All four are required together;
+      # leave them unset to run OnDeck's standalone auth. The three secret
+      # values below MUST be byte-identical to Play-Call's — the cleanest
+      # way to guarantee that is a shared Render Environment Group (see
+      # CLAUDE.md → "Play-Call shared login"). Set as sync:false so Render
+      # surfaces them as required and never commits the values to git.
+      #
+      # Base URL of the Play-Call service — enables the "Sign in with
+      # Play-Call" button and /api/sso/whoami role lookup.
+      - key: PLAYCALL_URL
+        value: https://playsigns.net
+      # HMAC secret for /sso/playcall hand-off tokens. SAME value on both.
+      - key: ONDECK_SSO_SECRET
+        sync: false
+      # Shared Supabase user pool — same values as the Play-Call service,
+      # so a Play-Call email + password authenticates on OnDeck's login too.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
