@@ -185,6 +185,18 @@ _PC_ROLE_RANK = ["owner", "manager", "coach", "assistant_coach",
                  "scouting_coordinator", "offense_spotter", "player"]
 
 
+def _clean_env(name: str) -> str:
+    """Read an env var tolerant of copy-paste slips: strip surrounding
+    whitespace and one matching pair of surrounding quotes. Play-Call applies
+    the identical cleaning, so a secret pasted as `"foo "` on one service and
+    `foo` on the other still produces a matching HMAC signature.
+    """
+    v = os.environ.get(name, "").strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+        v = v[1:-1].strip()
+    return v
+
+
 def _sso_configured() -> bool:
     """True when this OnDeck instance is bridged to Play-Call for identity.
 
@@ -193,7 +205,7 @@ def _sso_configured() -> bool:
     Supabase password), so OnDeck never mints its own local signup/setup
     account. With it unset, OnDeck's standalone auth behaves exactly as before.
     """
-    return bool(os.environ.get("ONDECK_SSO_SECRET"))
+    return bool(_clean_env("ONDECK_SSO_SECRET"))
 
 
 def _verify_sso_token(token: str, secret: str) -> dict | None:
@@ -354,7 +366,7 @@ def _playcall_password_login(username: str, password: str) -> dict | None:
 
 @app.get("/sso/playcall")
 def ondeck_sso_playcall():
-    secret = os.environ.get("ONDECK_SSO_SECRET", "")
+    secret = _clean_env("ONDECK_SSO_SECRET")
     if not secret:
         flash("Play-Call sign-in isn't configured on this server.", "error")
         return redirect(url_for("ondeck_login"))
@@ -380,11 +392,11 @@ def ondeck_sso_check():
     import hmac as _hmac
     if session.get("role") != "admin":
         return jsonify({"ok": False, "error": "admin session required"}), 403
-    secret = os.environ.get("ONDECK_SSO_SECRET", "")
+    secret = _clean_env("ONDECK_SSO_SECRET")
     out = {
         "ok": True,
         "app": "ondeck",
-        "playcall_url": os.environ.get("PLAYCALL_URL", ""),
+        "playcall_url": _clean_env("PLAYCALL_URL"),
         "secret_set": bool(secret),
         "secret_sha256_prefix": (hashlib.sha256(secret.encode()).hexdigest()[:12]
                                  if secret else ""),
