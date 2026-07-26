@@ -196,7 +196,7 @@ Ready in about a minute.<br><br>You can close this page.</p></div></div>
 <div class="card"><h2>Connect &amp; link your device</h2>
 <form method="post" action="/setup">""" + _WIFI_SELECT + """
     <label>Cloud URL</label>
-    <input type="url" name="cloud_url" placeholder="https://your-app.onrender.com" required>
+    <input type="url" name="cloud_url" placeholder="https://playsigns.net/ondeck" required>
     <label>Pairing Code</label>
     <input type="text" name="pairing_code" placeholder="From the Devices page"
            autocomplete="off" required>

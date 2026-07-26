@@ -10,7 +10,7 @@ Run manually:
 Run as a systemd timer every 5 minutes (see install.sh).
 
 Required environment variables (put in ~/ondeck/sync.env):
-    ONDECK_CLOUD_URL    https://your-app.onrender.com
+    ONDECK_CLOUD_URL    https://playsigns.net/ondeck
     ONDECK_SYNC_TOKEN   shared secret — must match cloud ONDECK_SYNC_TOKEN
 
 Optional:
