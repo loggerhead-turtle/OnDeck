@@ -71,6 +71,9 @@ class Player:
         self._state = "stopped"          # stopped | queued | playing
         self._started_at: float | None = None
         self._volume = 80                # 0..100, applied as ffmpeg gain
+        # Bumped on every spawn/stop. A fade ramp runs on its own thread and
+        # checks this, so a walk-up cued mid-fade is never faded down.
+        self._gen = 0
         self.on_finish = None            # optional callable()
 
     # -- queue / play -----------------------------------------------------
@@ -157,13 +160,74 @@ class Player:
 
     # -- fade / stop ------------------------------------------------------
 
+    def _pulse_sink_input(self, pid: int) -> str | None:
+        """PulseAudio sink-input index for our ffmpeg process, or None.
+
+        Matched on application.process.id — our own PID — so it can never
+        grab another stream, and playback needs no extra ffmpeg flags.
+        """
+        try:
+            r = subprocess.run(["pactl", "list", "sink-inputs"],
+                               capture_output=True, text=True, timeout=5)
+        except Exception:
+            return None
+        idx = None
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            if line.startswith("Sink Input #"):
+                idx = line.split("#", 1)[1].strip()
+            elif line.startswith("application.process.id") and idx:
+                if line.split("=", 1)[-1].strip().strip('"') == str(pid):
+                    return idx
+        return None
+
+    def _fade_via_pulse(self, idx: str, ms: int, gen: int) -> bool:
+        """Ramp the LIVE stream down, then stop.
+
+        Relaunching ffmpeg with an afade filter (what this used to do) is
+        inaudible over Bluetooth: killing the process tears down the A2DP
+        stream, and the sink re-opens with hundreds of milliseconds of
+        latency — so the song stopped dead and the fade clip arrived late or
+        not at all. Stepping the sink-input volume touches the stream that
+        is already playing, so nothing restarts.
+        """
+        steps = max(4, min(40, int(ms / 50)))
+        pause = (ms / 1000.0) / steps
+        for i in range(steps - 1, -1, -1):
+            with self._lock:
+                if gen != self._gen:
+                    return True          # a new clip started — leave it alone
+            # Perceptual-ish taper: linear volume sounds like it drops late.
+            pct = int(round(100 * (i / steps) ** 2))
+            try:
+                subprocess.run(["pactl", "set-sink-input-volume", idx,
+                                f"{pct}%"], capture_output=True, timeout=3)
+            except Exception:
+                return False
+            time.sleep(pause)
+        with self._lock:
+            if gen == self._gen:
+                self._stop_locked()
+        return True
+
     def fade(self, ms: int = DEFAULT_FADE_MS) -> bool:
         """Fade the *currently playing* clip out over ``ms`` and stop.
 
-        We can't retroactively edit a running ffmpeg's filter graph, so we
-        capture the current playback position, kill the process, and relaunch
-        a short clip that plays from that position with a fade-out, then ends.
+        Preferred path ramps the live PulseAudio stream (the Bluetooth
+        route). Falls back to the original relaunch-with-afade when we are
+        not on pulse — e.g. straight ALSA out of the headphone jack.
         """
+        with self._lock:
+            if self._state != "playing" or not self._queued:
+                self._stop_locked()
+                return False
+            proc, gen = self._proc, self._gen
+        if proc and proc.poll() is None:
+            idx = self._pulse_sink_input(proc.pid)
+            if idx:
+                threading.Thread(target=self._fade_via_pulse,
+                                 args=(idx, ms, gen), daemon=True).start()
+                return True
         with self._lock:
             if self._state != "playing" or not self._queued:
                 self._stop_locked()
@@ -194,6 +258,7 @@ class Player:
 
     def _stop_locked(self) -> None:
         self._kill_proc()
+        self._gen += 1                   # cancels any in-flight fade ramp
         self._state = "stopped"
         self._queued = None
         self._started_at = None
@@ -208,6 +273,7 @@ class Player:
 
     def _spawn(self, cmd: list[str], finish_state: str = "stopped") -> None:
         self._kill_proc()
+        self._gen += 1
         self._proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,

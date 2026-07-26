@@ -28,6 +28,76 @@ from netconfig import (  # noqa: E402
 log = logging.getLogger("pi.web")
 
 _ADD_WIFI = Path(__file__).resolve().parent / "add_wifi.py"
+_REPO_DIR = Path(__file__).resolve().parent.parent
+
+
+def _read(path, default=""):
+    try:
+        return Path(path).read_text().strip()
+    except OSError:
+        return default
+
+
+def _sh(cmd, timeout=10):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=timeout)
+        return (r.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def _status_rows(env):
+    """(label, value) pairs for the status page — everything a coach or a
+    support call would ask for, in one place."""
+    temp = _read("/sys/class/thermal/thermal_zone0/temp")
+    try:
+        temp = f"{int(temp) / 1000:.1f} °C"
+    except (TypeError, ValueError):
+        temp = "—"
+    load = _read("/proc/loadavg").split(" ")[:3]
+    up = _read("/proc/uptime").split(" ")[0]
+    try:
+        mins = int(float(up) // 60)
+        uptime = f"{mins // 1440}d {mins % 1440 // 60}h {mins % 60}m"
+    except ValueError:
+        uptime = "—"
+    mem = ""
+    for line in _read("/proc/meminfo").splitlines():
+        if line.startswith("MemAvailable:"):
+            mem = f"{int(line.split()[1]) / 1024:.0f} MB free"
+    disk = _sh(["df", "-h", "--output=avail", str(Path.home())]).splitlines()
+    return [
+        ("Hostname", _read("/etc/hostname", "—")),
+        ("IP address", _sh(["hostname", "-I"]) or "not on a network"),
+        ("Temperature", temp),
+        ("Load (1/5/15m)", " ".join(load) or "—"),
+        ("Memory", mem or "—"),
+        ("Disk free", disk[-1].strip() if len(disk) > 1 else "—"),
+        ("Uptime", uptime),
+        ("Cloud", env.get("ONDECK_CLOUD_URL") or "not linked"),
+    ]
+
+
+def _software_summary():
+    head = _sh(["git", "-C", str(_REPO_DIR), "log", "-1",
+                "--format=%h %s (%cr)"])
+    return head or "version unknown (not a git checkout)"
+
+
+def _run_update():
+    """git pull + restart the OnDeck services. Deliberately manual — never
+    automatic, and never mid-game."""
+    if not (_REPO_DIR / ".git").exists():
+        return False, "Not a git checkout — update it the way it was installed."
+    out = _sh(["git", "-C", str(_REPO_DIR), "pull", "--ff-only"], timeout=120)
+    if not out:
+        return False, "Update failed — could not reach GitHub."
+    for unit in ("ondeck-coach", "ondeck-audio"):
+        if _sh(["systemctl", "is-enabled", unit]) in ("enabled", "static"):
+            subprocess.run(["sudo", "systemctl", "restart", unit],
+                           capture_output=True, timeout=60)
+    return True, f"Updated: {out.splitlines()[-1][:120]}"
 
 _PAGE = """<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -126,6 +196,100 @@ def register(app) -> None:
         verb = "forgotten" if action == "forget" else "saved"
         return redirect(url_for("pi_wifi", ok=f'"{ssid}" {verb}.'))
 
+    @app.get("/status")
+    def pi_status():
+        """What the box is doing right now, with the two buttons you'd want
+        while standing in front of it. Registered on both Pis."""
+        import sync_now
+        st = sync_now.status()
+        env = read_sync_env()
+        rows = "".join(
+            f"<div class='row'><span class='k'>{k}</span>"
+            f"<span class='v'>{v}</span></div>"
+            for k, v in _status_rows(env))
+        busy = st.get("running")
+        body = (
+            (f"<div class='card'><div class='ok'>{request.args.get('ok')}</div>"
+             "</div>" if request.args.get("ok") else "")
+            + f"<div class='card'><h2>This Pi</h2>{rows}</div>"
+            + "<div class='card'><h2>Sync</h2>"
+            + f"<div class='small'>{sync_now.summary()}</div>"
+            + (f"<div class='small'>{st.get('detail')}</div>"
+               if st.get("detail") else "")
+            + "<form method='post' action='/sync-now' style='margin-top:.6rem'>"
+            + f"<button class='btn' {'disabled' if busy else ''}>"
+            + ("Syncing…" if busy else "Sync now") + "</button></form>"
+            + "<div class='small' style='margin-top:.4rem'>Pulls the lineup, "
+              "songs and settings from the cloud.</div></div>"
+            + "<div class='card'><h2>Software</h2>"
+            + f"<div class='small'>{_software_summary()}</div>"
+            + "<form method='post' action='/update' style='margin-top:.6rem' "
+              "onsubmit=\"return confirm('Update this Pi\\'s software and "
+              "restart its services? Do not do this during a game.')\">"
+              "<button class='btn'>Update software</button></form>"
+            + "<div class='small' style='margin-top:.4rem'>Pulls the latest "
+              "code and restarts. Takes a minute; the deck goes dark while it "
+              "does.</div></div>"
+            + "<div class='card'><h2>More</h2>"
+              "<a class='btn' href='/wifi'>Wi-Fi</a> "
+              "<a class='btn' href='/cloud-settings'>Cloud link</a></div>"
+            + "<a href='/'>&#8592; Back</a>"
+            + ("<meta http-equiv='refresh' content='5'>" if busy else "")
+        )
+        return _shell("Status", body)
+
+    @app.post("/update")
+    def pi_update():
+        import sync_now
+        ok, detail = _run_update()
+        if ok:
+            sync_now.start()
+        return redirect(url_for("pi_status", ok=detail))
+
+    @app.get("/sync-now")
+    def pi_sync_now():
+        """Pull config, lineup and any new audio from the cloud right now,
+        instead of waiting out the 5-minute timer. Lives here so BOTH Pis
+        get it — this module is registered on the deck portal and on the
+        Audio Pi's music server."""
+        import sync_now
+        st = sync_now.status()
+        env = read_sync_env()
+        linked = bool(env.get("ONDECK_SYNC_TOKEN"))
+        msg = request.args.get("ok", "")
+        tone = "ok" if st.get("ok") or st.get("running") else "err"
+        detail = st.get("detail") or ""
+        body = (
+            (f"<div class='card'><div class='ok'>{msg}</div></div>" if msg else "")
+            + "<div class='card'><h2>Sync now</h2>"
+            + ("<div class='small'>Pulls the latest lineup, songs and settings "
+               "from the cloud — use it after a coach changes a walk-up song "
+               "or makes a substitution.</div>"
+               if linked else
+               "<div class='err'>Not linked to the cloud yet — set that up "
+               "under <a href='/cloud-settings'>Cloud Settings</a> first.</div>")
+            + (f"<div class='{tone}' style='margin-top:.6rem'>"
+               f"{sync_now.summary()}</div>")
+            + (f"<div class='small'>{detail}</div>" if detail else "")
+            + ("<form method='post' style='margin-top:.8rem'>"
+               "<button class='btn' type='submit'>Sync now</button></form>"
+               if linked else "")
+            + "</div><a href='/'>&#8592; Back</a>"
+            # While a sync is running, refresh so the result appears without
+            # the user wondering whether the tap registered.
+            + ("<meta http-equiv='refresh' content='3'>"
+               if st.get("running") else "")
+        )
+        return _shell("Sync", body)
+
+    @app.post("/sync-now")
+    def pi_sync_now_post():
+        import sync_now
+        started = sync_now.start()
+        return redirect(url_for(
+            "pi_sync_now",
+            ok="Sync started." if started else "A sync is already running."))
+
     @app.get("/cloud-settings")
     def pi_cloud_settings():
         env = read_sync_env()
@@ -144,7 +308,7 @@ def register(app) -> None:
               "<b>Devices</b>, then enter it here. (Or paste a raw sync token instead.)</div>"
             + "<form method='post'><label>Cloud URL</label>"
             + f"<input type='url' name='cloud_url' value=\"{env.get('ONDECK_CLOUD_URL','')}\" "
-              "placeholder='https://your-app.onrender.com' required>"
+              "placeholder='https://playsigns.net/ondeck' required>"
             + "<label>Pairing Code</label>"
             + "<input name='pairing_code' placeholder='From the Devices page' autocomplete='off'>"
             + "<label>Sync Token (optional)</label>"

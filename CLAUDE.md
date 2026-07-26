@@ -1,4 +1,22 @@
-# OnDeck — Project Context
+# OnDeck — Project Context (Pi side)
+
+> **Status (July 2026): the OnDeck cloud portal is retired — the repo is not.**
+> The standalone *cloud service* is gone; the **OnDeck repo lives on as the
+> field-hardware runtime**, which is what the Raspberry Pis clone and
+> `git pull`. Same arrangement as `pi-deck`.
+>
+> Source of truth is `Play-call/ondeck-pi/`; `scripts/export_ondeck_pi.sh`
+> mirrors it into the OnDeck repo. **Never edit the OnDeck checkout
+> directly** — the next export overwrites it. Field Pis must not clone
+> Play-Call itself: that would put the whole platform codebase in a dugout.
+>
+> The web portal, sync API, data model, and deployment described below now
+> live in Play-Call:
+> `cloud/routes/ondeck.py`, `cloud/routes/ondeck_sync.py`, `cloud/ondeck/`
+> (pages under `/ondeck/*`, sync under `/ondeck/sync/*`, data in Postgres +
+> Supabase Storage, roster = `sk_players`, lineup = Dugout games). Sections
+> below about `web/app.py` cloud mode, Render deployment, SSO, and the
+> `/sync/*` root apply only to the Pi's LOCAL portal (offline field mode).
 
 OnDeck is a baseball walk-up music system. A coach manages players and music through a web portal; a Stream Deck triggers playback at the field; a Raspberry Pi (Audio Pi) drives the PA speaker.
 

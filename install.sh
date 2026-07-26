@@ -215,9 +215,43 @@ if [[ "$INSTALL_DECK" == 1 ]]; then
 # Elgato Stream Deck (idVendor 0fd9) — let the OnDeck service user (plugdev) open it.
 SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", GROUP="plugdev", MODE="0660"
 KERNEL=="hidraw*", ATTRS{idVendor}=="0fd9", GROUP="plugdev", MODE="0660"
+
+# ...and (re)start the controller whenever a deck is plugged in. The
+# controller only looks for hardware at startup: at boot it routinely wins
+# the race against USB enumeration, logs "No Stream Deck found", and idles
+# forever — the deck sits on its Elgato logo until someone SSHes in and
+# restarts the service. Same story after swapping decks. Re-scanning would
+# have to happen inside pideck's run loop (a separate package), so the
+# device event drives it from out here instead.
+# DEVTYPE pins this to the device itself, so it fires once per plug rather
+# than once per USB interface.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTRS{idVendor}=="0fd9", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ondeck-deck-attached.service"
 EOF
+
+  # Triggered by the rule above. A oneshot rather than udev RUN+= : udev
+  # kills long-running RUN commands, and calling systemctl from inside a
+  # udev worker risks deadlocking against the transaction it is part of.
+  sudo tee /etc/systemd/system/ondeck-deck-attached.service >/dev/null <<EOF
+[Unit]
+Description=OnDeck — Stream Deck plugged in, (re)start the controller
+# A flapping cable must not restart the portal in a loop.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+# Let the device settle before the controller tries to open it.
+ExecStartPre=/bin/sleep 2
+# restart, not start: the usual case is a service already running in its
+# no-hardware idle loop, which start would consider satisfied. The leading
+# '-' tolerates the first install, where udevadm trigger fires this before
+# install_service has created ondeck-coach.
+ExecStart=-/bin/systemctl restart ondeck-coach.service
+EOF
+
   sudo groupadd -f plugdev 2>/dev/null || true
   sudo usermod -aG plugdev "$RUN_USER" 2>/dev/null || true
+  sudo systemctl daemon-reload
   sudo udevadm control --reload-rules 2>/dev/null || true
   sudo udevadm trigger 2>/dev/null || true
 

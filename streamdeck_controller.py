@@ -25,6 +25,8 @@ song, or a celebration stinger). The deck holds no audio itself — it calls
 from __future__ import annotations
 
 import logging
+import threading
+import time
 
 try:
     from pideck import BaseDeckController
@@ -282,6 +284,8 @@ class StreamDeckController(BaseDeckController):
         if kind == "nav":
             return (self.config.pages.get(ref, {}).get("name", ref) or "")[:10]
         if kind == "action":
+            if ref == "sync":
+                return "⟳\n" + self._sync_label()
             return {"play": "Play", "stop": "Stop", "fade": "Fade"}.get(ref, ref)
         if kind == "edit_lineup":
             return "Edit\nLineup"
@@ -375,8 +379,48 @@ class StreamDeckController(BaseDeckController):
                 ok = self.music.stop()
             elif ref == "fade":
                 ok = self.music.fade(int(slot.get("fade_ms") or 1000))
+            elif ref == "sync":
+                ok = self._start_sync()
         if ok:
             self.flash(btn_idx)
+
+    # ── Sync-now key ─────────────────────────────────────
+    # The timer polls every 5 minutes. When a coach changes a walk-up song
+    # or makes a substitution during a game, the person on audio wants it
+    # now — without leaving the deck to find a browser.
+
+    def _sync_label(self) -> str:
+        try:
+            import sync_now
+        except Exception:
+            return "Sync"
+        s = sync_now.status()
+        if s["running"]:
+            return "..."
+        if s["ok"] is True:
+            return time.strftime("%H:%M", time.localtime(s["at"]))
+        if s["ok"] is False:
+            return "failed"
+        return "Sync"
+
+    def _start_sync(self) -> bool:
+        try:
+            import sync_now
+        except Exception as exc:
+            log.warning("sync-now unavailable: %s", exc)
+            return False
+        if sync_now.start():
+            threading.Thread(target=self._watch_sync, args=(sync_now,),
+                             daemon=True).start()
+        return True          # a second press mid-sync still counts as handled
+
+    def _watch_sync(self, sync_now) -> None:
+        """Tick the key while it runs, then repaint — before_render reloads
+        config.json, so the new lineup and songs appear on that paint."""
+        while sync_now.status()["running"]:
+            self.refresh()
+            time.sleep(1)
+        self.refresh()
 
     # ── Edit-lineup flow ─────────────────────────────────
 
