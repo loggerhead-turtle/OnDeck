@@ -424,15 +424,17 @@ class StreamDeckController(BaseDeckController):
             # Pre-formatted reasons (the unreachable one carries the IP on
             # its own line) pass through unclamped — _wrap_label would cut
             # a long address, and the address IS the diagnosis.
-            label = '\n'.join(('✗ ' + why).split('\n')[:3])
+            label = '\n'.join(('✗ ' + why).split('\n')[:4])
         else:
-            label = self._wrap_label('✗ ' + why, width=9, max_lines=3)
+            # Wider and smaller than a normal key: the reason is a
+            # sentence, and a cut-off sentence reads as a new mystery.
+            label = self._wrap_label('✗ ' + why, width=14, max_lines=4)
         try:
             self.btn(btn_idx, label, (150, 24, 24), (255, 255, 255),
-                     font_size=self._fit_font(label, DECK_DEFAULT_FONT_SIZE))
+                     font_size=10)
         except Exception:
             log.exception('could not paint the failure key')
-        threading.Timer(2.5, self.refresh).start()
+        threading.Timer(4.0, self.refresh).start()
 
     @staticmethod
     def _slot_position(slot: dict) -> int:
@@ -551,8 +553,6 @@ class StreamDeckController(BaseDeckController):
         watch = self._lineup_state()
         if watch == "changed":
             return "LINEUP"          # the one thing worth interrupting for
-        if watch == "unknown":
-            return "offline"
         # The audio half: a sync that "worked" on the deck but left the
         # AUDIO Pi unreached or short of files is exactly the silent-lineup
         # failure — say so on the key instead of showing a happy timestamp.
@@ -562,10 +562,15 @@ class StreamDeckController(BaseDeckController):
         if miss:
             return f"{miss} miss"
         if s["ok"] is True:
-            return time.strftime("%H:%M", time.localtime(s["at"]))
+            ts = time.strftime("%H:%M", time.localtime(s["at"]))
+            # An unreachable lineup WATCH must not hide a working SYNC —
+            # 'offline' over a deck that was pulling changes fine sent the
+            # coach chasing the network. The ⚠ says the watch is blind;
+            # the timestamp says the sync itself worked.
+            return ts + "⚠" if watch == "unknown" else ts
         if s["ok"] is False:
             return "failed"
-        return "Sync"
+        return "offline" if watch == "unknown" else "Sync"
 
     def _lineup_state(self) -> str:
         """'fresh' | 'changed' | 'unknown'. Anything unexpected reads as
