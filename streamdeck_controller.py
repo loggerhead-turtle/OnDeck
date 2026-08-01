@@ -471,6 +471,11 @@ class StreamDeckController(BaseDeckController):
                 wbg, wfg = self._sync_key_colors()
                 if wbg:
                     bg, fg = wbg, wfg
+                # The Sync key IS the deck's status surface. A hand-typed
+                # label used to replace the narration entirely, so a
+                # failing sync looked exactly like a working one.
+                if slot.get("label"):
+                    label = slot["label"] + "\n" + self._sync_label()
             wrapped = self._wrap_label(label)
             self.btn(btn_idx, wrapped, bg, fg, font=font,
                      font_size=self._fit_font(wrapped, size))
@@ -585,6 +590,17 @@ class StreamDeckController(BaseDeckController):
             return self.ACTIVE_COLOR, (0, 0, 0)
         if state == "unknown":
             return (28, 28, 32), (120, 120, 130)
+        # A failed sync (either box) paints the key red — the label says
+        # which ("failed" = this Pi, "aud ✗" = the Audio Pi's half).
+        # getattr: this can run from a paint before __init__ finishes.
+        if getattr(self, '_audio_sync', {}).get('ok') is False:
+            return (150, 24, 24), (255, 255, 255)
+        try:
+            import sync_now
+            if sync_now.status()["ok"] is False:
+                return (150, 24, 24), (255, 255, 255)
+        except Exception:
+            pass
         return None, None            # fresh — the slot's own colours
 
     def _start_sync(self) -> bool:

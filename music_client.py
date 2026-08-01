@@ -136,15 +136,25 @@ class MusicClient:
             return False
         return self.queue(clip) and self.play()
 
+    def _walkup_reason(self, player_id: str) -> str:
+        """The specific reason a walk-up clip couldn't be built."""
+        probe = getattr(self.config, 'walkup_problem', None)
+        why = probe(player_id) if probe else None
+        return f"{why or 'no walk-up set'} — Sync?"
+
     def play_walkup(self, player_id: str) -> bool:
         """Announce a player and drop their walk-up song on cue (queue + play)."""
-        return self.play_clip(self.config.build_walkup_clip(player_id))
+        clip = self.config.build_walkup_clip(player_id)
+        if not clip:
+            self.last_error = self._walkup_reason(player_id)
+            return False
+        return self.play_clip(clip)
 
     def cue_walkup(self, player_id: str) -> bool:
         """Queue a player's walk-up without playing it (the lineup cue step)."""
         clip = self.config.build_walkup_clip(player_id)
         if not clip:
-            self.last_error = "no walk-up set — check the portal, then Sync"
+            self.last_error = self._walkup_reason(player_id)
             return False
         return self.queue(clip)
 

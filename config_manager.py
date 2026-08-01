@@ -370,6 +370,22 @@ class ConfigManager:
             return None
         return self._song_clip(song)
 
+    def walkup_problem(self, player_id: str) -> str | None:
+        """Why build_walkup_clip would return None, in words fit for a
+        deck key — or None when the clip is buildable. 'No walk-up set'
+        covered three different failures (player missing from the synced
+        config, nothing assigned, assigned song missing) and sent a coach
+        to re-check a portal that was already right."""
+        player = self.players.get(player_id)
+        if not player:
+            return "batter not in synced roster"
+        sid = player.get("walkup_song_id")
+        if not sid:
+            return "no walk-up assigned"
+        if not self.songs.get(sid):
+            return "walk-up song not synced"
+        return None
+
     def get_player_pitching_warmup(self, player_id: str) -> dict[str, Any] | None:
         """Get player's pitching warm-up song info."""
         player = self.players.get(player_id)
