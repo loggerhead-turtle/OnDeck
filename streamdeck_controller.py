@@ -96,6 +96,13 @@ class StreamDeckController(BaseDeckController):
         # Repaint the deck whenever the lineup auto-advances.
         self.lineup.on_change = self.refresh
 
+        # Every attribute a render hook reads is set BEFORE the base
+        # constructor: super().__init__ opens the deck and paints it, the
+        # first paint calls before_render()/render hooks, and a hook
+        # reading subclass state that does not exist yet dies on
+        # AttributeError — the controller never claims the deck and the
+        # hardware sits on its Elgato logo with the service "running".
+        self._lineup_watch = None
         # Result of the last Sync press's AUDIO-PI half. The music plays
         # from that box's disk, so its sync outcome (and any files it is
         # still missing) belongs on the key.
@@ -112,8 +119,10 @@ class StreamDeckController(BaseDeckController):
         self.config.load()
         # Re-baseline from what we actually hold, so a sync by the 5-minute
         # timer or from the portal clears the "changed" flag too — not only
-        # a press of the deck's own Sync key.
-        if self._lineup_watch:
+        # a press of the deck's own Sync key. getattr, not a bare read: this
+        # hook runs during the BASE constructor's first paint, and a paint
+        # must never depend on subclass state existing yet.
+        if getattr(self, '_lineup_watch', None):
             self._lineup_watch.note_local_lineup(self.config.lineup)
 
     # ── Lineup watch ─────────────────────────────────────
