@@ -96,7 +96,13 @@ class StreamDeckController(BaseDeckController):
         # Repaint the deck whenever the lineup auto-advances.
         self.lineup.on_change = self.refresh
 
+        # Result of the last Sync press's AUDIO-PI half. The music plays
+        # from that box's disk, so its sync outcome (and any files it is
+        # still missing) belongs on the key.
+        self._audio_sync = {'running': False, 'ok': None, 'missing': None}
+
         super().__init__(config)         # opens the deck + first render
+        self._start_lineup_watch()
 
     # ── pideck hooks ─────────────────────────────────────
 
@@ -104,6 +110,30 @@ class StreamDeckController(BaseDeckController):
         # Pick up any edits the web portal wrote to config.json since the last
         # paint — the portal runs its own ConfigManager against the same file.
         self.config.load()
+        # Re-baseline from what we actually hold, so a sync by the 5-minute
+        # timer or from the portal clears the "changed" flag too — not only
+        # a press of the deck's own Sync key.
+        if self._lineup_watch:
+            self._lineup_watch.note_local_lineup(self.config.lineup)
+
+    # ── Lineup watch ─────────────────────────────────────
+    # Tells the operator a substitution happened. Never acts on it: the
+    # deck must not repaint a key out from under a finger mid-press.
+
+    def _start_lineup_watch(self) -> None:
+        self._lineup_watch = None
+        try:
+            import lineup_watch
+        except Exception as exc:
+            log.info("lineup watch unavailable: %s", exc)
+            return
+        self._lineup_watch = lineup_watch
+        try:
+            lineup_watch.note_local_lineup(self.config.lineup)
+            lineup_watch.start(on_change=lambda _s: self.refresh())
+        except Exception:
+            log.exception("could not start the lineup watch")
+            self._lineup_watch = None
 
     def render_fixed_keys(self) -> None:
         self.btn(BTN_PLAY, "▶\nPlay", (30, 110, 40))
@@ -330,6 +360,10 @@ class StreamDeckController(BaseDeckController):
             elif (kind == "lineup_slot" and self._edit_lineup
                   and self._slot_position(slot) == self._lineup_assign_pos):
                 bg, fg = self.ACTIVE_COLOR, (0, 0, 0)
+            elif kind == "action" and slot.get("ref") == "sync":
+                wbg, wfg = self._sync_key_colors()
+                if wbg:
+                    bg, fg = wbg, wfg
             self.btn(btn_idx, label[:16], bg, fg, font=font, font_size=size)
 
     def _handle_slot_press(self, btn_idx: int) -> None:
@@ -395,31 +429,108 @@ class StreamDeckController(BaseDeckController):
         except Exception:
             return "Sync"
         s = sync_now.status()
-        if s["running"]:
+        if s["running"] or self._audio_sync.get('running'):
             return "..."
+        watch = self._lineup_state()
+        if watch == "changed":
+            return "LINEUP"          # the one thing worth interrupting for
+        if watch == "unknown":
+            return "offline"
+        # The audio half: a sync that "worked" on the deck but left the
+        # AUDIO Pi unreached or short of files is exactly the silent-lineup
+        # failure — say so on the key instead of showing a happy timestamp.
+        if self._audio_sync.get('ok') is False:
+            return "aud ✗"
+        miss = self._audio_sync.get('missing')
+        if miss:
+            return f"{miss} miss"
         if s["ok"] is True:
             return time.strftime("%H:%M", time.localtime(s["at"]))
         if s["ok"] is False:
             return "failed"
         return "Sync"
 
+    def _lineup_state(self) -> str:
+        """'fresh' | 'changed' | 'unknown'. Anything unexpected reads as
+        unknown — claiming to be up to date is the one wrong answer."""
+        if not self._lineup_watch:
+            return "unknown"
+        try:
+            return self._lineup_watch.status().get("state") or "unknown"
+        except Exception:
+            return "unknown"
+
+    def _sync_key_colors(self):
+        """(bg, fg) for the Sync key.
+
+        Amber shouts because a substitution is the only state that needs the
+        operator to do something. 'unknown' is deliberately drawn dim rather
+        than left looking like 'fresh' — a dark key that means "I can't
+        reach the cloud" must not read as "no substitutions have happened".
+        """
+        state = self._lineup_state()
+        if state == "changed":
+            return self.ACTIVE_COLOR, (0, 0, 0)
+        if state == "unknown":
+            return (28, 28, 32), (120, 120, 130)
+        return None, None            # fresh — the slot's own colours
+
     def _start_sync(self) -> bool:
+        """One press, BOTH boxes: sync this Pi (config/lineup) and tell
+        the Audio Pi to sync itself (the music files it plays from). The
+        deck syncing alone is how 'I pressed sync and nothing plays'
+        happens — the labels update while the speaker's disk stays empty."""
         try:
             import sync_now
         except Exception as exc:
             log.warning("sync-now unavailable: %s", exc)
             return False
-        if sync_now.start():
-            threading.Thread(target=self._watch_sync, args=(sync_now,),
-                             daemon=True).start()
+        sync_now.start()     # False = already running; watcher still applies
+        self._audio_sync = {'running': True, 'ok': None, 'missing': None}
+        threading.Thread(target=self._watch_sync, args=(sync_now,),
+                         daemon=True).start()
         return True          # a second press mid-sync still counts as handled
 
     def _watch_sync(self, sync_now) -> None:
-        """Tick the key while it runs, then repaint — before_render reloads
-        config.json, so the new lineup and songs appear on that paint."""
-        while sync_now.status()["running"]:
+        """Drive the audio half, tick the key while either box works, then
+        repaint — before_render reloads config.json, so the new lineup and
+        songs appear on that paint."""
+        started = False
+        try:
+            started = self.music.sync_audio_start()
+        except Exception:
+            log.exception("audio sync trigger failed")
+        deadline = time.monotonic() + 300     # a first sync downloads a lot
+        audio_ok = None
+        while True:
+            local_busy = sync_now.status()["running"]
+            audio_busy = False
+            if started and time.monotonic() < deadline:
+                st = None
+                try:
+                    st = self.music.sync_audio_status()
+                except Exception:
+                    pass
+                if st is None:
+                    audio_ok = False          # went unreachable mid-sync
+                elif st.get("running"):
+                    audio_busy = True
+                else:
+                    audio_ok = st.get("ok")
+            if not local_busy and not audio_busy:
+                break
             self.refresh()
             time.sleep(1)
+        if not started:
+            audio_ok = False                  # never reached the Audio Pi
+        missing = None
+        if audio_ok:
+            try:
+                missing = self.music.library_missing()
+            except Exception:
+                pass
+        self._audio_sync = {'running': False, 'ok': audio_ok,
+                            'missing': missing}
         self.refresh()
 
     # ── Edit-lineup flow ─────────────────────────────────

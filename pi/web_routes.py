@@ -128,7 +128,8 @@ a{color:#3aa0ff;font-size:.85rem;text-decoration:none;display:block;margin-top:1
 
 
 def register(app) -> None:
-    from flask import request, redirect, render_template_string, url_for
+    from flask import (request, redirect, render_template_string,
+                       url_for, jsonify)
 
     def _shell(title, body):
         from markupsafe import Markup
@@ -289,6 +290,23 @@ def register(app) -> None:
         return redirect(url_for(
             "pi_sync_now",
             ok="Sync started." if started else "A sync is already running."))
+
+    # JSON twins of the page above, for MACHINE callers — specifically the
+    # Stream Deck Pi's Sync key, which triggers the AUDIO Pi's sync over
+    # these so one press downloads the music to the box that plays it.
+    @app.post("/api/sync-now")
+    def pi_api_sync_now():
+        import sync_now
+        started = sync_now.start()
+        # ok either way: "already running" is not a failure, the sync the
+        # caller wants is happening.
+        return jsonify(ok=True, started=started, **sync_now.status())
+
+    @app.get("/api/sync-status")
+    def pi_api_sync_status():
+        import sync_now
+        return jsonify(ok=True, summary=sync_now.summary(),
+                       **sync_now.status())
 
     @app.get("/cloud-settings")
     def pi_cloud_settings():

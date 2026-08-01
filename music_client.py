@@ -32,6 +32,10 @@ class MusicClient:
 
     def __init__(self, config: ConfigManager) -> None:
         self.config = config
+        # The most recent refusal ("missing file: x.mp3") — shown on the
+        # deck so silence always comes with a reason.
+        self.last_error = ""
+
 
     # -- target resolution ------------------------------------------------
 
@@ -40,12 +44,24 @@ class MusicClient:
         return f"http://{ip}:{port}"
 
     def _post(self, path: str, payload: dict | None = None) -> dict | None:
+        """POST and return the JSON body — or None when the call failed OR
+        the Audio Pi answered ok=false.
+
+        The ok check is what makes a missing music file audible to the
+        deck: /play used to answer 200 for a file that wasn't on disk, so
+        the key flashed 'played' while the speaker stayed silent."""
         try:
             r = rq.post(self._base_url() + path, json=payload or {}, timeout=_TIMEOUT)
-            return r.json()
+            d = r.json()
         except Exception as exc:  # connection refused, timeout, bad JSON…
             log.warning("Audio Pi POST %s failed: %s", path, exc)
             return None
+        if isinstance(d, dict) and d.get("ok") is False:
+            log.warning("Audio Pi POST %s refused: %s", path,
+                        d.get("error") or "not ok")
+            self.last_error = d.get("error") or "Audio Pi said no"
+            return None
+        return d
 
     def _get(self, path: str) -> dict | None:
         try:
@@ -74,6 +90,29 @@ class MusicClient:
 
     def status(self) -> dict | None:
         return self._get("/status")
+
+    # -- Audio Pi sync ----------------------------------------------------
+    # The music plays from the AUDIO Pi's disk, so 'press Sync, get all the
+    # music' has to reach that box too — the deck syncing itself only
+    # updates labels and lineups.
+
+    def sync_audio_start(self) -> bool:
+        """Kick off a sync ON the Audio Pi (its own sync_agent run)."""
+        return self._post("/api/sync-now") is not None
+
+    def sync_audio_status(self) -> dict | None:
+        """{'running','ok','detail'} from the Audio Pi, or None when it
+        cannot be reached."""
+        return self._get("/api/sync-status")
+
+    def library_missing(self) -> int | None:
+        """How many library files the AUDIO Pi is missing on disk, or
+        None when it can't say. 0 is the good answer."""
+        st = self.status()
+        lib = (st or {}).get("library")
+        if not isinstance(lib, dict):
+            return None
+        return max(0, int(lib.get("expected", 0)) - int(lib.get("present", 0)))
 
     # -- high-level cues --------------------------------------------------
     # These are what the Stream Deck actually calls. Each one builds the clip

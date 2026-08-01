@@ -11,7 +11,7 @@ Design goals:
   * No internet needed to play; internet is only used for YouTube import.
 
 Endpoints (all JSON):
-  POST /queue    {file, start_ms, end_ms, announcement?, cue_ms?}
+  POST /queue    {file, start_ms, end_ms, fade_ms?, announcement?, cue_ms?}
   POST /play
   POST /stop
   POST /fade     {ms?}            -> fade out over ms (default 1000)
@@ -35,7 +35,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request
 
-from config_manager import MUSIC_DIR
+from config_manager import MUSIC_DIR, ConfigManager
 
 log = logging.getLogger("ondeck-audio")
 
@@ -49,10 +49,72 @@ app = Flask(__name__)
 
 DEFAULT_FADE_MS = 1000
 
+# The trim editor's fade-out is deliberately short: a walk-up that trails off
+# for three seconds is three seconds the batter is standing there waiting.
+CLIP_FADE_MAX_MS = 1500
+
+_duration_cache: dict[str, float] = {}
+
+
+def _audio_duration_s(path: str) -> float | None:
+    """Length of an audio file in seconds, or None if ffprobe can't say.
+
+    Only needed when a clip has no end trim: the fade has to know where the
+    end is, and "the end of the file" is not a number ffmpeg will hand us.
+    Cached because the same walk-up gets queued every time the kid bats.
+    """
+    if path in _duration_cache:
+        return _duration_cache[path]
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=10)
+        dur = float(out.stdout.strip())
+    except Exception:
+        log.warning("ffprobe could not read the duration of %s", path)
+        return None
+    if dur <= 0:
+        return None
+    _duration_cache[path] = dur
+    return dur
+
+
+def _fade_start(clip: dict, song: str, start_s: float) -> tuple[float, float]:
+    """(when the fade starts, how long it runs) in seconds — (0, 0) for none.
+
+    The fade is measured back from the end of the *played span*, which is the
+    end trim if there is one and otherwise the end of the file.
+    """
+    try:
+        fade_ms = int(clip.get("fade_ms") or 0)
+    except (TypeError, ValueError):
+        return 0.0, 0.0
+    fade_ms = max(0, min(CLIP_FADE_MAX_MS, fade_ms))
+    if not fade_ms:
+        return 0.0, 0.0
+    end_ms = clip.get("end_ms")
+    if end_ms is not None:
+        span = (end_ms / 1000.0) - start_s
+    else:
+        total = _audio_duration_s(song)
+        if total is None:
+            return 0.0, 0.0        # rather no fade than a fade in the wrong place
+        span = total - start_s
+    fade_s = fade_ms / 1000.0
+    if span <= 0:
+        return 0.0, 0.0
+    fade_s = min(fade_s, span)     # a clip shorter than the fade just fades throughout
+    return span - fade_s, fade_s
+
 # A2DP speaker control + audio routing. Disable on laptops/CI with
 # ONDECK_NO_BLUETOOTH=1 (then playback uses the ALSA default / override).
 bt = BluetoothManager() if (BluetoothManager and
                             not os.environ.get("ONDECK_NO_BLUETOOTH")) else None
+
+
+class MissingAudio(Exception):
+    """A clip references a file that is not on this Pi's disk."""
 
 
 class Player:
@@ -78,7 +140,24 @@ class Player:
 
     # -- queue / play -----------------------------------------------------
 
+    def _clip_file_missing(self, clip: dict) -> str | None:
+        """The missing filename, or None when everything is on disk.
+
+        Checked at queue AND play time: a file can vanish between the two
+        (a sync pruning, an SD hiccup), and spawning ffmpeg on a missing
+        input used to report success while playing nothing — the deck
+        flashed as if the walk-up ran, and the operator heard silence with
+        no clue why."""
+        for key in ("file", "announcement"):
+            name = clip.get(key)
+            if name and not (MUSIC_DIR / name).exists():
+                return str(name)
+        return None
+
     def queue(self, clip: dict) -> None:
+        missing = self._clip_file_missing(clip)
+        if missing:
+            raise MissingAudio(missing)
         with self._lock:
             self._stop_locked()
             self._queued = clip
@@ -88,11 +167,25 @@ class Player:
         with self._lock:
             if not self._queued:
                 return False
+            missing = self._clip_file_missing(self._queued)
+            if missing:
+                self._stop_locked()
+                raise MissingAudio(missing)
             cmd = self._build_command(self._queued)
             self._spawn(cmd)
             self._state = "playing"
             self._started_at = time.monotonic()
             return True
+
+    def library_report(self, expected) -> dict:
+        """How much of the library is actually on this Pi's disk —
+        {'expected', 'present', 'missing': [first few names]}. This is what
+        turns 'nothing plays and I don't know why' into '7 files missing,
+        press Sync'."""
+        missing = [n for n in expected if not (MUSIC_DIR / n).exists()]
+        return {'expected': len(expected),
+                'present': len(expected) - len(missing),
+                'missing': missing[:8]}
 
     def _build_command(self, clip: dict) -> list[str]:
         """Compose the ffmpeg invocation for a clip.
@@ -104,6 +197,7 @@ class Player:
         song = str(MUSIC_DIR / clip["file"])
         start_s = (clip.get("start_ms") or 0) / 1000.0
         end_ms = clip.get("end_ms")
+        fade_at, fade_s = _fade_start(clip, song, start_s)
 
         # Build the main (song) input with its trim window.
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin"]
@@ -130,16 +224,23 @@ class Player:
             # Delay the song by cue_s, fade it in over 0.75s, mix under the
             # announcement, then apply master volume.
             delay_ms = int(cue_s * 1000)
+            # The song sits on the delayed timeline, so its fade-out does too.
+            fade_out = (f",afade=t=out:st={(cue_s + fade_at):.3f}:d={fade_s:.3f}"
+                        if fade_s else "")
             filt = (
-                f"[1:a]adelay={delay_ms}|{delay_ms},afade=t=in:st={cue_s:.3f}:d=0.75[mus];"
+                f"[1:a]adelay={delay_ms}|{delay_ms},afade=t=in:st={cue_s:.3f}:d=0.75"
+                f"{fade_out}[mus];"
                 f"[0:a][mus]amix=inputs=2:duration=longest:dropout_transition=0,"
                 f"volume={gain:.3f}[out]"
             )
             cmd += ["-filter_complex", filt, "-map", "[out]"]
         else:
-            # Plain song: master volume only. (End-of-song fade is applied by
-            # the editor when it sets end_ms; live fade is the /fade endpoint.)
-            cmd += ["-af", f"volume={gain:.3f}"]
+            # Plain song: the clip's own fade-out (if the editor set one) plus
+            # master volume. The live operator fade is the /fade endpoint.
+            af = f"volume={gain:.3f}"
+            if fade_s:
+                af = f"afade=t=out:st={fade_at:.3f}:d={fade_s:.3f},{af}"
+            cmd += ["-af", af]
 
         cmd += self._output_args()
         return cmd
@@ -338,13 +439,21 @@ def http_queue():
     body = request.get_json(force=True, silent=True) or {}
     if not body.get("file"):
         return jsonify(error="file required"), 400
-    player.queue(body)
+    try:
+        player.queue(body)
+    except MissingAudio as exc:
+        return jsonify(ok=False, error=f"missing file: {exc}",
+                       missing=str(exc), status=player.status())
     return jsonify(ok=True, status=player.status())
 
 
 @app.post("/play")
 def http_play():
-    ok = player.play()
+    try:
+        ok = player.play()
+    except MissingAudio as exc:
+        return jsonify(ok=False, error=f"missing file: {exc}",
+                       missing=str(exc), status=player.status())
     return jsonify(ok=ok, status=player.status())
 
 
@@ -373,7 +482,15 @@ def http_volume():
 
 @app.get("/status")
 def http_status():
-    return jsonify(player.status())
+    out = dict(player.status())
+    try:
+        cfg = ConfigManager()
+        expected = {s.get('filename') for s in cfg.songs.values()
+                    if s.get('filename')}
+        out['library'] = player.library_report(sorted(expected))
+    except Exception:                    # a status probe must never 500
+        pass
+    return jsonify(out)
 
 
 @app.post("/upload")

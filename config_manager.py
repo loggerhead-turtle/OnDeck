@@ -332,6 +332,16 @@ class ConfigManager:
         """song_id for a celebration stinger (hit/extra_base/home_run/strikeout)."""
         return self.celebrations.get(kind)
 
+    @staticmethod
+    def _song_clip(song: dict[str, Any]) -> dict[str, Any]:
+        """The trim window a song carries into every /queue payload."""
+        return {
+            "file": song["filename"],
+            "start_ms": song.get("start_ms", 0),
+            "end_ms": song.get("end_ms"),
+            "fade_ms": song.get("fade_ms", 0),
+        }
+
     def build_walkup_clip(self, player_id: str) -> dict[str, Any] | None:
         """Compose the Audio Pi /queue payload for a player's walk-up.
 
@@ -346,11 +356,7 @@ class ConfigManager:
         song = self.songs.get(sid) if sid else None
         if not song:
             return None
-        clip: dict[str, Any] = {
-            "file": song["filename"],
-            "start_ms": song.get("start_ms", 0),
-            "end_ms": song.get("end_ms"),
-        }
+        clip: dict[str, Any] = self._song_clip(song)
         ann = player.get("announcement_file")
         if ann:
             clip["announcement"] = ann
@@ -362,11 +368,7 @@ class ConfigManager:
         song = self.songs.get(song_id)
         if not song:
             return None
-        return {
-            "file": song["filename"],
-            "start_ms": song.get("start_ms", 0),
-            "end_ms": song.get("end_ms"),
-        }
+        return self._song_clip(song)
 
     def get_player_pitching_warmup(self, player_id: str) -> dict[str, Any] | None:
         """Get player's pitching warm-up song info."""
@@ -377,11 +379,7 @@ class ConfigManager:
         song = self.songs.get(sid) if sid else None
         if not song:
             return None
-        return {
-            "file": song["filename"],
-            "start_ms": song.get("start_ms", 0),
-            "end_ms": song.get("end_ms"),
-        }
+        return self._song_clip(song)
 
     def get_player_midgame_song(self, player_id: str) -> dict[str, Any] | None:
         """Get player's mid-game/mid-inning song info."""
@@ -392,11 +390,7 @@ class ConfigManager:
         song = self.songs.get(sid) if sid else None
         if not song:
             return None
-        return {
-            "file": song["filename"],
-            "start_ms": song.get("start_ms", 0),
-            "end_ms": song.get("end_ms"),
-        }
+        return self._song_clip(song)
 
     # -- mutations --------------------------------------------------------
 

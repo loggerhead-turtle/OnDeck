@@ -48,10 +48,20 @@ exists.
 ## Syncing on demand
 
 The timer pulls from the cloud every 5 minutes. To get a change immediately —
-a new walk-up song, or a substitution the coach just made — either press a
+a new walk-up song, or a substitution the coach just made — press a
 **Sync** key on the deck (add one in the portal's deck editor: any key →
-type `action` → *Sync Now*), or open `http://<pi>:5000/sync-now` on the deck
-Pi or `:5100/sync-now` on the Audio Pi.
+type `action` → *Sync Now*). One press syncs **both boxes**: this Pi
+(config + lineup) and the Audio Pi (the music files it plays from).
+
+The key face tells the truth afterwards: a timestamp means both boxes
+synced and every library file is on the Audio Pi's disk; `aud ✗` means the
+Audio Pi couldn't be reached or its sync failed; `N miss` means it synced
+but is still short N files (press again — a big first download can need a
+second pass). A missing file also refuses to play with its name in the
+error now, instead of flashing success over silence.
+
+Browser fallback: `http://<pi>:5000/sync-now` on the deck Pi or
+`:5100/sync-now` on the Audio Pi still trigger each box individually.
 
 ## If the Stream Deck sits on its Elgato logo
 
