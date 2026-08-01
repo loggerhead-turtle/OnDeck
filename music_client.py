@@ -59,7 +59,9 @@ class MusicClient:
             # refusal set it; a box that never answered left the PREVIOUS
             # reason on display, which is worse than none.
             ip, port = self.config.audio_pi_endpoint()
-            self.last_error = f"Audio Pi {ip} unreachable"
+            # Own line so the deck's key wrap can never truncate the
+            # address — the IP is the diagnosis.
+            self.last_error = f"no reply from\n{ip}"
             return None
         if isinstance(d, dict) and d.get("ok") is False:
             log.warning("Audio Pi POST %s refused: %s", path,
@@ -127,6 +129,10 @@ class MusicClient:
     def play_clip(self, clip: dict[str, Any] | None) -> bool:
         """Queue then immediately play a pre-built clip."""
         if not clip:
+            # No HTTP call happens for a clip the local config can't
+            # build, so without this the key would blame the Audio Pi
+            # for a song this DECK doesn't know about.
+            self.last_error = "not in this deck's config — press Sync"
             return False
         return self.queue(clip) and self.play()
 
@@ -137,7 +143,10 @@ class MusicClient:
     def cue_walkup(self, player_id: str) -> bool:
         """Queue a player's walk-up without playing it (the lineup cue step)."""
         clip = self.config.build_walkup_clip(player_id)
-        return self.queue(clip) if clip else False
+        if not clip:
+            self.last_error = "no walk-up set — check the portal, then Sync"
+            return False
+        return self.queue(clip)
 
     def play_song(self, song_id: str) -> bool:
         """Play a plain library song (hype, mid-inning, stingers, …)."""
@@ -146,4 +155,7 @@ class MusicClient:
     def play_celebration(self, kind: str) -> bool:
         """Fire a celebration stinger (hit/extra_base/home_run/strikeout)."""
         sid = self.config.get_celebration_song(kind)
-        return self.play_song(sid) if sid else False
+        if not sid:
+            self.last_error = "no celebration song set"
+            return False
+        return self.play_song(sid)

@@ -416,9 +416,17 @@ class StreamDeckController(BaseDeckController):
         (missing file, unreachable Audio Pi) paints the key red for a
         moment, then the page repaints itself.
         """
+        # No default guess: blaming the Audio Pi for a press that never
+        # reached it sent a coach chasing the wrong box.
         why = (getattr(self.music, 'last_error', '') or
-               'Audio Pi unreachable')
-        label = self._wrap_label('✗ ' + why, width=9, max_lines=3)
+               "didn't play — no reason logged")
+        if '\n' in why:
+            # Pre-formatted reasons (the unreachable one carries the IP on
+            # its own line) pass through unclamped — _wrap_label would cut
+            # a long address, and the address IS the diagnosis.
+            label = '\n'.join(('✗ ' + why).split('\n')[:3])
+        else:
+            label = self._wrap_label('✗ ' + why, width=9, max_lines=3)
         try:
             self.btn(btn_idx, label, (150, 24, 24), (255, 255, 255),
                      font_size=self._fit_font(label, DECK_DEFAULT_FONT_SIZE))
