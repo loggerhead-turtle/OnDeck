@@ -44,6 +44,17 @@ try:
 except Exception:  # pragma: no cover - missing optional deps must not stop audio
     BluetoothManager = None  # type: ignore
 
+# On-demand cloud sync (pi/sync_now.py). The deck's Sync key POSTs
+# /api/sync-now here so ONE press updates BOTH boxes — without this, the
+# deck synced its labels while the disk the speaker plays from stayed
+# stale, and every deck showed 'aud ✗' because the endpoint 404'd.
+try:
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent / "pi"))
+    import sync_now as _sync_now
+except Exception:  # pragma: no cover - sync tooling absent must not stop audio
+    _sync_now = None  # type: ignore
+
 
 app = Flask(__name__)
 
@@ -499,6 +510,25 @@ def http_status():
     except Exception:                    # a status probe must never 500
         pass
     return jsonify(out)
+
+
+@app.post("/api/sync-now")
+def http_sync_now():
+    """Run this Pi's cloud sync immediately (called by the deck's Sync key)."""
+    if _sync_now is None:
+        return jsonify(ok=False, error="sync tooling unavailable")
+    _sync_now.start()          # False = already running; that's still handled
+    return jsonify(ok=True, running=True)
+
+
+@app.get("/api/sync-status")
+def http_sync_status():
+    """{'running','ok','detail'} of the last /api/sync-now run."""
+    if _sync_now is None:
+        return jsonify(running=False, ok=False,
+                       detail="sync tooling unavailable")
+    s = _sync_now.status()
+    return jsonify(running=s["running"], ok=s["ok"], detail=s["detail"])
 
 
 @app.post("/upload")
