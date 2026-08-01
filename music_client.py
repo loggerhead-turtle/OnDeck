@@ -55,12 +55,18 @@ class MusicClient:
             d = r.json()
         except Exception as exc:  # connection refused, timeout, bad JSON…
             log.warning("Audio Pi POST %s failed: %s", path, exc)
+            # The deck shows this string when a press makes no sound. A
+            # refusal set it; a box that never answered left the PREVIOUS
+            # reason on display, which is worse than none.
+            ip, port = self.config.audio_pi_endpoint()
+            self.last_error = f"Audio Pi {ip} unreachable"
             return None
         if isinstance(d, dict) and d.get("ok") is False:
             log.warning("Audio Pi POST %s refused: %s", path,
                         d.get("error") or "not ok")
             self.last_error = d.get("error") or "Audio Pi said no"
             return None
+        self.last_error = ""
         return d
 
     def _get(self, path: str) -> dict | None:

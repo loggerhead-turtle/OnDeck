@@ -151,14 +151,23 @@ class StreamDeckController(BaseDeckController):
 
     def on_fixed_key(self, idx) -> None:
         if idx == BTN_PLAY:
-            self.lineup.play()
-            self.flash(BTN_PLAY)
+            # Play used to flash green whether or not anything played —
+            # the flash is the deck's word that sound is coming, so it has
+            # to be conditional on the Audio Pi actually accepting it.
+            if self.lineup.play():
+                self.flash(BTN_PLAY)
+            else:
+                self._press_failed(BTN_PLAY)
         elif idx == BTN_STOP:
-            self.music.stop()
-            self.flash(BTN_STOP)
+            if self.music.stop():
+                self.flash(BTN_STOP)
+            else:
+                self._press_failed(BTN_STOP)
         elif idx == BTN_FADE:
-            self.music.fade()
-            self.flash(BTN_FADE)
+            if self.music.fade():
+                self.flash(BTN_FADE)
+            else:
+                self._press_failed(BTN_FADE)
 
     # ── Content handler ──────────────────────────────────
 
@@ -185,6 +194,8 @@ class StreamDeckController(BaseDeckController):
                 self.lineup.set_current(filled[slot])
                 if self.lineup.cue_current():
                     self.flash(btn_idx)
+                else:
+                    self._press_failed(btn_idx)
 
         elif kind == "players":
             players = self.config.players_by_jersey()
@@ -197,6 +208,8 @@ class StreamDeckController(BaseDeckController):
                 self.lineup.note_external_playback()
                 if self.music.play_walkup(pid):
                     self.flash(btn_idx)
+                else:
+                    self._press_failed(btn_idx)
 
         elif kind == "celebrations":
             if slot < len(CELEBRATIONS):
@@ -204,6 +217,8 @@ class StreamDeckController(BaseDeckController):
                 self.lineup.note_external_playback()
                 if self.music.play_celebration(key):
                     self.flash(btn_idx)
+                else:
+                    self._press_failed(btn_idx)
 
         else:
             # Song-list pages: hype / mid_inning / mound_visit / dead_ball /
@@ -214,6 +229,8 @@ class StreamDeckController(BaseDeckController):
                 self.lineup.note_external_playback()
                 if self.music.play_song(sid):
                     self.flash(btn_idx)
+                else:
+                    self._press_failed(btn_idx)
 
     # ── Rendering ────────────────────────────────────────
 
@@ -337,6 +354,79 @@ class StreamDeckController(BaseDeckController):
         return ""
 
     @staticmethod
+    def _wrap_label(text: str, width: int = 8, max_lines: int = 3) -> str:
+        """Word-wrap a key label the way the web editor previews it.
+
+        The deck used to hard-truncate at 16 characters on one or two
+        lines, so 'Gunnar Gulbrandsen' became 'Gunnar Gulbrand' on the
+        key while the portal showed the full name — the two never looked
+        the same and long words just fell off the edge. Words wrap whole
+        when they fit; a word longer than a line is split rather than
+        dropped; anything past the last line ends in an ellipsis so the
+        cut is at least visible.
+        """
+        text = str(text or '')
+        if '\n' in text:                 # the editor's own line breaks win
+            return '\n'.join(ln[:width + 2] for ln in
+                             text.split('\n')[:max_lines])
+        words, lines, cur, dropped = text.split(), [], '', False
+        for w in words:
+            if not cur and len(w) > width:
+                while len(w) > width and len(lines) < max_lines - 1:
+                    lines.append(w[:width])
+                    w = w[width:]
+                cur = w
+            elif not cur:
+                cur = w
+            elif len(cur) + 1 + len(w) <= width:
+                cur += ' ' + w
+            else:
+                lines.append(cur)
+                cur = w
+            if len(lines) >= max_lines:
+                dropped = True     # cur (and any later words) never render
+                break
+        if cur and len(lines) < max_lines:
+            lines.append(cur)
+            cur = ''
+        if cur:
+            dropped = True
+        if dropped and lines:
+            lines[-1] = (lines[-1][:width - 1] + '…')
+        return '\n'.join(lines[:max_lines])
+
+    @staticmethod
+    def _fit_font(label: str, base: int) -> int:
+        """Shrink the font just enough for the wrapped label's longest
+        line — so the key and the web preview read the same instead of the
+        deck clipping what the portal displays."""
+        longest = max((len(ln) for ln in label.split('\n')), default=0)
+        if longest <= 8:
+            return base
+        if longest <= 10:
+            return max(10, int(base * 0.85))
+        return max(9, int(base * 0.7))
+
+    def _press_failed(self, btn_idx: int) -> None:
+        """A press that made no sound says WHY on the key it was pressed.
+
+        Silence used to come with nothing at all — no flash, no message —
+        and 'I pressed a song, then play, and nothing played' was a bug
+        report only because a coach took the time to file it. The reason
+        (missing file, unreachable Audio Pi) paints the key red for a
+        moment, then the page repaints itself.
+        """
+        why = (getattr(self.music, 'last_error', '') or
+               'Audio Pi unreachable')
+        label = self._wrap_label('✗ ' + why, width=9, max_lines=3)
+        try:
+            self.btn(btn_idx, label, (150, 24, 24), (255, 255, 255),
+                     font_size=self._fit_font(label, DECK_DEFAULT_FONT_SIZE))
+        except Exception:
+            log.exception('could not paint the failure key')
+        threading.Timer(2.5, self.refresh).start()
+
+    @staticmethod
     def _slot_position(slot: dict) -> int:
         """The 1-based batting-order position stored on a lineup_slot key."""
         try:
@@ -373,7 +463,9 @@ class StreamDeckController(BaseDeckController):
                 wbg, wfg = self._sync_key_colors()
                 if wbg:
                     bg, fg = wbg, wfg
-            self.btn(btn_idx, label[:16], bg, fg, font=font, font_size=size)
+            wrapped = self._wrap_label(label)
+            self.btn(btn_idx, wrapped, bg, fg, font=font,
+                     font_size=self._fit_font(wrapped, size))
 
     def _handle_slot_press(self, btn_idx: int) -> None:
         slots = self.config.pages.get(self.current_page_id, {}).get("slots", {})
@@ -416,8 +508,7 @@ class StreamDeckController(BaseDeckController):
             return
         elif kind == "action":
             if ref == "play":
-                self.lineup.play()
-                ok = True
+                ok = self.lineup.play()
             elif ref == "stop":
                 ok = self.music.stop()
             elif ref == "fade":
@@ -426,6 +517,10 @@ class StreamDeckController(BaseDeckController):
                 ok = self._start_sync()
         if ok:
             self.flash(btn_idx)
+        elif kind in ("player_walkup", "song", "celebration") or (
+                kind == "action" and ref in ("play", "stop", "fade")):
+            # sync is excluded: the Sync key narrates its own progress
+            self._press_failed(btn_idx)
 
     # ── Sync-now key ─────────────────────────────────────
     # The timer polls every 5 minutes. When a coach changes a walk-up song

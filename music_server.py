@@ -454,7 +454,12 @@ def http_play():
     except MissingAudio as exc:
         return jsonify(ok=False, error=f"missing file: {exc}",
                        missing=str(exc), status=player.status())
-    return jsonify(ok=ok, status=player.status())
+    if not ok:
+        # The deck paints this string on the pressed key — a bare ok=false
+        # showed as "Audio Pi said no", which explains nothing.
+        return jsonify(ok=False, error="nothing cued — press a song first",
+                       status=player.status())
+    return jsonify(ok=True, status=player.status())
 
 
 @app.post("/stop")
@@ -468,7 +473,10 @@ def http_fade():
     body = request.get_json(force=True, silent=True) or {}
     ms = int(body.get("ms", DEFAULT_FADE_MS))
     ok = player.fade(ms)
-    return jsonify(ok=ok, status=player.status())
+    if not ok:
+        return jsonify(ok=False, error="nothing playing",
+                       status=player.status())
+    return jsonify(ok=True, status=player.status())
 
 
 @app.post("/volume")
