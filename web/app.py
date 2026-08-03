@@ -2084,10 +2084,15 @@ def ondeck_api_status():
 
 @app.post("/ondeck/api/preview")
 def ondeck_api_preview():
+    # CUE-FIRST: a song button loads the clip on the Audio Pi; the ▶ Play
+    # button in the transport strip is the one thing that makes sound.
     body = request.get_json(force=True) or {}
     data, code = _proxy("POST", "/queue", json=body)
-    if code != 200:
-        return jsonify(data), code
+    return jsonify(data), code
+
+
+@app.post("/ondeck/api/play")
+def ondeck_api_play():
     data, code = _proxy("POST", "/play")
     return jsonify(data), code
 

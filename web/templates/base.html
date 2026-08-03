@@ -120,6 +120,7 @@
       <span class="text-gray-600">●</span>
       <span id="now-playing-text">Nothing playing</span>
     </div>
+    <button onclick="apiPlay()" class="px-3 py-1.5 rounded bg-green-700 hover:bg-green-600 text-white text-xs font-bold transition-colors">▶ Play</button>
     <button onclick="apiStop()" class="px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-xs font-medium transition-colors">■ Stop</button>
     <button onclick="apiFade()" class="px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-xs font-medium transition-colors">↘ Fade</button>
     <div class="flex items-center gap-2">
@@ -415,6 +416,10 @@
       } catch { /* unreachable */ }
     }
 
+    async function apiPlay() {
+      try { await fetch('/ondeck/api/play', {method: 'POST'}); }
+      catch (e) {}
+    }
     async function apiStop() {
       if (window.OnDeck) await OnDeck.stopAll()
       setTimeout(pollStatus, 300)

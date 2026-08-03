@@ -25,6 +25,7 @@ song, or a celebration stinger). The deck holds no audio itself — it calls
 from __future__ import annotations
 
 import logging
+import subprocess
 import threading
 import time
 
@@ -173,6 +174,9 @@ class StreamDeckController(BaseDeckController):
 
     def on_content_key(self, btn_idx) -> None:
         page = self.config.pages.get(self.current_page_id, {})
+        if self.current_page_id == "__status":
+            self._press_status_key(btn_idx)
+            return
         # A page with hand-edited slots is driven entirely by them (the web
         # Stream Deck editor); otherwise fall back to the built-in auto-layout.
         if page.get("slots"):
@@ -186,6 +190,10 @@ class StreamDeckController(BaseDeckController):
             order = self.page_order()
             if slot < len(order):
                 self.go_to_page(order[slot])
+            elif slot == len(order):
+                self._reboot_armed = 0.0
+                self.current_page_id = "__status"
+                self.render_all()
 
         elif kind == "lineup":
             # Cue (queue) this batter; the coach presses Play to run it.
@@ -243,6 +251,9 @@ class StreamDeckController(BaseDeckController):
             self._render_slot_page()
             return
         kind = page.get("kind", self.current_page_id)
+        if self.current_page_id == "__status":
+            self._render_status_page()
+            return
         if kind == "home":
             self._render_home_page()
         elif kind == "lineup":
@@ -266,6 +277,10 @@ class StreamDeckController(BaseDeckController):
                 col = self.ACTIVE_COLOR if active else self.PAGE_BG.get(pid, self.DEFAULT_BG)
                 fg = (0, 0, 0) if active else (200, 200, 200)
                 self.btn(btn_idx, pname[:10], col, fg)
+            elif i == len(order):
+                # the deck's own health: CPU/temp/IP/uptime + Sync,
+                # Update (git pull) and Reboot, right on the hardware
+                self.btn(btn_idx, "Status", (40, 44, 60), (160, 200, 255))
             else:
                 self.blank(btn_idx)
 
@@ -609,6 +624,118 @@ class StreamDeckController(BaseDeckController):
         except Exception:
             pass
         return None, None            # fresh — the slot's own colours
+
+    # ── the deck's own status page (built-in, id "__status") ────────────
+    _ST_KEYS = ("sync", "update", "reboot", "back")
+
+    @staticmethod
+    def _read_file(path, default=""):
+        try:
+            with open(path) as fh:
+                return fh.read().strip()
+        except OSError:
+            return default
+
+    def _status_lines(self):
+        """CPU load, temperature, IP and uptime — same numbers the Audio
+        Pi's web status page shows, painted on keys."""
+        load = self._read_file("/proc/loadavg", "—").split(" ")[0]
+        temp = self._read_file("/sys/class/thermal/thermal_zone0/temp")
+        try:
+            temp = f"{int(temp) / 1000:.0f}C"
+        except (TypeError, ValueError):
+            temp = "—"
+        up = self._read_file("/proc/uptime", "0").split(" ")[0]
+        try:
+            mins = int(float(up) // 60)
+            up = f"{mins // 1440}d{mins % 1440 // 60}h{mins % 60}m"
+        except ValueError:
+            up = "—"
+        try:
+            import socket
+            sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sk.connect(("8.8.8.8", 80))
+            ip = sk.getsockname()[0]
+            sk.close()
+        except OSError:
+            ip = "no net"
+        return [("CPU", load), ("TEMP", temp), ("IP", ip), ("UP", up)]
+
+    def _render_status_page(self) -> None:
+        rows = self._status_lines()
+        for i, btn_idx in enumerate(self.content_slots):
+            if i < len(rows):
+                k, v = rows[i]
+                self.btn(btn_idx, f"{k}\n{v}"[:22], (24, 30, 40),
+                         (170, 200, 230))
+            elif i - len(rows) == 0:
+                self.btn(btn_idx, "Sync", (18, 60, 34), (140, 230, 170))
+            elif i - len(rows) == 1:
+                self.btn(btn_idx, "Update\n(code)", (18, 40, 70),
+                         (150, 200, 255))
+            elif i - len(rows) == 2:
+                armed = time.monotonic() - getattr(
+                    self, "_reboot_armed", 0.0) < 3.0
+                self.btn(btn_idx,
+                         "SURE?\nReboot" if armed else "Reboot",
+                         (90, 20, 20) if armed else (50, 22, 22),
+                         (255, 170, 170))
+            elif i - len(rows) == 3:
+                self.btn(btn_idx, "< Home", (40, 40, 40), (200, 200, 200))
+            else:
+                self.blank(btn_idx)
+
+    def _press_status_key(self, btn_idx) -> None:
+        rows = 4
+        slot = self.content_slots.index(btn_idx)
+        act = slot - rows
+        if slot < rows:
+            self.render_all()          # tapping a stat refreshes them all
+            return
+        if act == 0:                   # Sync (config + audio, both boxes)
+            if self._start_sync():
+                self.flash(btn_idx)
+            else:
+                self._press_failed(btn_idx)
+        elif act == 1:                 # Update: git pull + restart services
+            self.btn(btn_idx, "pulling\u2026", (18, 40, 70),
+                     (150, 200, 255))
+            threading.Thread(target=self._run_code_update,
+                             args=(btn_idx,), daemon=True).start()
+        elif act == 2:                 # Reboot: double-press within 3 s
+            if time.monotonic() - getattr(self, "_reboot_armed", 0.0) < 3.0:
+                subprocess.run(["sudo", "reboot"], capture_output=True)
+            else:
+                self._reboot_armed = time.monotonic()
+                self.render_all()
+        elif act == 3:
+            self.current_page_id = "home"
+            self.render_all()
+
+    def _run_code_update(self, btn_idx) -> None:
+        """git pull --ff-only on this checkout, then restart the OnDeck
+        services — the same thing the Audio Pi's web Update button does.
+        Restarting our own service is the point: systemd brings the deck
+        back up running the new code."""
+        import pathlib
+        repo = pathlib.Path(__file__).resolve().parent
+        try:
+            out = subprocess.run(
+                ["git", "-C", str(repo), "pull", "--ff-only"],
+                capture_output=True, text=True, timeout=120)
+            ok = out.returncode == 0
+        except Exception:
+            ok = False
+        if not ok:
+            self._press_failed(btn_idx)
+            return
+        self.flash(btn_idx)
+        for unit in ("ondeck-audio", "ondeck-coach"):
+            chk = subprocess.run(["systemctl", "is-enabled", unit],
+                                 capture_output=True, text=True)
+            if (chk.stdout or "").strip() in ("enabled", "static"):
+                subprocess.run(["sudo", "systemctl", "restart", unit],
+                               capture_output=True, timeout=60)
 
     def _start_sync(self) -> bool:
         """One press, BOTH boxes: sync this Pi (config/lineup) and tell
