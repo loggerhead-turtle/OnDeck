@@ -177,6 +177,14 @@ class StreamDeckController(BaseDeckController):
         if self.current_page_id == "__status":
             self._press_status_key(btn_idx)
             return
+        if page.get("slots") \
+                and page.get("kind", self.current_page_id) == "home" \
+                and self.content_slots.index(btn_idx) \
+                == self._status_slot(page):
+            self._reboot_armed = 0.0
+            self.current_page_id = "__status"
+            self.render_all()
+            return
         # A page with hand-edited slots is driven entirely by them (the web
         # Stream Deck editor); otherwise fall back to the built-in auto-layout.
         if page.get("slots"):
@@ -245,15 +253,32 @@ class StreamDeckController(BaseDeckController):
 
     # ── Rendering ────────────────────────────────────────
 
+    def _status_slot(self, page) -> int:
+        """Which content slot carries the Status key on the HOME page:
+        the first empty slot, or the last one when the coach filled all
+        21 — reaching the deck's own health beats a 21st song button."""
+        slots = page.get("slots") or {}
+        for i in range(len(self.content_slots)):
+            sl = slots.get(str(i)) or {}
+            if not sl or sl.get("type") in (None, "", "blank"):
+                return i
+        return len(self.content_slots) - 1
+
     def render_content(self) -> None:
-        page = self.config.pages.get(self.current_page_id, {})
-        if page.get("slots"):
-            self._render_slot_page()
-            return
-        kind = page.get("kind", self.current_page_id)
         if self.current_page_id == "__status":
             self._render_status_page()
             return
+        page = self.config.pages.get(self.current_page_id, {})
+        if page.get("slots"):
+            self._render_slot_page()
+            # the deck's health must stay reachable even on a fully
+            # hand-edited home screen
+            if page.get("kind", self.current_page_id) == "home":
+                i = self._status_slot(page)
+                self.btn(self.content_slots[i], "Status",
+                         (40, 44, 60), (160, 200, 255))
+            return
+        kind = page.get("kind", self.current_page_id)
         if kind == "home":
             self._render_home_page()
         elif kind == "lineup":
