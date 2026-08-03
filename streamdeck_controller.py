@@ -206,7 +206,10 @@ class StreamDeckController(BaseDeckController):
                     self._assign_player_to_lineup(pid, btn_idx)
                     return
                 self.lineup.note_external_playback()
-                if self.music.play_walkup(pid):
+                # CUE-FIRST, always: a song press loads the clip; the
+                # green Play key runs it. Nothing blares mid-inning
+                # because a thumb brushed a tile.
+                if self.music.cue_walkup(pid):
                     self.flash(btn_idx)
                 else:
                     self._press_failed(btn_idx)
@@ -215,7 +218,7 @@ class StreamDeckController(BaseDeckController):
             if slot < len(CELEBRATIONS):
                 key, _ = CELEBRATIONS[slot]
                 self.lineup.note_external_playback()
-                if self.music.play_celebration(key):
+                if self.music.cue_celebration(key):
                     self.flash(btn_idx)
                 else:
                     self._press_failed(btn_idx)
@@ -227,7 +230,7 @@ class StreamDeckController(BaseDeckController):
             if slot < len(songs):
                 sid, _ = songs[slot]
                 self.lineup.note_external_playback()
-                if self.music.play_song(sid):
+                if self.music.cue_song(sid):
                     self.flash(btn_idx)
                 else:
                     self._press_failed(btn_idx)
@@ -488,9 +491,11 @@ class StreamDeckController(BaseDeckController):
         if not slot:
             return
         kind, ref = slot.get("type"), slot.get("ref", "")
-        # "immediate" plays at once; "cue"/"queue" only loads the clip so the
-        # coach runs it with the Play button (mirrors the Lineup cue flow).
-        queue_only = slot.get("mode") in ("cue", "queue")
+        # EVERY music slot cues — the Play key is the one thing that makes
+        # sound (the Lineup flow always worked this way; now nothing else
+        # can fire mid-inning by accident). The old per-slot "immediate"
+        # mode is ignored on music keys.
+        queue_only = True
         ok = False
         if kind == "text":
             return  # a label-only key — nothing to do
@@ -511,13 +516,10 @@ class StreamDeckController(BaseDeckController):
                   else self.music.play_walkup(ref))
         elif kind == "song":
             self.lineup.note_external_playback()
-            if queue_only:
-                ok = self.music.queue(self.config.build_song_clip(ref) or {})
-            else:
-                ok = self.music.play_song(ref)
+            ok = self.music.queue(self.config.build_song_clip(ref) or {})
         elif kind == "celebration":
             self.lineup.note_external_playback()
-            ok = self.music.play_celebration(ref)
+            ok = self.music.cue_celebration(ref)
         elif kind == "nav":
             self.go_to_page(ref)
             return

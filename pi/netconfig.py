@@ -170,7 +170,49 @@ def redeem_pairing_code(cloud_url: str, code: str, hostname: str = "") -> str:
     return token
 
 
-# ── Wi-Fi (wpa_supplicant) ─────────────────────────────────────────────────
+# ── Wi-Fi ──────────────────────────────────────────────────────────────────
+# Credentials are written for BOTH network stacks: a wpa_supplicant block
+# (Bullseye and older) AND a NetworkManager keyfile (Bookworm/Trixie, the
+# Raspberry Pi OS default since late 2023 — it IGNORES wpa_supplicant.conf).
+# Whichever stack owns the radio picks up its file; the other is inert.
+
+NM_CONN_DIR = Path("/etc/NetworkManager/system-connections")
+
+
+def _quiet_run(cmd: list) -> None:
+    """subprocess.run that also swallows a missing binary — nmcli only
+    exists on NetworkManager images."""
+    try:
+        subprocess.run(cmd, check=False, capture_output=True)
+    except Exception:
+        pass
+
+
+def write_nm_keyfile(ssid: str, password: str) -> None:
+    """Drop a NetworkManager keyfile for one Wi-Fi network. Named ondeck-*
+    so cleanup can target only connections we created."""
+    ssid = (ssid or "").replace("\n", " ").strip()
+    password = (password or "").replace("\n", "")
+    sec = (f"[wifi-security]\nkey-mgmt=wpa-psk\npsk={password}\n\n"
+           if password else "")
+    keyfile = (f"[connection]\nid={ssid}\ntype=wifi\nautoconnect=true\n\n"
+               f"[wifi]\nmode=infrastructure\nssid={ssid}\n\n"
+               f"{sec}"
+               "[ipv4]\nmethod=auto\n\n[ipv6]\nmethod=auto\n")
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in ssid) \
+        or "network"
+    try:
+        NM_CONN_DIR.mkdir(parents=True, exist_ok=True)
+        path = NM_CONN_DIR / f"ondeck-{safe}.nmconnection"
+        path.write_text(keyfile)
+        path.chmod(0o600)   # NM refuses keyfiles readable by anyone but root
+    except Exception as exc:
+        log.warning("Could not write NetworkManager keyfile: %s", exc)
+    # Best-effort nudge for a running NM; a no-op at early boot (NM reads
+    # the directory when it starts).
+    _quiet_run(["nmcli", "connection", "reload"])
+    _quiet_run(["nmcli", "connection", "up", "id", ssid])
+
 
 def _network_block(ssid: str, password: str) -> str:
     esc_ssid = ssid.replace('"', '\\"')
@@ -188,10 +230,12 @@ def _network_block(ssid: str, password: str) -> str:
 
 
 def write_wifi(ssid: str, password: str) -> None:
-    """Replace wpa_supplicant.conf with a single network (open if no password)."""
+    """Replace wpa_supplicant.conf with a single network (open if no
+    password), and write the NetworkManager keyfile for Bookworm images."""
     WPA_CONF.parent.mkdir(parents=True, exist_ok=True)
     WPA_CONF.write_text(_WPA_HEADER + "\n" + _network_block(ssid, password))
     WPA_CONF.chmod(0o640)
+    write_nm_keyfile(ssid, password)
     log.info("Saved Wi-Fi for SSID '%s'", ssid)
 
 
@@ -204,6 +248,7 @@ def append_wifi(ssid: str, password: str) -> None:
         current = _WPA_HEADER
     WPA_CONF.write_text(current + "\n" + _network_block(ssid, password))
     WPA_CONF.chmod(0o640)
+    write_nm_keyfile(ssid, password)
     log.info("Appended Wi-Fi network '%s'", ssid)
 
 

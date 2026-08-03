@@ -346,19 +346,50 @@ class Player:
                 return False
             pos_s = (time.monotonic() - (self._started_at or 0))
             clip = self._queued
-            self._kill_proc()
 
             song = str(MUSIC_DIR / clip["file"])
             start_s = (clip.get("start_ms") or 0) / 1000.0
             dur_s = ms / 1000.0
             gain = self._volume / 100.0
             seek = start_s + pos_s
-            cmd = [
-                "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
-                "-ss", f"{seek:.3f}", "-t", f"{dur_s:.3f}", "-i", song,
-                "-af", f"afade=t=out:st=0:d={dur_s:.3f},volume={gain:.3f}",
-            ] + self._output_args()
-            self._spawn(cmd, finish_state="stopped")
+
+            def _cmd(sk):
+                return [
+                    "ffmpeg", "-hide_banner", "-loglevel", "error",
+                    "-nostdin",
+                    "-ss", f"{sk:.3f}", "-t", f"{dur_s:.3f}", "-i", song,
+                    "-af", f"afade=t=out:st=0:d={dur_s:.3f},"
+                           f"volume={gain:.3f}",
+                ] + self._output_args()
+
+            # Kill-then-spawn put a beat of dead air between the live song
+            # and its fade clip, and the clip re-entered at the wall-clock
+            # position — which the ear hears as "the music stops, starts
+            # again, THEN fades". Start the fade rendition FIRST (seeked a
+            # breath ahead to cover its own startup) and only then kill the
+            # live process: on a shared/dmix device the two overlap for
+            # ~120 ms and the song leans straight into the fade. On an
+            # exclusive device the new process exits immediately and we
+            # fall back to the historical kill-first order.
+            pre = None
+            try:
+                pre = subprocess.Popen(
+                    _cmd(seek + 0.18),
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL, start_new_session=True)
+                time.sleep(0.12)
+            except Exception:
+                pre = None
+            if pre is not None and pre.poll() is None:
+                self._kill_proc()
+                self._gen += 1
+                self._proc = pre
+                threading.Thread(target=self._watch,
+                                 args=(pre, "stopped"),
+                                 daemon=True).start()
+            else:
+                self._kill_proc()
+                self._spawn(_cmd(seek), finish_state="stopped")
             # After the fade clip ends the watcher sets state to stopped; the
             # queue is intentionally cleared so nothing is left cued.
             self._queued = None
@@ -676,8 +707,38 @@ def http_landing():
 </body></html>"""
 
 
+def _ensure_wired_volume() -> None:
+    """Field-appliance rule: the built-in 3.5mm jack must never boot quiet.
+
+    Desktop volume restore is best-effort and headless boots have no human
+    to notice a 40% jack until the first walk-up whispers. Pin the wired
+    sink to 100%/unmuted once the audio session is up (it appears a few
+    seconds after boot, hence the patient retry loop) — gain staging
+    belongs on the speaker's knob and OnDeck's own volume setting, not a
+    forgotten desktop mixer. Bluetooth sinks are untouched."""
+    for _ in range(30):
+        try:
+            r = subprocess.run(["pactl", "list", "short", "sinks"],
+                               capture_output=True, text=True, timeout=5)
+            wired = [line.split("\t")[1] for line in r.stdout.splitlines()
+                     if "\t" in line and "alsa_output" in line.split("\t")[1]]
+            if wired:
+                for name in wired:
+                    subprocess.run(["pactl", "set-sink-volume", name, "100%"],
+                                   capture_output=True, timeout=5)
+                    subprocess.run(["pactl", "set-sink-mute", name, "0"],
+                                   capture_output=True, timeout=5)
+                log.info("Wired sink(s) pinned to 100%%: %s", ", ".join(wired))
+                return
+        except Exception as exc:
+            log.debug("wired-volume check: %s", exc)
+        time.sleep(2)
+    log.warning("No wired ALSA sink appeared — jack volume not pinned")
+
+
 def main() -> None:
     port = int(os.environ.get("ONDECK_AUDIO_PORT", "5100"))
+    threading.Thread(target=_ensure_wired_volume, daemon=True).start()
     # Cloud-link + Wi-Fi pages (same ones the deck portal uses) so the Audio Pi
     # can be linked/managed from a browser on the field Wi-Fi without SSH.
     try:

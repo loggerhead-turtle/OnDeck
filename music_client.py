@@ -162,6 +162,22 @@ class MusicClient:
         """Play a plain library song (hype, mid-inning, stingers, …)."""
         return self.play_clip(self.config.build_song_clip(song_id))
 
+    def cue_song(self, song_id: str) -> bool:
+        """Queue a library song without playing it — Play runs it."""
+        clip = self.config.build_song_clip(song_id)
+        if not clip:
+            self.last_error = "not in this deck's config — press Sync"
+            return False
+        return self.queue(clip)
+
+    def cue_celebration(self, kind: str) -> bool:
+        """Queue a celebration stinger — Play fires it."""
+        sid = self.config.get_celebration_song(kind)
+        if not sid:
+            self.last_error = "no celebration song set"
+            return False
+        return self.cue_song(sid)
+
     def play_celebration(self, kind: str) -> bool:
         """Fire a celebration stinger (hit/extra_base/home_run/strikeout)."""
         sid = self.config.get_celebration_song(kind)
