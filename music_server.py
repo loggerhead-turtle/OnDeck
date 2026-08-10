@@ -123,6 +123,90 @@ def _fade_start(clip: dict, song: str, start_s: float) -> tuple[float, float]:
 bt = BluetoothManager() if (BluetoothManager and
                             not os.environ.get("ONDECK_NO_BLUETOOTH")) else None
 
+# -- sound-server routing -------------------------------------------------
+# Everything the Audio Pi plays goes through PipeWire/pipewire-pulse when
+# there is one, Bluetooth speaker or wired jack alike, because the live
+# fade ramps a sink-input volume and a stream ALSA owns has no sink-input.
+# ONDECK_AUDIO_OUT=alsa forces the old behaviour if a box ever needs it.
+_PULSE_TTL = 20.0                       # re-resolve the default sink now and then
+_pulse_state: dict = {"ok": None, "sink": "", "at": float("-inf")}
+_pulse_lock = threading.Lock()
+
+
+def _pulse_usable() -> bool:
+    """True when a pulse server answers AND ffmpeg can write to it.
+
+    Probed once and remembered: the answer cannot change without the
+    service restarting, and asking on every play would put two
+    subprocesses in front of a walk-up.
+    """
+    if _pulse_state["ok"] is None:
+        ok = False
+        try:
+            r = subprocess.run(["pactl", "info"], capture_output=True,
+                               text=True, timeout=5)
+            if r.returncode == 0:
+                m = subprocess.run(["ffmpeg", "-hide_banner", "-muxers"],
+                                   capture_output=True, text=True, timeout=10)
+                ok = " pulse" in (m.stdout or "")
+        except Exception as exc:
+            log.info("no pulse audio route (%s) — playing straight to ALSA",
+                     exc)
+        _pulse_state["ok"] = ok
+        log.info("Audio route: %s", "pulse" if ok else "alsa")
+    return bool(_pulse_state["ok"])
+
+
+def _pulse_default_sink() -> str:
+    """Name of the server's default sink, or '' when there is no server.
+
+    ffmpeg's pulse muxer takes a sink NAME, and the literal string
+    "default" is not one — a sink that does not exist means silence — so
+    the real name is resolved and cached.
+    """
+    mode = (os.environ.get("ONDECK_AUDIO_OUT") or "auto").strip().lower()
+    if mode == "alsa":
+        return ""
+    # A Pi with an HDMI cable in it has more than one sink, and the server's
+    # idea of "default" is not always the one the PA is plugged into.
+    # ONDECK_AUDIO_SINK pins it; /status prints what is actually in use so
+    # the answer is readable from the field instead of guessed at.
+    pinned = (os.environ.get("ONDECK_AUDIO_SINK") or "").strip()
+    if pinned:
+        return pinned
+    with _pulse_lock:
+        if (time.monotonic() - _pulse_state["at"]) < _PULSE_TTL:
+            return _pulse_state["sink"]
+        if mode != "pulse" and not _pulse_usable():
+            return ""
+        name = ""
+        try:
+            r = subprocess.run(["pactl", "get-default-sink"],
+                               capture_output=True, text=True, timeout=5)
+            out = (r.stdout or "").strip()
+            if r.returncode == 0 and out:
+                name = out.splitlines()[0].strip()
+        except Exception:
+            name = ""
+        if not name:
+            # pactl older than 15 has no get-default-sink.
+            try:
+                r = subprocess.run(["pactl", "info"], capture_output=True,
+                                   text=True, timeout=5)
+                for line in (r.stdout or "").splitlines():
+                    if line.startswith("Default Sink:"):
+                        name = line.split(":", 1)[1].strip()
+                        break
+            except Exception:
+                name = ""
+        if name.lower() in ("", "@default_sink@", "auto_null"):
+            # No default set, or the dummy sink PipeWire parks on when no
+            # card is ready yet — either way ALSA is the better guess.
+            name = ""
+        _pulse_state["sink"] = name
+        _pulse_state["at"] = time.monotonic()
+        return name
+
 
 class MissingAudio(Exception):
     """A clip references a file that is not on this Pi's disk."""
@@ -147,6 +231,11 @@ class Player:
         # Bumped on every spawn/stop. A fade ramp runs on its own thread and
         # checks this, so a walk-up cued mid-fade is never faded down.
         self._gen = 0
+        # A fade parks the stream at 0% and the sound server remembers
+        # that per application, so the next stream has to be reset. Starts
+        # True: a 0% left behind by a crash or a previous run outlives the
+        # process that set it, and the symptom is a silent walk-up.
+        self._pulse_volume_dirty = True
         self.on_finish = None            # optional callable()
 
     # -- queue / play -----------------------------------------------------
@@ -260,38 +349,80 @@ class Player:
         """ffmpeg output target.
 
         Priority: explicit ONDECK_FFMPEG_OUT override (laptops/testing) →
-        the connected Bluetooth speaker's PipeWire/Pulse sink → ALSA default.
+        the connected Bluetooth speaker's PipeWire/Pulse sink → the default
+        PipeWire/Pulse sink → ALSA default.
+
+        The wired jack goes through pulse too, and that is the whole point:
+        a fade can only be ramped on a stream the sound server can see, so
+        an ffmpeg talking straight to ALSA had to be killed and relaunched
+        to fade — which is what made Fade stutter on a PA plugged into the
+        jack. Routing it through the same server the Bluetooth speaker uses
+        makes ONE fade implementation cover both. ALSA stays as the
+        fallback for a box with no sound server at all.
         """
         override = os.environ.get("ONDECK_FFMPEG_OUT")
         if override:
             return shlex.split(override)
         sink = bt.current_sink() if bt else None
+        if not sink:
+            sink = _pulse_default_sink()
         if sink:
             return ["-f", "pulse", sink]
         return ["-f", "alsa", "default"]
 
     # -- fade / stop ------------------------------------------------------
 
-    def _pulse_sink_input(self, pid: int) -> str | None:
+    def _pulse_sink_input(self, pid: int, tries: int = 1) -> str | None:
         """PulseAudio sink-input index for our ffmpeg process, or None.
 
         Matched on application.process.id — our own PID — so it can never
         grab another stream, and playback needs no extra ffmpeg flags.
+
+        ``tries`` re-asks a few times, 60 ms apart: ffmpeg registers its
+        stream a moment after the process exists, and a Fade pressed on
+        the first beat of a walk-up used to miss that window and fall
+        through to the stuttering relaunch path.
         """
-        try:
-            r = subprocess.run(["pactl", "list", "sink-inputs"],
-                               capture_output=True, text=True, timeout=5)
-        except Exception:
-            return None
-        idx = None
-        for line in (r.stdout or "").splitlines():
-            line = line.strip()
-            if line.startswith("Sink Input #"):
-                idx = line.split("#", 1)[1].strip()
-            elif line.startswith("application.process.id") and idx:
-                if line.split("=", 1)[-1].strip().strip('"') == str(pid):
-                    return idx
+        for attempt in range(max(1, tries)):
+            if attempt:
+                time.sleep(0.06)
+            try:
+                r = subprocess.run(["pactl", "list", "sink-inputs"],
+                                   capture_output=True, text=True, timeout=5)
+            except Exception:
+                return None
+            idx = None
+            for line in (r.stdout or "").splitlines():
+                line = line.strip()
+                if line.startswith("Sink Input #"):
+                    idx = line.split("#", 1)[1].strip()
+                elif line.startswith("application.process.id") and idx:
+                    if line.split("=", 1)[-1].strip().strip('"') == str(pid):
+                        return idx
         return None
+
+    def _restore_stream_volume(self, proc: subprocess.Popen) -> None:
+        """Put a freshly started pulse stream back at 100%.
+
+        A fade leaves its sink-input at 0% and the sound server REMEMBERS
+        stream volumes per application: without this the walk-up after a
+        faded one comes out of the PA silent, which is a far worse bug
+        than the stutter this fade replaced. Runs off the play path, and
+        only after a fade (or a restart, where the remembered 0% may have
+        outlived the process that set it).
+        """
+        for _ in range(12):
+            if proc.poll() is not None:
+                return
+            idx = self._pulse_sink_input(proc.pid)
+            if idx:
+                try:
+                    subprocess.run(["pactl", "set-sink-input-volume", idx,
+                                    "100%"], capture_output=True, timeout=3)
+                except Exception:
+                    pass
+                return
+            time.sleep(0.05)
 
     def _fade_via_pulse(self, idx: str, ms: int, gen: int) -> bool:
         """Ramp the LIVE stream down, then stop.
@@ -304,8 +435,21 @@ class Player:
         is already playing, so nothing restarts.
         """
         steps = max(4, min(40, int(ms / 50)))
-        pause = (ms / 1000.0) / steps
-        for i in range(steps - 1, -1, -1):
+        began = time.monotonic()
+        # From here the sound server has a remembered volume for our
+        # streams that is not 100%; the next spawn has to undo it.
+        self._pulse_volume_dirty = True
+        # The ramp starts at full: entering at (steps-1)/steps squared put an
+        # instant step down before the first sample of the fade, which on a
+        # short fade is most of the volume and reads as a blip.
+        for i in range(steps, -1, -1):
+            # Wait for this step's moment, then set it. Sleeping to a
+            # deadline rather than for a fixed slice keeps the fade the
+            # length that was asked for: each pactl call costs real
+            # milliseconds on a Pi, and a 1s fade that ran 1.6s is half a
+            # second of music nobody asked for.
+            due = began + (ms / 1000.0) * (steps - i) / steps
+            time.sleep(max(0.0, due - time.monotonic()))
             with self._lock:
                 if gen != self._gen:
                     return True          # a new clip started — leave it alone
@@ -315,8 +459,12 @@ class Player:
                 subprocess.run(["pactl", "set-sink-input-volume", idx,
                                 f"{pct}%"], capture_output=True, timeout=3)
             except Exception:
+                # Half-faded and unable to finish: silence beats a song
+                # stuck at 30% for the rest of the inning.
+                with self._lock:
+                    if gen == self._gen:
+                        self._stop_locked()
                 return False
-            time.sleep(pause)
         with self._lock:
             if gen == self._gen:
                 self._stop_locked()
@@ -325,9 +473,12 @@ class Player:
     def fade(self, ms: int = DEFAULT_FADE_MS) -> bool:
         """Fade the *currently playing* clip out over ``ms`` and stop.
 
-        Preferred path ramps the live PulseAudio stream (the Bluetooth
-        route). Falls back to the original relaunch-with-afade when we are
-        not on pulse — e.g. straight ALSA out of the headphone jack.
+        Preferred path ramps the live PulseAudio stream — which is now
+        every route the Audio Pi has, Bluetooth speaker and wired jack
+        alike (see ``_output_args``), because the relaunch fallback below
+        is audibly wrong: the song stops, restarts a beat later, and only
+        then fades. That fallback is kept for a box with no sound server,
+        where doing nothing would be worse.
         """
         with self._lock:
             if self._state != "playing" or not self._queued:
@@ -335,7 +486,7 @@ class Player:
                 return False
             proc, gen = self._proc, self._gen
         if proc and proc.poll() is None:
-            idx = self._pulse_sink_input(proc.pid)
+            idx = self._pulse_sink_input(proc.pid, tries=3)
             if idx:
                 threading.Thread(target=self._fade_via_pulse,
                                  args=(idx, ms, gen), daemon=True).start()
@@ -428,6 +579,10 @@ class Player:
             target=self._watch, args=(self._proc, finish_state), daemon=True
         )
         watcher.start()
+        if self._pulse_volume_dirty and "pulse" in cmd:
+            self._pulse_volume_dirty = False
+            threading.Thread(target=self._restore_stream_volume,
+                             args=(self._proc,), daemon=True).start()
 
     def _watch(self, proc: subprocess.Popen, finish_state: str) -> None:
         proc.wait()
@@ -533,6 +688,16 @@ def http_volume():
 @app.get("/status")
 def http_status():
     out = dict(player.status())
+    # Which output route is live decides whether Fade can ramp the playing
+    # stream or has to relaunch — the difference a coach hears — so a
+    # support call can read it off /status instead of guessing.
+    try:
+        args = player._output_args()
+        out['route'] = args[args.index('-f') + 1] if '-f' in args else 'custom'
+        out['sink'] = args[-1] if len(args) > 2 else ''
+        out['fade'] = 'live' if out['route'] == 'pulse' else 'relaunch'
+    except Exception:
+        pass
     try:
         cfg = ConfigManager()
         expected = {s.get('filename') for s in cfg.songs.values()
@@ -736,6 +901,24 @@ def _ensure_wired_volume() -> None:
     log.warning("No wired ALSA sink appeared — jack volume not pinned")
 
 
+def _audio_status_rows():
+    """Audio-Pi rows for the shared /status page.
+
+    "Which speaker is this coming out of" and "can Fade ramp it" are the
+    two questions a silent or stuttering PA raises, and both are answered
+    by the output route. ONDECK_AUDIO_SINK pins the sink when the server's
+    default is not the socket the PA is in.
+    """
+    args = player._output_args()
+    route = args[args.index("-f") + 1] if "-f" in args else "custom"
+    sink = args[-1] if len(args) > 2 else ""
+    return [
+        ("Audio out", f"{route} — {sink}" if sink else route),
+        ("Fade", "eases down (live)" if route == "pulse"
+                 else "relaunch — no sound server"),
+    ]
+
+
 def main() -> None:
     port = int(os.environ.get("ONDECK_AUDIO_PORT", "5100"))
     threading.Thread(target=_ensure_wired_volume, daemon=True).start()
@@ -743,7 +926,7 @@ def main() -> None:
     # can be linked/managed from a browser on the field Wi-Fi without SSH.
     try:
         from pi.web_routes import register as register_pi_routes
-        register_pi_routes(app)
+        register_pi_routes(app, extra_rows=_audio_status_rows)
     except Exception as exc:  # optional — must not stop audio playback
         log.warning("Pi web routes not registered: %s", exc)
     if bt is not None:

@@ -79,6 +79,16 @@ def _status_rows(env):
     ]
 
 
+def _extra_rows(fn):
+    """Role-specific status rows — never a reason the page fails to render."""
+    if not fn:
+        return []
+    try:
+        return list(fn())
+    except Exception:
+        return []
+
+
 def _software_summary():
     head = _sh(["git", "-C", str(_REPO_DIR), "log", "-1",
                 "--format=%h %s (%cr)"])
@@ -127,7 +137,14 @@ a{color:#3aa0ff;font-size:.85rem;text-decoration:none;display:block;margin-top:1
 </style></head><body><div class="logo">OnDeck</div>{{ body }}</body></html>"""
 
 
-def register(app) -> None:
+def register(app, extra_rows=None) -> None:
+    """Mount the shared Pi pages on ``app``.
+
+    ``extra_rows`` is an optional callable returning (label, value) pairs
+    appended to the status table — the Audio Pi uses it to print which
+    output the PA is actually coming out of, which is the difference
+    between a fade that eases down and one that stutters.
+    """
     from flask import (request, redirect, render_template_string,
                        url_for, jsonify)
 
@@ -207,7 +224,7 @@ def register(app) -> None:
         rows = "".join(
             f"<div class='row'><span class='k'>{k}</span>"
             f"<span class='v'>{v}</span></div>"
-            for k, v in _status_rows(env))
+            for k, v in _status_rows(env) + _extra_rows(extra_rows))
         busy = st.get("running")
         body = (
             (f"<div class='card'><div class='ok'>{request.args.get('ok')}</div>"
