@@ -27,7 +27,7 @@ import threading
 import time
 from typing import Callable
 
-from config_manager import ConfigManager
+from config_manager import ConfigManager, cue_tag
 from music_client import MusicClient
 
 log = logging.getLogger("lineup")
@@ -44,6 +44,13 @@ class LineupManager:
         self._lock = threading.RLock()
         # Set by the controller so auto-advance can repaint the deck.
         self.on_change: Callable[[], None] | None = None
+        # Fires with the cue tag of whatever the Audio Pi now holds (None
+        # when nothing is loaded), so the deck can keep the cued key lit.
+        # It rides THIS poller rather than starting a second one: the deck
+        # already asks the Audio Pi for its status twice a second and a
+        # parallel loop would double that traffic to say the same thing.
+        self.on_cue_change: Callable[[str | None], None] | None = None
+        self._cue_tag: str | None = None
         # Live playback state for the cue → play → auto-advance flow.
         self._queued_batter = False     # the Audio Pi queue holds a walk-up
         self._armed = False             # auto-advance when this playback ends
@@ -96,6 +103,12 @@ class LineupManager:
         with self._lock:
             self._queued_batter = ok
             self._armed = False
+        if ok:
+            # Announce it rather than waiting for the poller to notice.
+            # This is the auto-advance path too: a song ends, the next
+            # batter is cued here, and his key has to light straight away
+            # or the deck spends half a second showing nothing loaded.
+            self._set_cue(cue_tag("player", pid))
         return ok
 
     def play(self) -> bool:
@@ -138,10 +151,46 @@ class LineupManager:
                     self._was_playing = False
                     self._armed = False
                 # "queued" is a resting state — leave the flags untouched.
+            self._note_cue(status)
             if advance:
                 log.info("Walk-up finished — advancing and re-cueing lineup")
                 self.advance()
                 self.cue_current()   # queue the next batter, ready for Play
+
+    # -- cued-key tracking ------------------------------------------------
+
+    def note_cue_tag(self, tag: str | None) -> None:
+        """Record the cue the deck just fired, without waiting for a poll.
+
+        A key that lights up half a second after the thumb leaves it reads
+        as a laggy deck. The press knows what it cued, so it says so
+        immediately; the poller below is what corrects the display when
+        the clip changes from somewhere else — the portal's transport, a
+        song ending, Stop.
+        """
+        with self._lock:
+            self._cue_tag = tag
+
+    def _note_cue(self, status: dict) -> None:
+        """Fire on_cue_change when the Audio Pi's loaded clip changes.
+
+        This is the half that catches what the deck did NOT do: a song
+        reaching its end, Stop, or the portal's transport cueing something
+        of its own. Those all have to un-light a key the deck lit.
+        """
+        queued = status.get("queued")
+        self._set_cue(queued.get("cue") if isinstance(queued, dict) else None)
+
+    def _set_cue(self, tag: str | None) -> None:
+        with self._lock:
+            if tag == self._cue_tag:
+                return
+            self._cue_tag = tag
+        if self.on_cue_change:
+            try:
+                self.on_cue_change(tag)
+            except Exception as exc:
+                log.warning("lineup on_cue_change handler failed: %s", exc)
 
     # -- internal ---------------------------------------------------------
 

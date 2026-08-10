@@ -27,6 +27,19 @@ MUSIC_DIR = ONDECK_HOME / "music"
 CONFIG_PATH = ONDECK_HOME / "config.json"
 
 
+def cue_tag(kind: str, ref: str) -> str:
+    """Which deck key a queued clip came from, e.g. ``player:p_1a2b``.
+
+    Rides along in the /queue payload and comes straight back out of the
+    Audio Pi's /status (it stores the clip verbatim), so the deck can light
+    the key that is cued — and, just as importantly, un-light it when the
+    clip is no longer the one loaded. Without a tag the only things coming
+    back are a filename and trim points, which two players sharing a song
+    would answer to identically.
+    """
+    return f"{kind}:{ref}"
+
+
 def rating_summary(ratings: dict[str, Any] | None) -> dict[str, Any]:
     """Aggregate a ``{rater_key: stars}`` map into ``{avg, count}``.
 
@@ -357,6 +370,7 @@ class ConfigManager:
         if not song:
             return None
         clip: dict[str, Any] = self._song_clip(song)
+        clip["cue"] = cue_tag("player", player_id)
         ann = player.get("announcement_file")
         if ann:
             clip["announcement"] = ann
@@ -368,7 +382,9 @@ class ConfigManager:
         song = self.songs.get(song_id)
         if not song:
             return None
-        return self._song_clip(song)
+        clip = self._song_clip(song)
+        clip["cue"] = cue_tag("song", song_id)
+        return clip
 
     def walkup_problem(self, player_id: str) -> str | None:
         """Why build_walkup_clip would return None, in words fit for a

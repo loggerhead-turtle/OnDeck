@@ -152,6 +152,22 @@ last_seen); `config["pairing_codes"]` holds outstanding codes (TTL like signup
 links). Helpers live in `config_manager.py` (`create_pairing_code`,
 `redeem_pairing_code`, `device_for_token`, `touch_device`, `revoke_device`).
 
+## The Cued Key (deck)
+
+Every clip the deck queues carries a `cue` tag naming the key it came from
+(`player:<id>`, `song:<id>`, `celebration:<kind>` — `config_manager.cue_tag`).
+The Audio Pi stores the clip verbatim and returns it on `GET /status`, so the
+tag round-trips with **no new endpoint and no Audio Pi change**. Matching on
+the filename instead would light two players who share a walk-up song.
+
+`StreamDeckController._cued` holds that tag; the key matching it paints
+`ACTIVE_COLOR` and stays lit through playback. A press sets it immediately
+(`_cue_pressed`) so the key does not lag the thumb; `LineupManager`'s existing
+0.5s status poller fires `on_cue_change` for everything the deck did *not* do —
+a song ending, Stop, the portal cueing something of its own — which is what
+un-lights a stale key. `lineup_slot` keys resolve their position through the
+batting order (`_slot_is_cued`).
+
 ## Stream Deck Editor
 
 The portal **Stream Deck** page (`/ondeck/deck`) lays out the physical XL keys.

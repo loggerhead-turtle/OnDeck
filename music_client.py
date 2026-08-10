@@ -19,7 +19,7 @@ from typing import Any
 
 import requests as rq
 
-from config_manager import ConfigManager
+from config_manager import ConfigManager, cue_tag
 
 log = logging.getLogger("music")
 
@@ -171,17 +171,23 @@ class MusicClient:
         return self.queue(clip)
 
     def cue_celebration(self, kind: str) -> bool:
-        """Queue a celebration stinger — Play fires it."""
+        """Queue a celebration stinger — Play fires it.
+
+        Tagged as the CELEBRATION, not the song behind it: the deck lights
+        the key that is cued, and a stinger that shares a song with a key
+        on a song page would otherwise light both.
+        """
         sid = self.config.get_celebration_song(kind)
         if not sid:
             self.last_error = "no celebration song set"
             return False
-        return self.cue_song(sid)
+        clip = self.config.build_song_clip(sid)
+        if not clip:
+            self.last_error = "not in this deck's config — press Sync"
+            return False
+        clip["cue"] = cue_tag("celebration", kind)
+        return self.queue(clip)
 
     def play_celebration(self, kind: str) -> bool:
         """Fire a celebration stinger (hit/extra_base/home_run/strikeout)."""
-        sid = self.config.get_celebration_song(kind)
-        if not sid:
-            self.last_error = "no celebration song set"
-            return False
-        return self.play_song(sid)
+        return self.cue_celebration(kind) and self.play()
