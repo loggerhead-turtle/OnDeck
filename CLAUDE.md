@@ -175,10 +175,32 @@ Stream Deck Pi can each be onboarded headlessly over the `OnDeck-Setup` hotspot.
 remembers a **preferred speaker + auto-connect** flag in
 `$ONDECK_HOME/bluetooth.json` (local to the Audio Pi — not synced), and runs a
 ~20s loop that reconnects the preferred speaker whenever it powers on (offline,
-no cloud needed). When a speaker is connected, `Player._output_args()` routes
-ffmpeg to its PipeWire/Pulse sink (`-f pulse <sink>`); otherwise ALSA `default`.
-`ONDECK_NO_BLUETOOTH=1` disables it (laptops/CI); `ONDECK_FFMPEG_OUT` still
-overrides output.
+no cloud needed). `ONDECK_NO_BLUETOOTH=1` disables it (laptops/CI).
+
+## Audio Routing & Fade (Audio Pi)
+
+`Player._output_args()` picks the ffmpeg output, in order: `ONDECK_FFMPEG_OUT`
+(raw override) → the connected Bluetooth speaker's sink → the PipeWire/Pulse
+**default** sink → ALSA `default`.
+
+The wired jack goes through pipewire-pulse too, and that is load-bearing:
+`/fade` ramps the live stream's sink-input volume (`pactl
+set-sink-input-volume`), which only exists for a stream the sound server can
+see. An ffmpeg talking straight to ALSA has to be killed and relaunched with an
+`afade` filter, which the ear hears as *"the music stops, starts again, THEN
+fades"* — the field-reported stutter. That relaunch path is still in `fade()`
+as a fallback for a box with no sound server at all.
+
+- `ONDECK_AUDIO_OUT=alsa` forces the old straight-to-ALSA behaviour.
+- `ONDECK_AUDIO_SINK=<sink name>` pins the sink when the server's default is
+  not the socket the PA is in (a Pi with HDMI plugged in has more than one).
+- `GET /status` reports `route`/`sink`/`fade`, and the Pi's `/status` page
+  prints "Audio out" and "Fade" rows — the answer to a stuttering or silent PA
+  without SSH.
+- A fade ends with the stream at 0% and the sound server **remembers** stream
+  volumes per application, so `Player` resets the next pulse stream to 100%
+  (`_restore_stream_volume`) — otherwise the walk-up after a faded one comes
+  out silent.
 
 Endpoints on the Audio Pi: `GET /bluetooth/status`, `POST /bluetooth/{scan,
 pair,connect,disconnect,forget,preferred}`. The portal page `/ondeck/bluetooth`
