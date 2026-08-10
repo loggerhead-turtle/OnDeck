@@ -45,6 +45,7 @@ from config_manager import (
     ConfigManager,
     DECK_DEFAULT_FONT,
     DECK_DEFAULT_FONT_SIZE,
+    cue_tag,
 )
 from lineup_manager import LineupManager
 from music_client import MusicClient
@@ -96,6 +97,13 @@ class StreamDeckController(BaseDeckController):
 
         # Repaint the deck whenever the lineup auto-advances.
         self.lineup.on_change = self.refresh
+        # Which key is CUED — the clip the Audio Pi currently holds. That
+        # key stays yellow through cue and playback, and goes back to its
+        # own colour the moment something else takes the queue or the
+        # queue empties. It is one tag, not a set, because the Audio Pi
+        # plays one thing at a time.
+        self._cued: str | None = None
+        self.lineup.on_cue_change = self._on_cue_change
 
         # Every attribute a render hook reads is set BEFORE the base
         # constructor: super().__init__ opens the deck and paints it, the
@@ -125,6 +133,54 @@ class StreamDeckController(BaseDeckController):
         # must never depend on subclass state existing yet.
         if getattr(self, '_lineup_watch', None):
             self._lineup_watch.note_local_lineup(self.config.lineup)
+
+    # ── The cued key ─────────────────────────────────────
+    # A press used to flash a white ✓ and vanish, which said "heard you"
+    # and nothing about what was actually loaded. The cued key now holds
+    # ACTIVE_COLOR until the Audio Pi is holding something else.
+
+    def _on_cue_change(self, tag) -> None:
+        """The Audio Pi's loaded clip changed (poller, ~2x a second)."""
+        if tag == self._cued:
+            return
+        self._cued = tag
+        self.refresh()
+
+    def _cue_pressed(self, tag) -> None:
+        """A press that successfully cued ``tag``: light it now.
+
+        Not left to the poller: a key that lights up half a second after
+        the thumb leaves it reads as a deck that missed the press. The
+        poller's job is the other direction — un-lighting this key when
+        the clip changes from somewhere else.
+        """
+        if tag == self._cued:
+            return          # already lit — a lineup cue announces itself
+        self._cued = tag
+        self.lineup.note_cue_tag(tag)
+        self.render_all()
+
+    def _is_cued(self, kind: str, ref: str) -> bool:
+        return bool(ref) and self._cued == cue_tag(kind, ref)
+
+    def _slot_is_cued(self, slot: dict) -> bool:
+        """Does this hand-edited key hold what the Audio Pi is loaded with?
+
+        A ``lineup_slot`` names a batting position rather than a player, so
+        it is resolved through the order — otherwise the one key a coach
+        watches all game is the one that never lights up.
+        """
+        kind, ref = slot.get("type"), slot.get("ref", "")
+        if kind == "lineup_slot":
+            pos = self._slot_position(slot)
+            lineup = self.config.lineup
+            if not (pos and 0 < pos <= len(lineup)):
+                return False
+            return self._is_cued("player", lineup[pos - 1] or "")
+        if kind in ("player_walkup", "song", "celebration"):
+            return self._is_cued(
+                {"player_walkup": "player"}.get(kind, kind), ref)
+        return False
 
     # ── Lineup watch ─────────────────────────────────────
     # Tells the operator a substitution happened. Never acts on it: the
@@ -161,6 +217,11 @@ class StreamDeckController(BaseDeckController):
                 self._press_failed(BTN_PLAY)
         elif idx == BTN_STOP:
             if self.music.stop():
+                # Stop empties the queue, so nothing is cued any more.
+                # Fade is deliberately NOT cleared here: the music is
+                # still audible while it eases down, and a key that goes
+                # dark before the sound does is a lie.
+                self._cue_pressed(None)
                 self.flash(BTN_STOP)
             else:
                 self._press_failed(BTN_STOP)
@@ -208,8 +269,9 @@ class StreamDeckController(BaseDeckController):
             filled = [i for i, pid in enumerate(self.config.lineup) if pid]
             if slot < len(filled):
                 self.lineup.set_current(filled[slot])
+                pid = self.config.lineup[filled[slot]]
                 if self.lineup.cue_current():
-                    self.flash(btn_idx)
+                    self._cue_pressed(cue_tag("player", pid))
                 else:
                     self._press_failed(btn_idx)
 
@@ -226,7 +288,7 @@ class StreamDeckController(BaseDeckController):
                 # green Play key runs it. Nothing blares mid-inning
                 # because a thumb brushed a tile.
                 if self.music.cue_walkup(pid):
-                    self.flash(btn_idx)
+                    self._cue_pressed(cue_tag("player", pid))
                 else:
                     self._press_failed(btn_idx)
 
@@ -235,7 +297,7 @@ class StreamDeckController(BaseDeckController):
                 key, _ = CELEBRATIONS[slot]
                 self.lineup.note_external_playback()
                 if self.music.cue_celebration(key):
-                    self.flash(btn_idx)
+                    self._cue_pressed(cue_tag("celebration", key))
                 else:
                     self._press_failed(btn_idx)
 
@@ -247,7 +309,7 @@ class StreamDeckController(BaseDeckController):
                 sid, _ = songs[slot]
                 self.lineup.note_external_playback()
                 if self.music.cue_song(sid):
-                    self.flash(btn_idx)
+                    self._cue_pressed(cue_tag("song", sid))
                 else:
                     self._press_failed(btn_idx)
 
@@ -320,7 +382,8 @@ class StreamDeckController(BaseDeckController):
                 player = self.config.players.get(lineup[slot_idx], {})
                 jersey = player.get("jersey", "")
                 first = (player.get("first_name", "") or "")[:8]
-                active = (slot_idx == cur)
+                active = (slot_idx == cur
+                          or self._is_cued("player", lineup[slot_idx]))
                 bg = self.ACTIVE_COLOR if active else self.PAGE_BG["lineup"]
                 fg = (0, 0, 0) if active else (255, 255, 255)
                 self.btn(btn_idx, f"{i + 1}. #{jersey}\n{first}", bg, fg)
@@ -337,7 +400,10 @@ class StreamDeckController(BaseDeckController):
                 first = (p.get("first_name", "") or "")[:8]
                 has_walkup = bool(p.get("walkup_song_id"))
                 bg = self.PAGE_BG["players"] if has_walkup else (35, 35, 35)
-                self.btn(btn_idx, f"#{jersey}\n{first}", bg, (255, 255, 255))
+                fg = (255, 255, 255)
+                if self._is_cued("player", _pid):
+                    bg, fg = self.ACTIVE_COLOR, (0, 0, 0)
+                self.btn(btn_idx, f"#{jersey}\n{first}", bg, fg)
             else:
                 self.blank(btn_idx)
 
@@ -348,7 +414,10 @@ class StreamDeckController(BaseDeckController):
                 key, label = CELEBRATIONS[i]
                 configured = bool(self.config.get_celebration_song(key))
                 bg = self.PAGE_BG["celebrations"] if configured else (35, 20, 25)
-                self.btn(btn_idx, label, bg, (255, 255, 255))
+                fg = (255, 255, 255)
+                if self._is_cued("celebration", key):
+                    bg, fg = self.ACTIVE_COLOR, (0, 0, 0)
+                self.btn(btn_idx, label, bg, fg)
             else:
                 self.blank(btn_idx)
 
@@ -360,7 +429,10 @@ class StreamDeckController(BaseDeckController):
             if i < len(songs):
                 _sid, song = songs[i]
                 name = (song.get("display_name", "") or "")[:14]
-                self.btn(btn_idx, name, bg, (255, 255, 255))
+                cued = self._is_cued("song", _sid)
+                self.btn(btn_idx, name,
+                         self.ACTIVE_COLOR if cued else bg,
+                         (0, 0, 0) if cued else (255, 255, 255))
             else:
                 self.blank(btn_idx)
 
@@ -512,6 +584,11 @@ class StreamDeckController(BaseDeckController):
             elif (kind == "lineup_slot" and self._edit_lineup
                   and self._slot_position(slot) == self._lineup_assign_pos):
                 bg, fg = self.ACTIVE_COLOR, (0, 0, 0)
+            elif self._slot_is_cued(slot):
+                # The key holding the clip the Audio Pi is loaded with —
+                # the editor's own colour is what it goes back to when
+                # something else takes the queue.
+                bg, fg = self.ACTIVE_COLOR, (0, 0, 0)
             elif kind == "action" and slot.get("ref") == "sync":
                 wbg, wfg = self._sync_key_colors()
                 if wbg:
@@ -537,6 +614,7 @@ class StreamDeckController(BaseDeckController):
         # mode is ignored on music keys.
         queue_only = True
         ok = False
+        cued = None
         if kind == "text":
             return  # a label-only key — nothing to do
         elif kind == "edit_lineup":
@@ -554,12 +632,19 @@ class StreamDeckController(BaseDeckController):
             self.lineup.note_external_playback()
             ok = (self.music.cue_walkup(ref) if queue_only
                   else self.music.play_walkup(ref))
+            cued = cue_tag("player", ref)
         elif kind == "song":
             self.lineup.note_external_playback()
-            ok = self.music.queue(self.config.build_song_clip(ref) or {})
+            # cue_song, not queue(build_song_clip(...) or {}): an empty
+            # clip POSTed for a song this deck has not synced came back
+            # 400 without an ok=false, so the key flashed as if it worked
+            # and the coach pressed Play into silence.
+            ok = self.music.cue_song(ref)
+            cued = cue_tag("song", ref)
         elif kind == "celebration":
             self.lineup.note_external_playback()
             ok = self.music.cue_celebration(ref)
+            cued = cue_tag("celebration", ref)
         elif kind == "nav":
             self.go_to_page(ref)
             return
@@ -572,7 +657,9 @@ class StreamDeckController(BaseDeckController):
                 ok = self.music.fade(int(slot.get("fade_ms") or 1000))
             elif ref == "sync":
                 ok = self._start_sync()
-        if ok:
+        if ok and cued:
+            self._cue_pressed(cued)
+        elif ok:
             self.flash(btn_idx)
         elif kind in ("player_walkup", "song", "celebration") or (
                 kind == "action" and ref in ("play", "stop", "fade")):
@@ -852,8 +939,11 @@ class StreamDeckController(BaseDeckController):
             return
         # Normal press: cue this batter so the coach can hit Play.
         self.lineup.set_current(pos - 1)
+        pid = self.lineup.current_player_id()
         if self.lineup.cue_current():
-            self.flash(btn_idx)
+            self._cue_pressed(cue_tag("player", pid))
+        else:
+            self._press_failed(btn_idx)
 
     def _assign_player_to_lineup(self, player_id: str, btn_idx: int) -> None:
         self.config.set_lineup_slot(self._lineup_assign_pos, player_id)
