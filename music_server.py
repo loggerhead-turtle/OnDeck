@@ -64,6 +64,15 @@ DEFAULT_FADE_MS = 1000
 # for three seconds is three seconds the batter is standing there waiting.
 CLIP_FADE_MAX_MS = 1500
 
+# ffmpeg's pulse output disconnects WITHOUT draining: whatever the sound
+# server still buffers of our stream when the process exits is dropped on
+# the floor, and the server's default ask is ~2 seconds — so every clip
+# lost its last couple of seconds to that buffer (the train horn cut off
+# a beat early). Two-part fix: cap the stream buffer, and append enough
+# silence that everything the exit drops is silence we added.
+PULSE_BUFFER_MS = 300
+TAIL_PAD_S = 1.0
+
 _duration_cache: dict[str, float] = {}
 
 
@@ -331,13 +340,13 @@ class Player:
                 f"[1:a]adelay={delay_ms}|{delay_ms},afade=t=in:st={cue_s:.3f}:d=0.75"
                 f"{fade_out}[mus];"
                 f"[0:a][mus]amix=inputs=2:duration=longest:dropout_transition=0,"
-                f"volume={gain:.3f}[out]"
+                f"volume={gain:.3f},apad=pad_dur={TAIL_PAD_S}[out]"
             )
             cmd += ["-filter_complex", filt, "-map", "[out]"]
         else:
             # Plain song: the clip's own fade-out (if the editor set one) plus
             # master volume. The live operator fade is the /fade endpoint.
-            af = f"volume={gain:.3f}"
+            af = f"volume={gain:.3f},apad=pad_dur={TAIL_PAD_S}"
             if fade_s:
                 af = f"afade=t=out:st={fade_at:.3f}:d={fade_s:.3f},{af}"
             cmd += ["-af", af]
@@ -367,7 +376,11 @@ class Player:
         if not sink:
             sink = _pulse_default_sink()
         if sink:
-            return ["-f", "pulse", sink]
+            # Small buffer so the apad tail is guaranteed to cover what a
+            # non-draining exit throws away; ffmpeg refills a 300 ms buffer
+            # from a local file far faster than realtime, so no underruns.
+            return ["-f", "pulse",
+                    "-buffer_duration", str(PULSE_BUFFER_MS), sink]
         return ["-f", "alsa", "default"]
 
     # -- fade / stop ------------------------------------------------------
@@ -510,7 +523,7 @@ class Player:
                     "-nostdin",
                     "-ss", f"{sk:.3f}", "-t", f"{dur_s:.3f}", "-i", song,
                     "-af", f"afade=t=out:st=0:d={dur_s:.3f},"
-                           f"volume={gain:.3f}",
+                           f"volume={gain:.3f},apad=pad_dur={TAIL_PAD_S}",
                 ] + self._output_args()
 
             # Kill-then-spawn put a beat of dead air between the live song
