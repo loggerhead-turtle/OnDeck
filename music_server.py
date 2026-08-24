@@ -82,6 +82,11 @@ PULSE_BUFFER_MS = 300
 # about — on a Pi, ALSA "default" is often PipeWire's ALSA plugin wearing
 # a disguise, with a couple of seconds of buffer nobody drains.
 TAIL_PAD_S = 2.0
+# The pacat pipeline needs less: its latency cap keeps at most
+# ~PULSE_BUFFER_MS queued in the server, so the tail only has to outlast
+# that plus the hardware FIFO under it. It is also what the state shows
+# as "playing" after the music ends, so shorter is better here.
+PIPE_PAD_S = 1.0
 
 # Everything is decoded to one raw format for pacat; 44.1 kHz stereo is
 # what nearly every MP3 in the library already is.
@@ -317,13 +322,16 @@ class Player:
                 raise MissingAudio(missing)
             sink = self._pulse_sink()
             if sink and _PACAT:
-                # Decode with ffmpeg, play with pacat: pacat drains, so the
-                # clip is heard to its last sample no matter how far ahead
-                # the server buffered. No silence tail needed — pacat's
-                # exit IS the audible end, which also makes auto-advance
-                # fire when the song actually stops instead of early.
+                # Decode with ffmpeg, play with pacat: pacat drains, so
+                # the clip is heard to its last sample no matter how far
+                # ahead the server buffered. The short silence tail stays
+                # even so — the Pi's firmware audio device has a FIFO of
+                # its own below the sound server, and Bookworm's PipeWire
+                # (0.3.65) has known early-drain bugs, so the last thing
+                # any layer can drop at teardown must be silence, not
+                # music. pacat's latency cap bounds how much that can be.
                 cmd = self._build_command(self._queued, out_args=RAW_ARGS,
-                                          pad_s=0.0)
+                                          pad_s=PIPE_PAD_S)
                 self._spawn_pipeline(cmd, sink)
             else:
                 cmd = self._build_command(self._queued)
@@ -670,7 +678,12 @@ class Player:
         )
         self._proc = subprocess.Popen(
             [_PACAT, "--raw", "--format=s16le", f"--rate={RAW_RATE}",
-             "--channels=2", "-d", sink, "--client-name=ondeck-audio"],
+             "--channels=2", "-d", sink, "--client-name=ondeck-audio",
+             # Cap what the server may hold of the stream: everything
+             # queued beyond the hardware is at risk when the stream
+             # tears down, and this bounds "everything" to less than the
+             # silence tail. ffmpeg refills 300 ms faster than realtime.
+             f"--latency-msec={PULSE_BUFFER_MS}"],
             stdin=feeder.stdout,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -806,6 +819,11 @@ def http_status():
         out['route'] = args[args.index('-f') + 1] if '-f' in args else 'custom'
         out['sink'] = args[-1] if len(args) > 2 else ''
         out['fade'] = 'live' if out['route'] == 'pulse' else 'relaunch'
+        # Which process actually feeds the speaker — 'pacat' is the
+        # draining pipeline, 'ffmpeg' the direct output whose exit can
+        # eat a clip tail. The difference a cut-off horn turns on.
+        out['player'] = ('pacat' if out['route'] == 'pulse' and _PACAT
+                         else 'ffmpeg')
     except Exception:
         pass
     try:
@@ -1026,6 +1044,8 @@ def _audio_status_rows():
         ("Audio out", f"{route} — {sink}" if sink else route),
         ("Fade", "eases down (live)" if route == "pulse"
                  else "relaunch — no sound server"),
+        ("Player", "pacat (drains the tail)"
+                   if route == "pulse" and _PACAT else "ffmpeg direct"),
     ]
 
 
