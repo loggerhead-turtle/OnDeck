@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import threading
@@ -66,12 +67,28 @@ CLIP_FADE_MAX_MS = 1500
 
 # ffmpeg's pulse output disconnects WITHOUT draining: whatever the sound
 # server still buffers of our stream when the process exits is dropped on
-# the floor, and the server's default ask is ~2 seconds — so every clip
-# lost its last couple of seconds to that buffer (the train horn cut off
-# a beat early). Two-part fix: cap the stream buffer, and append enough
-# silence that everything the exit drops is silence we added.
+# the floor — which is how every clip lost its last couple of seconds (the
+# train horn cut off a beat early). Asking ffmpeg for a smaller buffer
+# helped on a stock PulseAudio server but not on the Pi's pipewire-pulse,
+# which sizes the buffer its own way. So on the pulse route the clip is
+# now DECODED by ffmpeg but PLAYED by pacat, which drains: it exits only
+# once the server confirms the last sample left the speaker, whatever the
+# buffer was. The values below only serve the routes that still talk
+# straight to a device: the buffer cap for a direct -f pulse command (the
+# fade fallback), the silence tail so what a non-draining exit drops is
+# padding, not music.
 PULSE_BUFFER_MS = 300
-TAIL_PAD_S = 1.0
+# Generous on purpose: the fallback routes are the ones we know least
+# about — on a Pi, ALSA "default" is often PipeWire's ALSA plugin wearing
+# a disguise, with a couple of seconds of buffer nobody drains.
+TAIL_PAD_S = 2.0
+
+# Everything is decoded to one raw format for pacat; 44.1 kHz stereo is
+# what nearly every MP3 in the library already is.
+RAW_RATE = 44100
+RAW_ARGS = ["-f", "s16le", "-ar", str(RAW_RATE), "-ac", "2", "-"]
+
+_PACAT = shutil.which("pacat")
 
 _duration_cache: dict[str, float] = {}
 
@@ -142,14 +159,25 @@ _pulse_state: dict = {"ok": None, "sink": "", "at": float("-inf")}
 _pulse_lock = threading.Lock()
 
 
+_PULSE_PROBE_RETRY_S = 15.0
+
+
 def _pulse_usable() -> bool:
     """True when a pulse server answers AND ffmpeg can write to it.
 
-    Probed once and remembered: the answer cannot change without the
-    service restarting, and asking on every play would put two
-    subprocesses in front of a walk-up.
+    A success is remembered for good — that can't stop being true without
+    the service restarting, and asking on every play would put two
+    subprocesses in front of a walk-up. A FAILURE is retried after a short
+    while: this service can win the boot race against pipewire-pulse, and
+    remembering that first "no" forever glued the box to the ALSA fallback
+    (no live fade, and a buffer nobody drains) until someone restarted it.
     """
-    if _pulse_state["ok"] is None:
+    now = time.monotonic()
+    if _pulse_state["ok"] is None or (
+            not _pulse_state["ok"] and
+            now - _pulse_state.get("probed_at", float("-inf"))
+            > _PULSE_PROBE_RETRY_S):
+        was = _pulse_state["ok"]
         ok = False
         try:
             r = subprocess.run(["pactl", "info"], capture_output=True,
@@ -159,10 +187,13 @@ def _pulse_usable() -> bool:
                                    capture_output=True, text=True, timeout=10)
                 ok = " pulse" in (m.stdout or "")
         except Exception as exc:
-            log.info("no pulse audio route (%s) — playing straight to ALSA",
-                     exc)
+            if was is None:
+                log.info("no pulse audio route (%s) — playing straight "
+                         "to ALSA", exc)
         _pulse_state["ok"] = ok
-        log.info("Audio route: %s", "pulse" if ok else "alsa")
+        _pulse_state["probed_at"] = now
+        if ok != was:
+            log.info("Audio route: %s", "pulse" if ok else "alsa")
     return bool(_pulse_state["ok"])
 
 
@@ -233,6 +264,10 @@ class Player:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._proc: subprocess.Popen | None = None
+        # On the pulse route _proc is pacat (its pid owns the sink-input,
+        # and it outliving ffmpeg is the drain) and _feeder is the ffmpeg
+        # decoding into it; elsewhere _feeder is None.
+        self._feeder: subprocess.Popen | None = None
         self._queued: dict | None = None
         self._state = "stopped"          # stopped | queued | playing
         self._started_at: float | None = None
@@ -280,8 +315,19 @@ class Player:
             if missing:
                 self._stop_locked()
                 raise MissingAudio(missing)
-            cmd = self._build_command(self._queued)
-            self._spawn(cmd)
+            sink = self._pulse_sink()
+            if sink and _PACAT:
+                # Decode with ffmpeg, play with pacat: pacat drains, so the
+                # clip is heard to its last sample no matter how far ahead
+                # the server buffered. No silence tail needed — pacat's
+                # exit IS the audible end, which also makes auto-advance
+                # fire when the song actually stops instead of early.
+                cmd = self._build_command(self._queued, out_args=RAW_ARGS,
+                                          pad_s=0.0)
+                self._spawn_pipeline(cmd, sink)
+            else:
+                cmd = self._build_command(self._queued)
+                self._spawn(cmd)
             self._state = "playing"
             self._started_at = time.monotonic()
             return True
@@ -296,11 +342,15 @@ class Player:
                 'present': len(expected) - len(missing),
                 'missing': missing[:8]}
 
-    def _build_command(self, clip: dict) -> list[str]:
+    def _build_command(self, clip: dict, out_args: list[str] | None = None,
+                       pad_s: float = TAIL_PAD_S) -> list[str]:
         """Compose the ffmpeg invocation for a clip.
 
         A clip is either a plain trimmed song, or a song mixed under an
-        announcement that fades in at ``cue_ms``.
+        announcement that fades in at ``cue_ms``. ``out_args`` overrides
+        the output target (raw-to-stdout for the pacat pipeline);
+        ``pad_s`` is the silence tail for outputs that drop their buffer
+        on exit — zero when pacat's drain makes it pointless.
         """
         gain = self._volume / 100.0
         song = str(MUSIC_DIR / clip["file"])
@@ -336,22 +386,25 @@ class Player:
             # The song sits on the delayed timeline, so its fade-out does too.
             fade_out = (f",afade=t=out:st={(cue_s + fade_at):.3f}:d={fade_s:.3f}"
                         if fade_s else "")
+            pad = f",apad=pad_dur={pad_s}" if pad_s else ""
             filt = (
                 f"[1:a]adelay={delay_ms}|{delay_ms},afade=t=in:st={cue_s:.3f}:d=0.75"
                 f"{fade_out}[mus];"
                 f"[0:a][mus]amix=inputs=2:duration=longest:dropout_transition=0,"
-                f"volume={gain:.3f},apad=pad_dur={TAIL_PAD_S}[out]"
+                f"volume={gain:.3f}{pad}[out]"
             )
             cmd += ["-filter_complex", filt, "-map", "[out]"]
         else:
             # Plain song: the clip's own fade-out (if the editor set one) plus
             # master volume. The live operator fade is the /fade endpoint.
-            af = f"volume={gain:.3f},apad=pad_dur={TAIL_PAD_S}"
+            af = f"volume={gain:.3f}"
+            if pad_s:
+                af += f",apad=pad_dur={pad_s}"
             if fade_s:
                 af = f"afade=t=out:st={fade_at:.3f}:d={fade_s:.3f},{af}"
             cmd += ["-af", af]
 
-        cmd += self._output_args()
+        cmd += out_args if out_args is not None else self._output_args()
         return cmd
 
     def _output_args(self) -> list[str]:
@@ -372,16 +425,23 @@ class Player:
         override = os.environ.get("ONDECK_FFMPEG_OUT")
         if override:
             return shlex.split(override)
-        sink = bt.current_sink() if bt else None
-        if not sink:
-            sink = _pulse_default_sink()
+        sink = self._pulse_sink()
         if sink:
             # Small buffer so the apad tail is guaranteed to cover what a
             # non-draining exit throws away; ffmpeg refills a 300 ms buffer
             # from a local file far faster than realtime, so no underruns.
+            # (Playback itself goes through pacat when it exists — this
+            # direct route remains for the fade fallback and status.)
             return ["-f", "pulse",
                     "-buffer_duration", str(PULSE_BUFFER_MS), sink]
         return ["-f", "alsa", "default"]
+
+    def _pulse_sink(self) -> str | None:
+        """The sink playback should target, or None off the pulse route."""
+        if os.environ.get("ONDECK_FFMPEG_OUT"):
+            return None
+        sink = bt.current_sink() if bt else None
+        return sink or _pulse_default_sink() or None
 
     # -- fade / stop ------------------------------------------------------
 
@@ -588,14 +648,49 @@ class Player:
             stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
-        watcher = threading.Thread(
-            target=self._watch, args=(self._proc, finish_state), daemon=True
+        self._watch_and_restore(self._proc, finish_state,
+                                is_pulse="pulse" in cmd)
+
+    def _spawn_pipeline(self, ff_cmd: list[str], sink: str) -> None:
+        """ffmpeg decodes to raw on stdout; pacat plays it and DRAINS.
+
+        pacat is the tracked process: its pid is what the sink-input
+        belongs to (so the live fade ramp and the volume restore keep
+        working), and it exits only when the last sample has actually
+        been played — the watcher's natural end is the audible end.
+        """
+        self._kill_proc()
+        self._gen += 1
+        feeder = subprocess.Popen(
+            ff_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
         )
-        watcher.start()
-        if self._pulse_volume_dirty and "pulse" in cmd:
+        self._proc = subprocess.Popen(
+            [_PACAT, "--raw", "--format=s16le", f"--rate={RAW_RATE}",
+             "--channels=2", "-d", sink, "--client-name=ondeck-audio"],
+            stdin=feeder.stdout,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        # The parent's copy of the pipe must close so pacat sees EOF the
+        # moment ffmpeg finishes.
+        if feeder.stdout is not None:
+            feeder.stdout.close()
+        self._feeder = feeder
+        self._watch_and_restore(self._proc, "stopped", is_pulse=True)
+
+    def _watch_and_restore(self, proc: subprocess.Popen, finish_state: str,
+                           is_pulse: bool) -> None:
+        threading.Thread(target=self._watch, args=(proc, finish_state),
+                         daemon=True).start()
+        if self._pulse_volume_dirty and is_pulse:
             self._pulse_volume_dirty = False
             threading.Thread(target=self._restore_stream_volume,
-                             args=(self._proc,), daemon=True).start()
+                             args=(proc,), daemon=True).start()
 
     def _watch(self, proc: subprocess.Popen, finish_state: str) -> None:
         proc.wait()
@@ -617,12 +712,14 @@ class Player:
                 pass
 
     def _kill_proc(self) -> None:
-        if self._proc and self._proc.poll() is None:
-            try:
-                os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
+        for proc in (self._proc, self._feeder):
+            if proc and proc.poll() is None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
         self._proc = None
+        self._feeder = None
 
     # -- status -----------------------------------------------------------
 
