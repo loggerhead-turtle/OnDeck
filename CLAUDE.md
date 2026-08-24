@@ -199,6 +199,17 @@ no cloud needed). `ONDECK_NO_BLUETOOTH=1` disables it (laptops/CI).
 (raw override) → the connected Bluetooth speaker's sink → the PipeWire/Pulse
 **default** sink → ALSA `default`.
 
+On the pulse route ffmpeg only **decodes** (raw s16le to stdout); **pacat plays
+and drains** — it exits when the last sample has actually been played. ffmpeg's
+own pulse output disconnects without draining, and the server's ~2s stream
+buffer died with it: every clip lost its tail (the "train horn cuts off early"
+bug). pacat is the tracked process — its pid owns the sink-input (fade ramp,
+volume restore) and its exit is the audible end (auto-advance timing). A failed
+pulse probe is retried every ~15s: `ondeck-audio` can win the boot race against
+pipewire-pulse, and caching that first "no" forever glued the box to the ALSA
+fallback. The non-pulse fallbacks append a `TAIL_PAD_S` silence tail instead,
+so what their non-draining exit drops is padding, not music.
+
 The wired jack goes through pipewire-pulse too, and that is load-bearing:
 `/fade` ramps the live stream's sink-input volume (`pactl
 set-sink-input-volume`), which only exists for a stream the sound server can
