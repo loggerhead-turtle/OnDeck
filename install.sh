@@ -107,8 +107,11 @@ install_service() {
   sudo tee "$unit" >/dev/null <<EOF
 [Unit]
 Description=$desc
-After=network-online.target sound.target bluetooth.target
-Wants=network-online.target
+# network.target, NOT network-online.target: the deck and the audio server
+# are offline-first (game day happens at fields with no internet), and
+# waiting on wait-online at a dead router costs up to two minutes of "the
+# Pi won't load". Only the sync timer gates on network-online.
+After=network.target sound.target bluetooth.target
 
 [Service]
 Type=simple

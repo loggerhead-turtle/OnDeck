@@ -104,6 +104,14 @@ class MusicClient:
     # music' has to reach that box too — the deck syncing itself only
     # updates labels and lineups.
 
+    def update_audio(self) -> tuple[bool, str]:
+        """Ask the Audio Pi to git pull and restart itself (POST
+        /api/update on pi/web_routes). (ok, what it said)."""
+        d = self._post("/api/update")
+        if d is None:
+            return False, self.last_error or "no reply"
+        return True, str(d.get("detail") or "updated")
+
     def sync_audio_start(self) -> bool:
         """Kick off a sync ON the Audio Pi (its own sync_agent run)."""
         return self._post("/api/sync-now") is not None

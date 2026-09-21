@@ -264,6 +264,14 @@ class Player:
     by ``queue`` but stays silent until ``play``. When playback finishes
     naturally an ``on_finish`` callback (if set) fires so the Coach Pi can
     auto-advance the lineup.
+
+    A cue that arrives WHILE a clip plays does not stop it. The new clip is
+    parked as *pending*: Play swaps to it (the running song is cut, the
+    pending one starts), and a song that ends on its own leaves the box in
+    ``queued`` with the pending clip loaded, ready for Play. This is how a
+    coach lines up the next batter during the current walk-up without
+    silencing the PA the moment the key is pressed — which is what cueing
+    used to do.
     """
 
     def __init__(self) -> None:
@@ -274,6 +282,8 @@ class Player:
         # decoding into it; elsewhere _feeder is None.
         self._feeder: subprocess.Popen | None = None
         self._queued: dict | None = None
+        # A clip cued while another plays waits here; see ``queue``.
+        self._pending: dict | None = None
         self._state = "stopped"          # stopped | queued | playing
         self._started_at: float | None = None
         self._volume = 80                # 0..100, applied as ffmpeg gain
@@ -308,12 +318,19 @@ class Player:
         if missing:
             raise MissingAudio(missing)
         with self._lock:
+            if self._state == "playing" and self._proc is not None:
+                # Something is on the PA: park this one instead of cutting
+                # the song. Play brings it in; a natural end promotes it.
+                self._pending = clip
+                return
             self._stop_locked()
             self._queued = clip
             self._state = "queued"
 
     def play(self) -> bool:
         with self._lock:
+            if self._pending is not None:
+                self._queued, self._pending = self._pending, None
             if not self._queued:
                 return False
             missing = self._clip_file_missing(self._queued)
@@ -548,7 +565,7 @@ class Player:
                 return False
         with self._lock:
             if gen == self._gen:
-                self._stop_locked()
+                self._finish_locked()
         return True
 
     def fade(self, ms: int = DEFAULT_FADE_MS) -> bool:
@@ -636,6 +653,23 @@ class Player:
         self._gen += 1                   # cancels any in-flight fade ramp
         self._state = "stopped"
         self._queued = None
+        self._pending = None
+        self._started_at = None
+
+    def _finish_locked(self) -> None:
+        """Playback is over of its own accord (or a fade reached silence).
+
+        Unlike Stop this keeps what the coach cued in the meantime: a
+        pending clip becomes the loaded one and the box rests in ``queued``
+        so the next Play runs it. With nothing pending it is a plain stop.
+        """
+        if self._pending is None:
+            self._stop_locked()
+            return
+        self._kill_proc()
+        self._gen += 1
+        self._queued, self._pending = self._pending, None
+        self._state = "queued"
         self._started_at = None
 
     def set_volume(self, level: int) -> None:
@@ -712,12 +746,19 @@ class Player:
             if self._proc is not proc:
                 return
             natural_end = self._state == "playing"
-            self._state = finish_state
             self._started_at = None
-            if finish_state == "stopped":
-                self._queued = None if finish_state == "stopped" else self._queued
+            if self._pending is not None:
+                # The coach cued the next clip during this one: load it
+                # and rest, ready for Play. Not a stop — nothing the
+                # lineup poller should advance past.
+                self._queued, self._pending = self._pending, None
+                self._state = "queued"
+            else:
+                self._state = finish_state
+                if finish_state == "stopped":
+                    self._queued = None
             cb = self.on_finish
-        if natural_end and finish_state == "stopped" and cb:
+        if natural_end and self._state == "stopped" and cb:
             # Lineup auto-advance hook. Fire outside the lock.
             try:
                 cb()
@@ -745,7 +786,13 @@ class Player:
                 "state": self._state,
                 "position_ms": pos_ms,
                 "volume": self._volume,
-                "queued": self._queued,
+                # What the deck lights: the clip the coach cued last. While
+                # a clip plays with another parked behind it, that is the
+                # parked one — the key just pressed must stay lit, and the
+                # poller un-lights whatever "queued" does not name.
+                "queued": self._pending or self._queued,
+                "playing": self._queued if self._state == "playing" else None,
+                "pending": self._pending,
             }
 
 

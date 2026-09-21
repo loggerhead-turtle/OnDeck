@@ -10,6 +10,11 @@ walk-up flow the coach asked for:
   3. Song ends              → the lineup **auto-advances** to the next hitter and
      **re-cues** them, queued and ready. The coach just presses Play again.
 
+A batter cued WHILE a walk-up plays does not cut it: the Audio Pi parks the
+clip and, when the song ends, rests in ``queued`` with it loaded rather than
+``stopped`` — so the manual choice stands and the poller below does not
+advance past it. Pressing Play swaps to the parked clip at once.
+
 The "current batter" is live game state, not configuration, so it is held in
 memory here rather than persisted — restarting mid-game starts at the top of the
 order. End-of-song is detected by polling the Audio Pi's status (the song plays
@@ -51,6 +56,10 @@ class LineupManager:
         # parallel loop would double that traffic to say the same thing.
         self.on_cue_change: Callable[[str | None], None] | None = None
         self._cue_tag: str | None = None
+        # Same idea for the clip actually on the PA: its key paints red
+        # while it plays, so the coach can tell "loaded" from "sounding".
+        self.on_play_change: Callable[[str | None], None] | None = None
+        self._play_tag: str | None = None
         # Live playback state for the cue → play → auto-advance flow.
         self._queued_batter = False     # the Audio Pi queue holds a walk-up
         self._armed = False             # auto-advance when this playback ends
@@ -141,21 +150,28 @@ class LineupManager:
             status = self.music.status()
             if not status:
                 continue
-            state = status.get("state")
-            advance = False
-            with self._lock:
-                if state == "playing":
-                    self._was_playing = True
-                elif state == "stopped":
-                    advance = self._was_playing and self._armed
-                    self._was_playing = False
-                    self._armed = False
-                # "queued" is a resting state — leave the flags untouched.
-            self._note_cue(status)
-            if advance:
-                log.info("Walk-up finished — advancing and re-cueing lineup")
-                self.advance()
-                self.cue_current()   # queue the next batter, ready for Play
+            self._poll_once(status)
+
+    def _poll_once(self, status: dict) -> bool:
+        """One poll of the Audio Pi; True when the lineup advanced."""
+        state = status.get("state")
+        advance = False
+        with self._lock:
+            if state == "playing":
+                self._was_playing = True
+            elif state == "stopped":
+                advance = self._was_playing and self._armed
+                self._was_playing = False
+                self._armed = False
+            # "queued" is a resting state — leave the flags untouched. It is
+            # also where a song lands when the coach cued the next batter
+            # during it: that choice already advanced the order by hand.
+        self._note_cue(status)
+        if advance:
+            log.info("Walk-up finished — advancing and re-cueing lineup")
+            self.advance()
+            self.cue_current()   # queue the next batter, ready for Play
+        return advance
 
     # -- cued-key tracking ------------------------------------------------
 
@@ -180,6 +196,9 @@ class LineupManager:
         """
         queued = status.get("queued")
         self._set_cue(queued.get("cue") if isinstance(queued, dict) else None)
+        playing = status.get("playing")
+        self._set_play(playing.get("cue") if isinstance(playing, dict)
+                       else None)
 
     def _set_cue(self, tag: str | None) -> None:
         with self._lock:
@@ -191,6 +210,22 @@ class LineupManager:
                 self.on_cue_change(tag)
             except Exception as exc:
                 log.warning("lineup on_cue_change handler failed: %s", exc)
+
+    def note_play_tag(self, tag: str | None) -> None:
+        """Record what Play just started, without waiting for a poll."""
+        with self._lock:
+            self._play_tag = tag
+
+    def _set_play(self, tag: str | None) -> None:
+        with self._lock:
+            if tag == self._play_tag:
+                return
+            self._play_tag = tag
+        if self.on_play_change:
+            try:
+                self.on_play_change(tag)
+            except Exception as exc:
+                log.warning("lineup on_play_change handler failed: %s", exc)
 
     # -- internal ---------------------------------------------------------
 

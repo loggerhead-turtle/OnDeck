@@ -161,12 +161,39 @@ tag round-trips with **no new endpoint and no Audio Pi change**. Matching on
 the filename instead would light two players who share a walk-up song.
 
 `StreamDeckController._cued` holds that tag; the key matching it paints
-`ACTIVE_COLOR` and stays lit through playback. A press sets it immediately
+`ACTIVE_COLOR` (yellow) while it waits for Play. `_playing` holds the tag of
+the clip on the PA (`/status` → `playing.cue`); that key paints
+`PLAYING_COLOR` (red), so with the next batter cued mid-song the deck shows
+one red key and one yellow one. Play paints red at once (`_play_pressed`);
+the poller's `on_play_change` takes it away when the song ends. A press sets it immediately
 (`_cue_pressed`) so the key does not lag the thumb; `LineupManager`'s existing
 0.5s status poller fires `on_cue_change` for everything the deck did *not* do —
 a song ending, Stop, the portal cueing something of its own — which is what
 un-lights a stale key. `lineup_slot` keys resolve their position through the
 batting order (`_slot_is_cued`).
+
+## Cueing While a Song Plays (Audio Pi)
+
+A `/queue` that arrives while a clip is playing does **not** stop it.
+`Player` parks the clip as *pending*: **Play** cuts the running song and
+starts the pending one; a song that ends on its own promotes the pending
+clip and rests in `queued` (not `stopped`), so `LineupManager`'s poller does
+not auto-advance past a batter the coach already picked by hand. `Stop`
+still empties everything; a `Fade` that reaches silence promotes the pending
+clip like a natural end. `GET /status` reports `queued` as the clip the
+deck should light (the pending one while something else plays), plus
+`playing` (what the red key follows) and `pending`.
+
+## Updating Both Pis
+
+The deck's **Update (code)** key on its Status page updates BOTH boxes: it
+POSTs `/api/update` to the Audio Pi (`pi/web_routes.py`, registered on the
+music server like `/sync-now`), which pulls and answers, then restarts its
+services 1.5 s later so the answer gets out; then the deck pulls and
+restarts itself. The Audio Pi's own web Update button (`/status` on port
+5100) still works alone. Either way the Pis pull the OnDeck repo, so a
+change here reaches them only after `scripts/export_ondeck_pi.sh` has been
+pushed there.
 
 ## Stream Deck Editor
 

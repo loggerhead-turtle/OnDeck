@@ -68,6 +68,9 @@ CELEBRATIONS = [
 class StreamDeckController(BaseDeckController):
     PAGE_SHORTCUT_BTNS = tuple(range(27, 32))
     EXTRA_FIXED_BTNS = (BTN_PLAY, BTN_STOP, BTN_FADE)
+    # The key whose clip is on the PA right now. Distinct from ACTIVE_COLOR
+    # (yellow: cued, waiting for Play) so a glance tells which is which.
+    PLAYING_COLOR = (200, 30, 30)
     HOME_PAGE_ID = "home"
     DEFAULT_BG = (40, 40, 40)
     # Per-page background tint, keyed by the page's stable id.
@@ -104,6 +107,12 @@ class StreamDeckController(BaseDeckController):
         # plays one thing at a time.
         self._cued: str | None = None
         self.lineup.on_cue_change = self._on_cue_change
+        # Which key is PLAYING — the clip on the PA right now. Red, so
+        # "loaded and waiting" (yellow) and "sounding" read differently
+        # at a glance; with the next batter cued during a walk-up the
+        # deck shows one red key and one yellow one.
+        self._playing: str | None = None
+        self.lineup.on_play_change = self._on_play_change
 
         # Every attribute a render hook reads is set BEFORE the base
         # constructor: super().__init__ opens the deck and paints it, the
@@ -160,11 +169,45 @@ class StreamDeckController(BaseDeckController):
         self.lineup.note_cue_tag(tag)
         self.render_all()
 
+    def _on_play_change(self, tag) -> None:
+        """The clip on the PA changed: started, ended, or was swapped."""
+        if tag == self._playing:
+            return
+        self._playing = tag
+        self.refresh()
+
+    def _play_pressed(self) -> None:
+        """Play was accepted: the cued clip is the one sounding now.
+
+        Painted at once, like the cued key — the poller confirms it half
+        a second later, but red arriving after the music does is a deck
+        that looks late.
+        """
+        if self._cued == self._playing:
+            return
+        self._playing = self._cued
+        self.lineup.note_play_tag(self._playing)
+        self.render_all()
+
     def _is_cued(self, kind: str, ref: str) -> bool:
         return bool(ref) and self._cued == cue_tag(kind, ref)
 
-    def _slot_is_cued(self, slot: dict) -> bool:
-        """Does this hand-edited key hold what the Audio Pi is loaded with?
+    def _is_playing(self, kind: str, ref: str) -> bool:
+        return bool(ref) and self._playing == cue_tag(kind, ref)
+
+    def _live_colors(self, kind: str, ref: str):
+        """The colours a music key earns from the Audio Pi's state: red
+        while its clip is on the PA, yellow while it is cued and waiting,
+        None when it is just a key. Playing wins over cued for the same
+        key — that is the case of nothing waiting behind it."""
+        if self._is_playing(kind, ref):
+            return self.PLAYING_COLOR, (255, 255, 255)
+        if self._is_cued(kind, ref):
+            return self.ACTIVE_COLOR, (0, 0, 0)
+        return None
+
+    def _slot_tag_parts(self, slot: dict):
+        """(kind, ref) of the clip a hand-edited key stands for, or None.
 
         A ``lineup_slot`` names a batting position rather than a player, so
         it is resolved through the order — otherwise the one key a coach
@@ -175,12 +218,20 @@ class StreamDeckController(BaseDeckController):
             pos = self._slot_position(slot)
             lineup = self.config.lineup
             if not (pos and 0 < pos <= len(lineup)):
-                return False
-            return self._is_cued("player", lineup[pos - 1] or "")
+                return None
+            return "player", lineup[pos - 1] or ""
         if kind in ("player_walkup", "song", "celebration"):
-            return self._is_cued(
-                {"player_walkup": "player"}.get(kind, kind), ref)
-        return False
+            return {"player_walkup": "player"}.get(kind, kind), ref
+        return None
+
+    def _slot_is_cued(self, slot: dict) -> bool:
+        """Does this hand-edited key hold what the Audio Pi is loaded with?"""
+        parts = self._slot_tag_parts(slot)
+        return bool(parts) and self._is_cued(*parts)
+
+    def _slot_live_colors(self, slot: dict):
+        parts = self._slot_tag_parts(slot)
+        return self._live_colors(*parts) if parts else None
 
     # ── Lineup watch ─────────────────────────────────────
     # Tells the operator a substitution happened. Never acts on it: the
@@ -212,6 +263,7 @@ class StreamDeckController(BaseDeckController):
             # the flash is the deck's word that sound is coming, so it has
             # to be conditional on the Audio Pi actually accepting it.
             if self.lineup.play():
+                self._play_pressed()
                 self.flash(BTN_PLAY)
             else:
                 self._press_failed(BTN_PLAY)
@@ -221,6 +273,8 @@ class StreamDeckController(BaseDeckController):
                 # Fade is deliberately NOT cleared here: the music is
                 # still audible while it eases down, and a key that goes
                 # dark before the sound does is a lie.
+                self._playing = None
+                self.lineup.note_play_tag(None)
                 self._cue_pressed(None)
                 self.flash(BTN_STOP)
             else:
@@ -386,6 +440,8 @@ class StreamDeckController(BaseDeckController):
                           or self._is_cued("player", lineup[slot_idx]))
                 bg = self.ACTIVE_COLOR if active else self.PAGE_BG["lineup"]
                 fg = (0, 0, 0) if active else (255, 255, 255)
+                if self._is_playing("player", lineup[slot_idx]):
+                    bg, fg = self.PLAYING_COLOR, (255, 255, 255)
                 self.btn(btn_idx, f"{i + 1}. #{jersey}\n{first}", bg, fg)
             else:
                 self.blank(btn_idx)
@@ -401,8 +457,9 @@ class StreamDeckController(BaseDeckController):
                 has_walkup = bool(p.get("walkup_song_id"))
                 bg = self.PAGE_BG["players"] if has_walkup else (35, 35, 35)
                 fg = (255, 255, 255)
-                if self._is_cued("player", _pid):
-                    bg, fg = self.ACTIVE_COLOR, (0, 0, 0)
+                live = self._live_colors("player", _pid)
+                if live:
+                    bg, fg = live
                 self.btn(btn_idx, f"#{jersey}\n{first}", bg, fg)
             else:
                 self.blank(btn_idx)
@@ -415,8 +472,9 @@ class StreamDeckController(BaseDeckController):
                 configured = bool(self.config.get_celebration_song(key))
                 bg = self.PAGE_BG["celebrations"] if configured else (35, 20, 25)
                 fg = (255, 255, 255)
-                if self._is_cued("celebration", key):
-                    bg, fg = self.ACTIVE_COLOR, (0, 0, 0)
+                live = self._live_colors("celebration", key)
+                if live:
+                    bg, fg = live
                 self.btn(btn_idx, label, bg, fg)
             else:
                 self.blank(btn_idx)
@@ -429,10 +487,8 @@ class StreamDeckController(BaseDeckController):
             if i < len(songs):
                 _sid, song = songs[i]
                 name = (song.get("display_name", "") or "")[:14]
-                cued = self._is_cued("song", _sid)
-                self.btn(btn_idx, name,
-                         self.ACTIVE_COLOR if cued else bg,
-                         (0, 0, 0) if cued else (255, 255, 255))
+                live = self._live_colors("song", _sid) or (bg, (255, 255, 255))
+                self.btn(btn_idx, name, live[0], live[1])
             else:
                 self.blank(btn_idx)
 
@@ -584,11 +640,11 @@ class StreamDeckController(BaseDeckController):
             elif (kind == "lineup_slot" and self._edit_lineup
                   and self._slot_position(slot) == self._lineup_assign_pos):
                 bg, fg = self.ACTIVE_COLOR, (0, 0, 0)
-            elif self._slot_is_cued(slot):
-                # The key holding the clip the Audio Pi is loaded with —
-                # the editor's own colour is what it goes back to when
-                # something else takes the queue.
-                bg, fg = self.ACTIVE_COLOR, (0, 0, 0)
+            elif self._slot_live_colors(slot):
+                # The key holding the clip the Audio Pi is loaded with
+                # (yellow) or sounding (red) — the editor's own colour is
+                # what it goes back to when something else takes the queue.
+                bg, fg = self._slot_live_colors(slot)
             elif kind == "action" and slot.get("ref") == "sync":
                 wbg, wfg = self._sync_key_colors()
                 if wbg:
@@ -651,8 +707,13 @@ class StreamDeckController(BaseDeckController):
         elif kind == "action":
             if ref == "play":
                 ok = self.lineup.play()
+                if ok:
+                    self._play_pressed()
             elif ref == "stop":
                 ok = self.music.stop()
+                if ok:
+                    self._playing = None
+                    self.lineup.note_play_tag(None)
             elif ref == "fade":
                 ok = self.music.fade(int(slot.get("fade_ms") or 1000))
             elif ref == "sync":
@@ -749,8 +810,13 @@ class StreamDeckController(BaseDeckController):
             return default
 
     def _status_lines(self):
-        """CPU load, temperature, IP and uptime — same numbers the Audio
-        Pi's web status page shows, painted on keys."""
+        """CPU load, temperature, IP, uptime — plus the three network
+        truths a coach at a dead field needs to see ON THE DECK: which
+        Wi-Fi we're on (or none), whether the internet behind it is up
+        (sync-only — the deck runs without it), and whether the Audio Pi
+        answers. FIELD REPORT: "at least it will load and the streamdeck
+        will give me insights as to what is wrong." """
+        import socket
         load = self._read_file("/proc/loadavg", "—").split(" ")[0]
         temp = self._read_file("/sys/class/thermal/thermal_zone0/temp")
         try:
@@ -764,14 +830,40 @@ class StreamDeckController(BaseDeckController):
         except ValueError:
             up = "—"
         try:
-            import socket
             sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sk.connect(("8.8.8.8", 80))
             ip = sk.getsockname()[0]
             sk.close()
         except OSError:
             ip = "no net"
-        return [("CPU", load), ("TEMP", temp), ("IP", ip), ("UP", up)]
+        # Wi-Fi association ≠ internet: the field router matters to the
+        # deck (tablet + Audio Pi ride it), the WAN behind it does not.
+        try:
+            r = subprocess.run(["iwgetid", "-r"], capture_output=True,
+                               text=True, timeout=3)
+            wifi = r.stdout.strip()[:10] if r.returncode == 0 \
+                and r.stdout.strip() else "NONE"
+        except Exception:
+            wifi = "?"
+        try:
+            sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sk.settimeout(1.5)
+            sk.connect(("8.8.8.8", 53))
+            sk.close()
+            net = "up"
+        except OSError:
+            net = "DOWN\nsync only"
+        try:
+            a_ip, a_port = self.config.audio_pi_endpoint()
+            sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sk.settimeout(1.5)
+            sk.connect((a_ip, a_port))
+            sk.close()
+            audio = "ok"
+        except Exception:
+            audio = "NO REPLY"
+        return [("CPU", load), ("TEMP", temp), ("IP", ip), ("WIFI", wifi),
+                ("NET", net), ("AUDIO", audio), ("UP", up)]
 
     def _render_status_page(self) -> None:
         rows = self._status_lines()
@@ -797,8 +889,13 @@ class StreamDeckController(BaseDeckController):
             else:
                 self.blank(btn_idx)
 
+    # Stat rows painted by _render_status_page — the action keys (Sync /
+    # Update / Reboot / Home) sit right after them, so this count and
+    # _status_lines() must agree (a test pins it).
+    _STATUS_ROWS = 7
+
     def _press_status_key(self, btn_idx) -> None:
-        rows = 4
+        rows = self._STATUS_ROWS
         slot = self.content_slots.index(btn_idx)
         act = slot - rows
         if slot < rows:
@@ -825,12 +922,27 @@ class StreamDeckController(BaseDeckController):
             self.render_all()
 
     def _run_code_update(self, btn_idx) -> None:
-        """git pull --ff-only on this checkout, then restart the OnDeck
-        services — the same thing the Audio Pi's web Update button does.
-        Restarting our own service is the point: systemd brings the deck
-        back up running the new code."""
+        """One press, BOTH boxes: tell the Audio Pi to update itself, then
+        git pull --ff-only on this checkout and restart the OnDeck
+        services. Restarting our own service is the point: systemd brings
+        the deck back up running the new code.
+
+        The Audio Pi goes first and on its own: the music plays from that
+        box, and a deck updated alone left the speaker on last month's
+        code with nobody the wiser. Its failure is painted on the key for
+        the seconds before this box restarts, and logged.
+        """
         import pathlib
         repo = pathlib.Path(__file__).resolve().parent
+        aud_ok, aud_detail = self.music.update_audio()
+        if aud_ok:
+            log.info("Audio Pi update: %s", aud_detail)
+        else:
+            log.warning("Audio Pi update FAILED: %s", aud_detail)
+        self.btn(btn_idx, ("aud \u2713" if aud_ok else "aud \u2717")
+                 + "\npulling\u2026",
+                 (18, 40, 70) if aud_ok else (90, 20, 20),
+                 (150, 200, 255) if aud_ok else (255, 170, 170))
         try:
             out = subprocess.run(
                 ["git", "-C", str(repo), "pull", "--ff-only"],

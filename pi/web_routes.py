@@ -95,18 +95,33 @@ def _software_summary():
     return head or "version unknown (not a git checkout)"
 
 
-def _run_update():
+def _restart_services():
+    for unit in ("ondeck-coach", "ondeck-audio"):
+        if _sh(["systemctl", "is-enabled", unit]) in ("enabled", "static"):
+            subprocess.run(["sudo", "systemctl", "restart", unit],
+                           capture_output=True, timeout=60)
+
+
+def _run_update(restart_after_s: float = 0.0):
     """git pull + restart the OnDeck services. Deliberately manual — never
-    automatic, and never mid-game."""
+    automatic, and never mid-game.
+
+    ``restart_after_s`` > 0 restarts on a timer instead of inline. The
+    restart kills the very process answering the request, so a caller
+    that needs the answer (the deck's Update key asking the Audio Pi) has
+    to get it before the service goes down — otherwise a successful
+    update reads as "no reply" on the key.
+    """
     if not (_REPO_DIR / ".git").exists():
         return False, "Not a git checkout — update it the way it was installed."
     out = _sh(["git", "-C", str(_REPO_DIR), "pull", "--ff-only"], timeout=120)
     if not out:
         return False, "Update failed — could not reach GitHub."
-    for unit in ("ondeck-coach", "ondeck-audio"):
-        if _sh(["systemctl", "is-enabled", unit]) in ("enabled", "static"):
-            subprocess.run(["sudo", "systemctl", "restart", unit],
-                           capture_output=True, timeout=60)
+    if restart_after_s > 0:
+        import threading
+        threading.Timer(restart_after_s, _restart_services).start()
+    else:
+        _restart_services()
     return True, f"Updated: {out.splitlines()[-1][:120]}"
 
 _PAGE = """<!doctype html><html lang="en"><head>
@@ -263,6 +278,14 @@ def register(app, extra_rows=None) -> None:
         if ok:
             sync_now.start()
         return redirect(url_for("pi_status", ok=detail))
+
+    @app.post("/api/update")
+    def pi_api_update():
+        """The deck's Update key, for the OTHER box: pull, answer, then
+        restart. Registered on both Pis like /sync-now, so one press on
+        the deck updates the Audio Pi too."""
+        ok, detail = _run_update(restart_after_s=1.5)
+        return jsonify(ok=ok, detail=detail), (200 if ok else 500)
 
     @app.get("/sync-now")
     def pi_sync_now():

@@ -77,6 +77,54 @@ def _wait_for_internet(timeout: int = 60) -> bool:
     return False
 
 
+def _wifi_associated() -> bool:
+    """On a Wi-Fi network at all (an SSID association / carrier), which is
+    NOT the same thing as having internet. The field router being alive
+    matters to the deck (it is how the tablet and the Audio Pi are
+    reached); the WAN behind it does not."""
+    try:
+        r = subprocess.run(["iwgetid", "-r"], capture_output=True, text=True,
+                           timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            return True
+    except Exception:
+        pass
+    try:
+        state = Path(f"/sys/class/net/{AP_IFACE}/operstate").read_text().strip()
+        return state == "up"
+    except Exception:
+        return False
+
+
+def _wait_for_wifi(timeout: int = 30) -> bool:
+    log.info("Waiting for Wi-Fi association…")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _wifi_associated():
+            log.info("Wi-Fi associated")
+            return True
+        time.sleep(2)
+    log.warning("Timed out waiting for Wi-Fi")
+    return False
+
+
+def _spawn_setup_portal_background(wifi_only: bool = True) -> None:
+    """Open the setup portal WITHOUT blocking this gate — so the deck
+    service still starts behind it. Used only on a configured Pi with no
+    Wi-Fi: the coach gets the running deck (its keys and status page say
+    what is wrong) AND the OnDeck-Setup hotspot to fix the network from
+    a phone. The portal reboots the Pi when setup completes."""
+    portal = Path(__file__).resolve().parent / "setup_server.py"
+    args = [sys.executable, str(portal)]
+    if wifi_only:
+        args.append("--wifi-only")
+    try:
+        subprocess.Popen(args, start_new_session=True)
+        log.info("Setup portal launched in the background")
+    except Exception as exc:
+        log.error("Could not launch background setup portal: %s", exc)
+
+
 def _apply_boot_wifi() -> bool:
     """Apply a Wi-Fi file from the boot partition, then delete it."""
     for p in WIFI_FILES:
@@ -190,14 +238,30 @@ def main() -> None:
         _run_setup_portal(wifi_only=is_configured())
         return
 
-    # 1. Already linked — make sure we can actually get online.
+    # 1. Already linked — the deck starts NO MATTER WHAT. Game day happens
+    #    at fields with no internet, and everything the deck needs on game
+    #    day — config, lineups, music files, the Audio Pi — is local.
+    #    FIELD REPORT: "the internet supplying my streamdeck and audiopi
+    #    didn't work and so the streamdeck pi wouldn't load. I want it to
+    #    work at the field even without internet… at least it will load
+    #    and the streamdeck will give me insights as to what is wrong."
+    #    So a linked Pi is never parked in the setup portal again:
+    #      Wi-Fi up, internet down → boot now (sync catches up later);
+    #      no Wi-Fi at all        → boot the deck anyway (its Status page
+    #                               names the problem) and open the
+    #                               OnDeck-Setup hotspot in the BACKGROUND
+    #                               so a phone can fix the network.
     if is_configured():
-        if _wait_for_internet(timeout=45):
-            log.info("Device linked — proceeding to main service")
+        if _wifi_associated() or _wait_for_wifi(timeout=30):
+            up = _wait_for_internet(timeout=10)
+            log.info("Device linked, Wi-Fi up, internet %s — starting main "
+                     "service", "up" if up else
+                     "DOWN (offline mode; sync resumes when it returns)")
             sys.exit(0)
-        log.warning("Linked but no internet — opening Wi-Fi portal")
-        _run_setup_portal(wifi_only=True)
-        return
+        log.warning("Linked but NO Wi-Fi — starting the deck anyway and "
+                    "opening the Wi-Fi hotspot portal in the background")
+        _spawn_setup_portal_background(wifi_only=True)
+        sys.exit(0)
 
     # 1b. The captive portal left a pending pairing code — the field Wi-Fi
     #     should now be up, so redeem it for this device's sync token.

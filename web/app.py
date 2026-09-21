@@ -40,7 +40,7 @@ import requests as rq
 from config_manager import (
     ConfigManager, MUSIC_DIR, ONDECK_HOME, CONFIG_PATH, rating_summary,
     DECK_COLS, DECK_ROWS, DECK_FONTS, DECK_FONT_ORDER,
-    DECK_DEFAULT_FONT, DECK_DEFAULT_FONT_SIZE,
+    DECK_DEFAULT_FONT, DECK_DEFAULT_FONT_SIZE, cue_tag,
 )
 
 # ---------------------------------------------------------------------------
@@ -2416,6 +2416,202 @@ def ondeck_deck_pages_delete(page_id: str):
 # ---------------------------------------------------------------------------
 # Team Management — admin + editor (signup links, team assignments)
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Live Deck — the Stream Deck, in a browser
+# ---------------------------------------------------------------------------
+# FIELD REPORT: "my Stream Deck is not working today — I want a web
+# interface that looks just like the Stream Deck and acts just like the
+# Stream Deck, so I can play walk-up music from a tablet." Same pages,
+# same colors, same CUE-FIRST rule (a tile loads the clip; the green
+# Play key is the one thing that makes sound), same Audio Pi behind it
+# all. Dead deck hardware changes nothing here: the tablet talks to this
+# portal and the portal talks to the Audio Pi — the deck runtime is not
+# in the path at all. Rendering mirrors streamdeck_controller: a page
+# with hand-edited slots is driven entirely by them; otherwise the
+# built-in auto-layout (lineup / players / celebrations / song lists).
+
+_LIVE_PAGE_BG = {              # streamdeck_controller.PAGE_BG, for CSS
+    "home": (30, 30, 30), "lineup": (20, 60, 90), "players": (20, 80, 40),
+    "hype": (90, 50, 20), "mid_inning": (60, 60, 20),
+    "mound_visit": (80, 30, 80), "dead_ball": (50, 50, 50),
+    "celebrations": (100, 20, 40), "pitcher_warmup": (20, 80, 80),
+}
+_LIVE_DEFAULT_BG = (40, 40, 40)
+
+
+def _live_css(rgb) -> str:
+    return f"rgb({rgb[0]},{rgb[1]},{rgb[2]})"
+
+
+def _live_player_tile(pid: str, label: str = "", color: str = "") -> dict:
+    p = cfg.players.get(pid) or {}
+    lbl = label or (f"#{p.get('jersey', '')} "
+                    f"{(p.get('first_name', '') or '')[:10]}").strip()
+    return {"type": "player", "ref": pid, "label": lbl or pid,
+            "cue": cue_tag("player", pid), "color": color,
+            "dim": not p.get("walkup_song_id")}
+
+
+def _live_slot_tile(slot: dict) -> dict | None:
+    """One editor-laid-out key, resolved for the browser deck. Returns
+    None for a blank key."""
+    kind, ref = slot.get("type"), str(slot.get("ref") or "")
+    label = (slot.get("label") or "").strip()
+    color = (slot.get("color") or "").strip()
+    if kind in (None, "", "blank"):
+        return None
+    if kind == "text":
+        return {"type": "text", "label": label, "color": color}
+    if kind == "player_walkup":
+        return _live_player_tile(ref, label, color)
+    if kind == "lineup_slot":
+        try:
+            pos = int(ref or 0)
+        except (TypeError, ValueError):
+            pos = 0
+        lineup = cfg.lineup
+        pid = lineup[pos - 1] if 0 < pos <= len(lineup) else None
+        if not pid:
+            return {"type": "text", "label": label or f"{pos or '?'}. Empty",
+                    "color": color, "dim": True}
+        t = _live_player_tile(pid, "", color)
+        t["label"] = f"{pos}. {label or t['label']}"
+        return t
+    if kind == "song":
+        return {"type": "song", "ref": ref,
+                "label": label or (cfg.get_song_display_name(ref) or "")[:16],
+                "cue": cue_tag("song", ref), "color": color,
+                "dim": not cfg.songs.get(ref)}
+    if kind == "celebration":
+        return {"type": "celebration", "ref": ref,
+                "label": label or dict(CELEBRATIONS).get(ref, ref),
+                "cue": cue_tag("celebration", ref), "color": color,
+                "dim": not cfg.get_celebration_song(ref)}
+    if kind == "nav":
+        return {"type": "nav", "ref": ref,
+                "label": label or cfg.pages.get(ref, {}).get("name", ref),
+                "color": color}
+    if kind == "action":
+        if ref in ("play", "stop", "fade"):
+            return {"type": ref, "label": label
+                    or {"play": "▶ Play", "stop": "■ Stop",
+                        "fade": "↘ Fade"}[ref],
+                    "fade_ms": slot.get("fade_ms") or 1000, "color": color}
+        return None      # sync / edit-lineup are deck-hardware concerns
+    if kind == "edit_lineup":
+        return {"type": "link", "ref": "/ondeck/lineup",
+                "label": label or "Edit Lineup", "color": color}
+    return None
+
+
+def _live_tiles(page_id: str) -> list[dict]:
+    """The 21 content tiles for one page — same resolution order as the
+    deck runtime: hand-edited slots win, else the built-in layout."""
+    page = cfg.pages.get(page_id, {})
+    slots = page.get("slots") or {}
+    n = len(cfg.DECK_CONTENT_SLOTS)
+    if slots:
+        return [_live_slot_tile(slots.get(str(key_idx)) or {})
+                for key_idx in cfg.DECK_CONTENT_SLOTS]
+    kind = page.get("kind", page_id)
+    tiles: list[dict | None] = []
+    if kind == "home":
+        for pid in cfg.get_page_order():
+            tiles.append({"type": "nav", "ref": pid,
+                          "label": cfg.pages.get(pid, {}).get("name", pid),
+                          "color": _live_css(_LIVE_PAGE_BG.get(
+                              pid, _LIVE_DEFAULT_BG))})
+    elif kind == "lineup":
+        lineup = cfg.lineup
+        filled = [i for i, pid in enumerate(lineup) if pid]
+        for n_at_bat, slot_idx in enumerate(filled):
+            t = _live_player_tile(lineup[slot_idx])
+            t["label"] = f"{n_at_bat + 1}. {t['label']}"
+            t["lineup"] = True           # the auto-advance flow rides these
+            tiles.append(t)
+    elif kind == "players":
+        for pid, _p in cfg.players_by_jersey():
+            tiles.append(_live_player_tile(pid))
+    elif kind == "celebrations":
+        for key, label in CELEBRATIONS:
+            tiles.append({"type": "celebration", "ref": key, "label": label,
+                          "cue": cue_tag("celebration", key),
+                          "dim": not cfg.get_celebration_song(key)})
+    else:
+        for sid, song in cfg.get_songs_for_page(page_id):
+            tiles.append({"type": "song", "ref": sid,
+                          "label": (song.get("display_name", "") or "")[:16],
+                          "cue": cue_tag("song", sid)})
+    return (tiles + [None] * n)[:n]
+
+
+@app.get("/ondeck/deck/live")
+def ondeck_deck_live():
+    _check_auth(["admin", "editor"])
+    order = cfg.get_page_order()
+    page_id = request.args.get("page") or (order[0] if order else "home")
+    if page_id not in cfg.pages:
+        page_id = order[0] if order else "home"
+    page = cfg.pages.get(page_id, {})
+    bg = _live_css(_LIVE_PAGE_BG.get(page.get("kind", page_id),
+                                     _LIVE_DEFAULT_BG))
+    return render_template(
+        "deck_live.html",
+        cloud_mode=CLOUD_MODE,
+        page_id=page_id,
+        page_kind=page.get("kind", page_id),
+        page_name=page.get("name", page_id),
+        page_bg=bg,
+        tiles=_live_tiles(page_id),
+        pages=[(pid, cfg.pages.get(pid, {}).get("name", pid))
+               for pid in order],
+        page_ids=order,
+        deck_cols=DECK_COLS,
+        deck_rows=DECK_ROWS,
+    )
+
+
+@app.post("/ondeck/api/deck/cue")
+def ondeck_api_deck_cue():
+    """Cue one tile: build the clip HERE (this portal holds the same
+    config the deck reads) and queue it on the Audio Pi. Never plays —
+    the Play key is the one thing that makes sound, exactly like the
+    hardware deck."""
+    _check_auth(["admin", "editor"])
+    body = request.get_json(force=True, silent=True) or {}
+    kind, ref = body.get("type"), str(body.get("ref") or "")
+    clip, err = None, ""
+    if kind == "player":
+        clip = cfg.build_walkup_clip(ref)
+        if not clip:
+            err = cfg.walkup_problem(ref) or "no walk-up set"
+    elif kind == "song":
+        clip = cfg.build_song_clip(ref)
+        if not clip:
+            err = "song not in this portal's config"
+    elif kind == "celebration":
+        sid = cfg.get_celebration_song(ref)
+        clip = cfg.build_song_clip(sid) if sid else None
+        if clip:
+            # tagged as the CELEBRATION, not the song behind it, so the
+            # cued highlight lights this key and not a song key that
+            # happens to share the file
+            clip["cue"] = cue_tag("celebration", ref)
+        else:
+            err = ("no celebration song set" if not sid
+                   else "celebration song not in this portal's config")
+    else:
+        err = "unknown tile type"
+    if not clip:
+        return jsonify(ok=False, error=err), 400
+    data, code = _proxy("POST", "/queue", json=clip)
+    if code < 400 and isinstance(data, dict) and data.get("ok") is not False:
+        return jsonify(ok=True, cue=clip.get("cue"))
+    return jsonify(ok=False,
+                   error=(data or {}).get("error") or "Audio Pi unreachable"
+                   ), (code if code >= 400 else 502)
+
 
 @app.get("/ondeck/teams")
 def ondeck_teams():
