@@ -63,10 +63,16 @@ class MusicClient:
             # address — the IP is the diagnosis.
             self.last_error = f"no reply from\n{ip}"
             return None
-        if isinstance(d, dict) and d.get("ok") is False:
-            log.warning("Audio Pi POST %s refused: %s", path,
-                        d.get("error") or "not ok")
-            self.last_error = d.get("error") or "Audio Pi said no"
+        status = getattr(r, "status_code", 200)
+        if (isinstance(d, dict) and d.get("ok") is False) or status >= 400:
+            # A 4xx/5xx is a refusal too: /queue answers 400 to an empty
+            # clip and an old server answers 404 to an endpoint it never
+            # had, and both used to count as "done".
+            why = (d.get("error") if isinstance(d, dict) else None) \
+                or (f"HTTP {status}" if status >= 400 else "not ok")
+            log.warning("Audio Pi POST %s refused: %s", path, why)
+            self.last_error = why if status < 400 or isinstance(d, dict) \
+                and d.get("error") else f"Audio Pi answered HTTP {status}"
             return None
         self.last_error = ""
         return d
@@ -106,11 +112,34 @@ class MusicClient:
 
     def update_audio(self) -> tuple[bool, str]:
         """Ask the Audio Pi to git pull and restart itself (POST
-        /api/update on pi/web_routes). (ok, what it said)."""
+        /api/update on pi/web_routes). (ok, what it said).
+
+        An Audio Pi still on code from before /api/update existed answers
+        404 — which is exactly the box that most needs updating, and the
+        chicken-and-egg that left a coach pressing Update twice with the
+        walk-up bug still there (21 Sep 2026). Its web page's Update
+        button (POST /update) has been there far longer, so that is the
+        fallback: it pulls and restarts inline, the restart kills the
+        process before it can answer, and a box that was reachable a
+        moment ago going quiet mid-request is the update happening."""
         d = self._post("/api/update")
-        if d is None:
-            return False, self.last_error or "no reply"
-        return True, str(d.get("detail") or "updated")
+        if d is not None:
+            return True, str(d.get("detail") or "updated")
+        why = self.last_error or "no reply"
+        try:
+            alive = rq.get(self._base_url() + "/health", timeout=_TIMEOUT)
+            alive.raise_for_status()
+        except Exception:
+            return False, why                 # not there at all
+        try:
+            r = rq.post(self._base_url() + "/update", timeout=90,
+                        allow_redirects=False)
+            if r.status_code in (200, 302, 303):
+                return True, "updated (legacy button)"
+            return False, f"legacy update answered HTTP {r.status_code}"
+        except Exception:
+            # reachable before, gone during: the service restarted on us
+            return True, "updated (legacy button; restarting)"
 
     def sync_audio_start(self) -> bool:
         """Kick off a sync ON the Audio Pi (its own sync_agent run)."""
